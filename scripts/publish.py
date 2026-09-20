@@ -40,6 +40,9 @@ Gitee 的写操作（push / 建 Release / 传附件）需要私人令牌，按�
     2. local.properties 里的 GITEE_TOKEN=
        （与 RELEASE_STORE_PASSWORD 那批签名密钥放同一个地方，该文件已被 .gitignore 忽略）
 
+Gitee 的 HTTPS push 用户名是**账号登录名**（不是令牌，写令牌会被拒 403），本程序
+自动向 API 问一次；想省掉这次请求就配 GITEE_USER=你的登录名（环境变量或同上文件）。
+
 GitHub 走 `gh` 的凭据助手（`gh auth login` 一次即可），令牌不落在本仓库里。
 本程序不打印令牌，也不把它写进 git config：Gitee 的 push 用临时
 `credential.helper=store --file=<临时文件>`，命令结束随临时目录一起删除。
@@ -93,6 +96,7 @@ GRADLE_TASKS = (
 )
 
 TOKEN = ""
+GITEE_LOGIN = ""
 DRY = False
 
 
@@ -519,6 +523,39 @@ def step_push(tag, platforms):
         _push_github(tag)
 
 
+def gitee_login():
+    """Gitee 的 **HTTPS push 用户名必须是账号登录名（Elisoar），不是令牌**。
+
+    这条以前记反了：`https://<token>:<token>@gitee.com` 会被服务端直接拒掉，报
+    `remote: The token username invalid` + 403，看起来像"令牌失效"。而同一个令牌走
+    Open API 的 `?access_token=…` 一切正常 —— 所以"令牌有效"和"push 能认证"是两件事，
+    别拿 API 通不通去推断 push。
+
+    登录名直接问 API 拿，省得再让用户多配一项；要跳过这一步就写 GITEE_USER=。
+    """
+    global GITEE_LOGIN
+    if GITEE_LOGIN:
+        return GITEE_LOGIN
+    if not TOKEN:
+        die("Gitee 写操作需要私人令牌：设 GITEE_TOKEN 环境变量，或在 local.properties 里写 "
+            "GITEE_TOKEN=（该文件已被 .gitignore 忽略）")
+    query = urllib.parse.urlencode({"access_token": TOKEN})
+    request = urllib.request.Request(
+        f"https://gitee.com/api/v5/user?{query}",
+        headers={"Accept": "application/json", "User-Agent": "hnnu-jiaowu-publish"})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as error:  # noqa: BLE001 - 统一转成一句能照着做的话
+        die(f"问不到 Gitee 登录名（{redact(str(error))}）。"
+            "在 local.properties 里写 GITEE_USER=你的登录名 即可跳过这一步。")
+    login = str(payload.get("login") or "").strip()
+    if not login:
+        die("Gitee 没返回 login 字段，请在 local.properties 里写 GITEE_USER=你的登录名。")
+    GITEE_LOGIN = login
+    return login
+
+
 def _push_gitee(tag):
     """Gitee 的 push 用一个**临时**凭据文件。
 
@@ -540,10 +577,11 @@ def _push_gitee(tag):
     if not TOKEN:
         die("Gitee 写操作需要私人令牌：设 GITEE_TOKEN 环境变量，或在 local.properties 里写 "
             "GITEE_TOKEN=（该文件已被 .gitignore 忽略）")
+    login = gitee_login()
     with tempfile.TemporaryDirectory(prefix="hnnu-publish-") as tmp:
         cred = pathlib.Path(tmp) / "credentials"
         if not DRY:
-            cred.write_text(f"https://{TOKEN}:{TOKEN}@gitee.com\n", encoding="utf-8",
+            cred.write_text(f"https://{login}:{TOKEN}@gitee.com\n", encoding="utf-8",
                             newline="\n")
         helper = f"credential.helper=store --file={cred.as_posix()}"
         base = ["git", "-c", "credential.helper=", "-c", helper]
@@ -782,7 +820,7 @@ def parse_args(argv):
 
 
 def main(argv=None):
-    global TOKEN, DRY
+    global TOKEN, GITEE_LOGIN, DRY
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -793,6 +831,8 @@ def main(argv=None):
     DRY = args.dry_run
 
     TOKEN = os.environ.get("GITEE_TOKEN", "").strip() or local_properties().get("GITEE_TOKEN", "")
+    GITEE_LOGIN = (os.environ.get("GITEE_USER", "").strip()
+                   or local_properties().get("GITEE_USER", ""))
     platforms = {"gitee": {"gitee"}, "github": {"github"}, "both": {"gitee", "github"}}[args.only]
 
     say("=== 发布教务助理 ===")
