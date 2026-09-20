@@ -525,6 +525,15 @@ def _push_gitee(tag):
     令牌写进 remote URL 或全局 git config 都会留在磁盘上（reflog、.git/config、
     Windows 凭据管理器），而这个仓库是公开的，一旦误提交就是事故。临时文件与
     临时目录一起销毁，令牌不落任何持久位置。
+
+    两个必须照做的细节（都是实测出来的，错了不会报错、只会静默失败）：
+
+    1. `--file=` 的路径**必须用正斜杠**。Windows 上写 `C:\\Users\\...\\credentials`
+       时 git-credential-store 找不到文件，却**不报错**，只是返回空凭据，
+       于是 push 报 "could not read Username for 'https://gitee.com'" —— 看起来
+       完全像是"令牌不对"或"仓库要登录"，离真正的原因很远。
+    2. 先 `credential.helper=` 清空 helper 列表再加 store：默认 helper
+       （本机是 `helper-selector`）会在缺凭据时弹交互框，把无人值守脚本挂住。
     """
     if not TOKEN:
         die("Gitee 写操作需要私人令牌：设 GITEE_TOKEN 环境变量，或在 local.properties 里写 "
@@ -533,8 +542,17 @@ def _push_gitee(tag):
         cred = pathlib.Path(tmp) / "credentials"
         if not DRY:
             cred.write_text(f"https://{TOKEN}:{TOKEN}@gitee.com\n", encoding="utf-8")
-        # 先清空 helper 列表再加 store：本机全局那个 helper-selector 会弹交互框。
-        base = ["git", "-c", "credential.helper=", "-c", f"credential.helper=store --file={cred}"]
+        helper = f"credential.helper=store --file={cred.as_posix()}"
+        base = ["git", "-c", "credential.helper=", "-c", helper]
+        if not DRY:
+            probe = subprocess.run(
+                base + ["credential", "fill"], cwd=str(ROOT), capture_output=True,
+                text=True, encoding="utf-8", errors="replace",
+                input="protocol=https\nhost=gitee.com\n\n",
+            )
+            if "password=" not in (probe.stdout or ""):
+                die("临时凭据文件读不出来，push 一定会报 could not read Username。"
+                    "先检查 --file 的路径是不是写成了反斜杠（Windows 上必须正斜杠）。")
         run(base + ["push", "gitee", "main"])
         run(base + ["push", "gitee", f"refs/tags/{tag}"])
     ok(f"Gitee：main 与 {tag} 已推送")
