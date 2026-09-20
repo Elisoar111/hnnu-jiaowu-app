@@ -142,42 +142,18 @@ TEMPLATE
     die "已生成 ${NOTES_FILE}，请填好 '## notes' 区块后重新运行本脚本。"
 fi
 
-# 取出 <notes-file> 里某个 "## X" 区块，剥掉 HTML 注释。
-#
-# 注释剥离要分两步。只写 `/^<!--/,/-->$/d` 会把单行注释 `<!-- x -->` 当成区间开头，
-# 而 sed 的区间结束模式只从下一行开始找，于是一路删到文件末尾——'## changelog'
-# 区块正好以这样一行开头，整段就没了。先删单行注释，再删跨行区间。
-block_body() {
-    awk -v want="$1" '
-        $0 ~ "^## " want "[[:space:]]*$" { inside = 1; next }
-        /^## / { inside = 0 }
-        inside { print }
-    ' "$NOTES_FILE" \
-        | sed -e '/^[[:space:]]*<!--.*-->[[:space:]]*$/d' -e '/^[[:space:]]*<!--/,/-->/d'
-}
+# 区块抽取的唯一实现放在 scripts/release_notes.sh：本脚本和 scripts/publish.py
+# （发布程序）都调它，不再各写一份 —— 这段文案会原样进应用内的更新弹窗。
+source scripts/release_notes.sh
 
-# notes：与 CI 用同一条管线（release.yml 的 Resolve Release Notes），连去空行都一样。
-# 两边写法必须一致，否则本地过了 CI 还会挂。
-extract_notes() {
-    block_body notes | sed '/^[[:space:]]*$/d'
-}
-
-# changelog：要进 CHANGELOG.md，是 Markdown，内部空行必须留着（小标题与列表之间
-# 少一行空行，归档出来的段落就和手写的历史版本长得不一样）。只掐掉首尾空行。
-extract_changelog() {
-    block_body changelog | awk '
-        { line[NR] = $0; if ($0 ~ /[^[:space:]]/) { if (!first) first = NR; last = NR } }
-        END { for (i = first; i <= last; i++) print line[i] }
-    '
-}
-
-NOTES="$(extract_notes)"
+NOTES="$(extract_notes "$NOTES_FILE")"
 [ -n "$NOTES" ] || die "${NOTES_FILE} 的 '## notes' 区块是空的。"
 
 # notes 会被 UpdateDialog 当纯文本渲染，Markdown 标记会原样显示给用户。
-if printf '%s\n' "$NOTES" | grep -qE '^[[:space:]]*[#*-]|`'; then
+VIOLATIONS="$(printf '%s\n' "$NOTES" | notes_violations)"
+if [ -n "$VIOLATIONS" ]; then
     die "'## notes' 里有 Markdown 标记（# * - 或反引号）。它会原样显示在应用内的更新弹窗里。
-$(printf '%s\n' "$NOTES" | grep -nE '^[[:space:]]*[#*-]|`' | sed 's/^/       /')"
+$(printf '%s\n' "$VIOLATIONS" | sed 's/^/       /')"
 fi
 
 note "更新日志 $(printf '%s\n' "$NOTES" | wc -l | tr -d ' ') 行，来自 ${NOTES_FILE}"
@@ -195,7 +171,7 @@ note "已写入 ${VERSION_FILE}"
 # ── 6. CHANGELOG 归档 ────────────────────────────────────────────────
 # CHANGELOG 里自己写着"以 release-notes/vX.Y.Z.md 为唯一数据源，扇出到本文件"，
 # 但此前没有任何东西真的做这件事，得靠人手抄。这里把它做实。
-CHANGELOG_BLOCK="$(extract_changelog)"
+CHANGELOG_BLOCK="$(extract_changelog "$NOTES_FILE")"
 if [ -n "$CHANGELOG_BLOCK" ] && [ -f "$CHANGELOG" ]; then
     if grep -qF "## [${VERSION}]" "$CHANGELOG"; then
         note "CHANGELOG 已有 [${VERSION}] 小节，跳过"

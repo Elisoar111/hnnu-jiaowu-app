@@ -21,7 +21,7 @@
 - 公告按安装版本下发（`minVersionCode` / `maxVersionCode`）：客户端只对**适用于当前 versionCode** 的公告弹启动提示、计未读；写给旧版本的、以及没有声明版本范围的历史公告一律按「历史」处理，留在公告中心的已读一栏可查。此前线上那条"请手动下载新版"的迁移公告没有版本字段，于是所有装上新版的用户每次进「我的」都被提示一次。
   约定**每个版本一条公告**：内置文件里写本版公告时把范围锁到"恰好本版"（1.2.2 → 10202–10202），只有装了这一版的用户会收到它，下一版用户在公告中心的历史里回看；要写给别的范围（如"旧包名用户"的迁移公告）就显式声明，显式值永远优先。这条不变式由单测强制，见下方修复段。
 - 公告改为**随包内置**（`app/src/main/assets/announcement.json`），不再从 Gitee Raw 拉取：公告跟着安装版本走，运行期不联网、不落缓存。原来的设计把「公告能不能被看到」押在一次外部发布动作上 —— 文件没推上去、或线上还停着旧版本，用户就什么都看不到；而「没拉到」和「线上真没公告」在界面上长得一模一样，出了问题极难自查。顺带删掉 `AnnouncementCenter` 的 10 分钟节流、`lastRefreshFailed` 与 prefs 缓存，以及公告中心顶栏的「刷新」按钮和「拉取不到 → 重试」空态（内置公告没有「刷新」这个动作，留着按钮点了不动反而像坏了）。`release-notes/vX.Y.Z-announcement.json` 归档与 `scripts/publish_announcement.py` 一并退休，发版流程只保留交付校验（`scripts/verify_delivery.py`）。
-- versionCode 改为 `major*10000 + minor*100 + patch`（1.2.2 → 10202）。旧方案"取 patch 位"只对 1.0.x 成立（那时 minor 恒为 0）；1.2.x 的 code 是顺手 +1 加出来的（1.2.1 → 91，1.2.2 原本也要给 92），按 patch 位算只会得到 2 < 91，单调性检查当场拦下、用户端也永远升不上去。`scripts/release.sh`、`release.yml` 的 Resolve Version From Tag、`scripts/verify_delivery.py` 三处同步；旧 tag 的 code 按新公式重算后再做单调性比较。
+- versionCode 改为 `major*10000 + minor*100 + patch`（1.2.2 → 10202）。旧方案"取 patch 位"只对 1.0.x 成立（那时 minor 恒为 0）；1.2.x 的 code 是顺手 +1 加出来的（1.2.1 → 91，1.2.2 原本也要给 92），按 patch 位算只会得到 2 < 91，单调性检查当场拦下、用户端也永远升不上去。`scripts/release.sh`、`release.yml` 的 Resolve Version From Tag、`scripts/publish.py` 三处同步；旧 tag 的 code 按新公式重算后再做单调性比较。
 - 公告弹窗（启动提示）顶部图标由 72dp 圆底 + 36dp 图标缩到 52dp / 24dp，不再压过弹窗标题。
 - 应用包名由 `com.tyust.course` 更换为 `com.hnnujw.course`（applicationId 与 namespace 同步迁移，Kotlin 源码包路径一并移动）。
 - 版本号 1.2.1 → 1.2.2（versionCode 91 → 10202）。

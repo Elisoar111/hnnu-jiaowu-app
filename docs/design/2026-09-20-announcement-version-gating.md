@@ -130,7 +130,8 @@ fun isUnreadIn(readIds: Set<String>, versionCode: Int): Boolean =
 
 | 退场项 | 说明 |
 | --- | --- |
-| `publish_announcement.py` | 原来负责把本地公告推上 Gitee Raw；现由 `scripts/verify_delivery.py` 取代，只校验交付一致性（`version.json` 与 Gitee 上的 APK 是否对得上），不再碰公告 |
+| `publish_announcement.py` | 原来负责把本地公告推上 Gitee Raw，以及按 tag 自动填版本范围；公告内置后没有可推的东西，整条链路退休（连同它的 20 例测试） |
+| `scripts/verify_delivery.py` | 保留但**改写**为校验应用真正读的那个接口（Gitee `releases/latest` 的 tag 与 `.apk` 资产），不再看仓库根的 `version.json` —— 那个文件从没提交过、也没有任何一版应用读过它 |
 | `release-notes/vX.Y.Z-announcement.json` | 发布期公告归档。现在公告只有 `assets/announcement.json` 一份，随包走 |
 | release.yml 的 "Validate Release Announcement" 步骤 | 校验归档公告的 CI 闸门，随归档一起删 |
 | `AnnouncementManager` 里的 OkHttp / `ANNOUNCEMENT_URL` / 10 分钟缓存节流 | 网络通道与它的缓存语义（`null` = 没拉到、空列表 = 真的没有）全部不再需要 |

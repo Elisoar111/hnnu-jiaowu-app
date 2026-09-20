@@ -90,20 +90,11 @@ jobs:
             NOTES="$MANUAL_NOTES"
           elif [ -f "$NOTES_FILE" ]; then
             echo "Source: $NOTES_FILE"
-            # 取 "## notes" 与下一个 "## " 之间的内容，去掉 HTML 注释与空行。
-            #
-            # 注释剥离分两步。只写 /^<!--/,/-->$/d 会把单行注释 <!-- x --> 当成
-            # 区间开头，而 sed 的区间结束模式只从下一行开始找，于是一路删到文件
-            # 末尾。notes 区块里目前没有注释所以没炸过，但 scripts/release.sh 用
-            # 同一条管线取 '## changelog'，那一段正好以单行注释开头，整段会消失。
-            # 两边必须是同一份写法，否则本地过了 CI 还会挂。
-            NOTES=$(awk '
-              /^## notes[[:space:]]*$/ { inside = 1; next }
-              /^## / { inside = 0 }
-              inside { print }
-            ' "$NOTES_FILE" \
-              | sed -e '/^[[:space:]]*<!--.*-->[[:space:]]*$/d' -e '/^[[:space:]]*<!--/,/-->/d' \
-              | sed '/^[[:space:]]*$/d')
+            # 抽取实现只有一份：scripts/release_notes.sh，scripts/release.sh 与
+            # scripts/publish.py 用的都是它。这里原先内联了同一段 awk/sed ——
+            # 三份实现一旦漂开，本地校验通过的文案到了 CI 就变成另一段，而这段文案
+            # 会被应用当纯文本逐行显示，多一行少一行用户都看得见。
+            NOTES="$(bash -c 'source scripts/release_notes.sh; extract_notes "$1"' _ "$NOTES_FILE")"
           else
             # 这里不再回落到套话。缺日志就是发布准备没做完，
             # 与其静默发一版"自动构建发布"给所有用户，不如让流水线停下。
@@ -489,7 +480,6 @@ jobs:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           # 与上面 Sync to Gitee 同一个仓库变量，保证校验的是同一个仓库。
           GITEE_REPO: ${{ vars.GITEE_REPO || 'Elisoar/hnnu-jiaowu-app' }}
-          RELEASE_NOTES: ${{ needs.build.outputs.release_notes }}
         run: |
           python3 -m unittest discover -s scripts/tests -p 'test_verify_delivery.py'
           python3 scripts/verify_delivery.py --tag "${{ needs.build.outputs.release_tag }}"
