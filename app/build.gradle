@@ -68,14 +68,15 @@ if (releaseKeystoreFile != null && isReleaseTask && !hasReleaseSigning) {
 }
 
 android {
-    namespace 'com.tyust.course'
+    namespace 'com.hnnujw.course'
     compileSdk 37
 
     defaultConfig {
-        // 1.2.1（含）之前保持原作者包名：老用户「检查更新」可无缝覆盖升级。
-        // 1.2.1 是旧包名的最后一版；之后的新版本将切换为 com.hnnujw.course，
-        // 切换时必须配合应用内公告引导用户手动下载迁移（不同包名无法覆盖安装）。
-        applicationId "com.tyust.course"
+        // 包名已于 1.2.2 切换：1.2.1 及之前是 com.tyust.course（旧包名，停止更新），
+        // 1.2.2 起统一为 com.hnnujw.course。
+        // 安卓把包名当作应用身份，两个包名互相独立、无法覆盖升级，所以老用户必须
+        // 手动下载新版安装一次；这一步靠应用内公告 + 更新弹窗引导，别改回去。
+        applicationId "com.hnnujw.course"
         minSdk 24
         targetSdk 34
         versionCode code
@@ -142,6 +143,10 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+        // 显式声明源码编码：javac 不指定时可能落到 JVM 默认字符集，
+        // 而上面 gradle.properties 用了 file.encoding=COMPAT（跟随系统，简中=GBK），
+        // 不钉住的话 Java 源码里的中文会被错读。
+        encoding "UTF-8"
     }
     
     kotlinOptions {

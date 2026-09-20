@@ -12,6 +12,7 @@
     python scripts/build_manual.py
 """
 import markdown
+from markdown.extensions.toc import slugify_unicode
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -91,7 +92,20 @@ def main() -> None:
     md_text = SRC.read_text(encoding="utf-8")
     body = markdown.markdown(
         md_text,
-        extensions=["tables", "fenced_code", "sane_lists", "nl2br"],
+        extensions=["tables", "fenced_code", "sane_lists", "nl2br", "toc"],
+        # 必须开 toc 扩展：不开的话标题不会生成 id，而手册正文（目录、FAQ 里的
+        # 交叉引用）用的是 `#4-课表` 这类锚点，点下去毫无反应。
+        # 默认 slugify 会把非 ASCII 字符整段剥掉，中文标题会变成空 id，
+        # 所以显式换成保留 Unicode 的那个。
+        # 注意：这里必须传**函数对象**。写成 "markdown.extensions.toc:slugify_unicode"
+        # 字符串不会被解析，toc 扩展会拿字符串当函数调，报 'str' object is not callable。
+        extension_configs={
+            "toc": {
+                "slugify": slugify_unicode,
+                "anchorlink": False,
+                "permalink": False,
+            }
+        },
         output_format="html5",
     )
     page = (

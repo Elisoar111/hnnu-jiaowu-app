@@ -146,15 +146,21 @@ jobs:
           set -euo pipefail
 
           VN="${TAG#v}"
+          MAJOR="${VN%%.*}"
           REST="${VN#*.}"
+          MINOR="${REST%%.*}"
           PATCH="${REST#*.}"
 
-          # versionCode = patch 位。1.0.x 这 68 个版本一直这么编，沿用它对用户端无感。
-          VC="$PATCH"
+          for PART in "$MAJOR" "$MINOR" "$PATCH"; do
+            case "$PART" in
+              ''|*[!0-9]*) echo "ERROR: 从 ${TAG} 解析出的版本段不是数字: '${PART}'"; exit 1 ;;
+            esac
+          done
 
-          case "$VC" in
-            ''|*[!0-9]*) echo "ERROR: 从 ${TAG} 解析出的 patch 位不是数字: '${VC}'"; exit 1 ;;
-          esac
+          # versionCode = major*10000 + minor*100 + patch（1.2.2 → 10202）。
+          # 旧方案"versionCode = patch 位"只对 1.0.x 成立：1.2.2 按 patch 位是 2，
+          # 而线上 1.2.1 已经是 91，下一个版本会算出比 91 还小的 code，用户端永远升不上去。
+          VC=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
 
           # 应用内比较的是 versionCode。它一旦不增，用户就会收到一个永远
           # "更新不掉"的提示。拿除自己以外最高的那个 tag 做基准，这样重跑
@@ -166,11 +172,16 @@ jobs:
             | tail -1 || true)
 
           if [ -n "${PREV:-}" ]; then
-            PREV_CODE="${PREV##*.}"
+            # 旧 tag 的 code 也按新公式重算：仓库里 1.1.x / 1.2.x 的 code 是顺手 +1
+            # 加出来的（91、92…），直接拿来比会把 10202 误判成没增。
+            PREV_MAJOR="${PREV%%.*}"
+            PREV_REST="${PREV#*.}"
+            PREV_MINOR="${PREV_REST%%.*}"
+            PREV_PATCH="${PREV_REST#*.}"
+            PREV_CODE=$(( PREV_MAJOR * 10000 + PREV_MINOR * 100 + PREV_PATCH ))
             if [ "$VC" -le "$PREV_CODE" ]; then
-              echo "ERROR: versionCode 不增：${TAG} 算出 ${VC}，上一个 tag v${PREV} 是 ${PREV_CODE}。"
-              echo "       versionCode = patch 位这个方案在这里失效了（跨 minor/major 时 patch 归零）。"
-              echo "       改成 major*10000+minor*100+patch，并同步修改 scripts/release.sh。"
+              echo "ERROR: 版本号没有递增：${TAG} 算出 ${VC}，上一个 tag v${PREV} 是 ${PREV_CODE}。"
+              echo "       三段数字必须整体往前走（tag 本身也不能回退）。"
               exit 1
             fi
             echo "上一个版本 v${PREV}（code ${PREV_CODE}）-> ${TAG}（code ${VC}）"
@@ -196,13 +207,6 @@ jobs:
 
           echo "version_code=${VC}" >> "$GITHUB_OUTPUT"
           echo "version_name=${VN}" >> "$GITHUB_OUTPUT"
-
-      - name: Validate Release Announcement
-        env:
-          TAG: ${{ steps.target.outputs.tag }}
-        run: |
-          python3 -m unittest discover -s scripts/tests -p 'test_publish_announcement.py'
-          python3 scripts/publish_announcement.py --tag "$TAG" --validate-only
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -480,11 +484,12 @@ jobs:
           echo ""
           echo "=== Gitee sync complete ==="
 
-      - name: Verify Delivery and Publish Announcement
+      - name: Verify Gitee Delivery
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          # 与上面 Sync to Gitee 同一个仓库变量，保证公告写进同一个仓库。
+          # 与上面 Sync to Gitee 同一个仓库变量，保证校验的是同一个仓库。
           GITEE_REPO: ${{ vars.GITEE_REPO || 'Elisoar/hnnu-jiaowu-app' }}
           RELEASE_NOTES: ${{ needs.build.outputs.release_notes }}
-          TAG: ${{ needs.build.outputs.release_tag }}
-        run: python3 scripts/publish_announcement.py --tag "$TAG"
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_verify_delivery.py'
+          python3 scripts/verify_delivery.py --tag "${{ needs.build.outputs.release_tag }}"

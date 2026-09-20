@@ -19,10 +19,10 @@
 | 时间和提醒 | 真实账号/学期/课程身份；默认关闭、开启后提前 15 分钟；每课仅下一次闹钟；独立 Receiver、通知渠道、PendingIntent data；权限、账号、编辑、删除、同步、开机、更新时间变化后重算 | `schedule/CourseReminder.kt`、`ScheduleReminderScheduler.kt`、`CourseReminderReceiver.kt` |
 | 提醒恢复 | 冷启动先恢复账号；重算保留尚未送达且未过课时的有效闹钟；接收端校验版本、时间、课程和启用状态；旧开学日期只迁移到一次确认的当前学期 | `schedule/ScheduleCalendarStore.kt`、`ScheduleDates.kt` |
 | 顶栏与筛选 | 公共尺寸和至少 48 dp 的操作触区；顶栏形变收敛；筛选按实测按钮锚点展开；角标和单行可横滑摘要；列表稳定 key 及条目动画 | `ui/system/TopBarActionRail.kt`、`AnimatedStateIcon.kt`、`ui/screen/CourseListScreen.kt` |
-| 启动 | AndroidX SplashScreen 1.2.0 静态启动页衔接应用内 700 ms 帽体/闪电分离汇流；每进程一次，首帧就绪后开始，可提前结束；系统关闭动画时直接收束 | `ui/theme/StartupLogoAnimation.kt`、`res/drawable/ic_startup_*.xml` |
+| 启动 | AndroidX SplashScreen 1.2.0 静态启动页，直接使用应用图标（`@mipmap/ic_launcher`）。自绘的帽体/闪电启动动画已于 2026-09-20 移除 | `res/values/startup.xml` |
 | iCal | 与课表/提醒共用周次解析；使用课程稳定 UID 和当前学期节次时间；修复周日偏到上一周；转义自定义课程文本 | `utils/ICalExporter.kt` |
 
-Logo 的本地矢量预览已经检查，原桌面 PNG 保留。系统启动页与应用内动画的实际交接仍属于待执行设备验收。
+Logo 的本地矢量预览已经检查，原桌面 PNG 保留。自绘启动 Logo 已于 2026-09-20 连同桌面小组件一并移除，启动页改用 `@mipmap/ic_launcher`。
 
 ## 自动验证
 
@@ -51,7 +51,7 @@ Debug、uiPreview、Release、benchmark 和 Debug AndroidTest 的最终 APK 构�
 
 以下用例只编写、编译，尚未运行。安装成功、单测和静态对比度检查不能代表视觉、手势或性能验收通过。
 
-`app/src/androidTest/java/com/tyust/course/ui/ScheduleMotionDeviceTest.kt` 覆盖：
+`app/src/androidTest/java/com/hnnujw/course/ui/ScheduleMotionDeviceTest.kt` 覆盖：
 
 - 连续导航和反向切换、释放位置连续性、保存的页面输入、账号切换移除旧弹层。
 - Pager 手势和连续箭头、标题最终周次、切周后的纵向滚动位置。

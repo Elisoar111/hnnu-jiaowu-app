@@ -97,6 +97,13 @@
             android:configChanges="uiMode"
             android:exported="false"
             android:screenOrientation="portrait" />
+        <!-- 开发者公告中心：与消息中心同构的整页（未读/已读分段 + 列表 + 详情）。
+             公告无需登录，页面本身不打教务接口。 -->
+        <activity
+            android:name=".AnnouncementActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
         
         <!-- Background grab service -->
         <service
@@ -118,7 +125,7 @@
             android:name=".receiver.GrabAlarmReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.tyust.course.action.SCHEDULED_GRAB" />
+                <action android:name="com.hnnujw.course.action.SCHEDULED_GRAB" />
             </intent-filter>
             <!-- 重启 / 应用更新 / 改时间后系统会清空所有闹钟：选课定时任务需要据此重排，
                  否则用户设好的任务会静默消失（此前只有课程提醒和消息巡检做了重排）。 -->
@@ -136,49 +143,18 @@
             android:name=".academic.MessageCheckReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.tyust.course.action.MESSAGE_CHECK" />
+                <action android:name="com.hnnujw.course.action.MESSAGE_CHECK" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
-        </receiver>
-
-        <!-- 桌面小组件：4x1 下一节课 / 2x2 今日课程。
-             数据只读本地课表缓存；开机 / 更新 / 改时间 / 改时区后立即重刷。 -->
-        <receiver
-            android:name=".widget.NextCourseWidgetProvider"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <action android:name="android.intent.action.TIME_SET" />
-                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/widget_next_course_info" />
-        </receiver>
-        <receiver
-            android:name=".widget.TodayCoursesWidgetProvider"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <action android:name="android.intent.action.TIME_SET" />
-                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/widget_today_courses_info" />
         </receiver>
 
         <!-- 考前 24 小时提醒（一次性闹钟）；开机 / 更新 / 改时间后按本地考试缓存重排。 -->
         <receiver android:name=".schedule.ExamReminderReceiver" android:exported="false">
             <intent-filter>
-                <action android:name="com.tyust.course.action.EXAM_REMINDER" />
+                <action android:name="com.hnnujw.course.action.EXAM_REMINDER" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.TIME_SET" />

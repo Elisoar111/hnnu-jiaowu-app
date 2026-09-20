@@ -17,10 +17,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Elisoar111/hnnu-jiaowu-app/releases/latest"><img src="https://img.shields.io/github/v/release/Elisoar111/hnnu-jiaowu-app?style=flat-square&color=blueviolet&label=最新版本" alt="Release"/></a>
-  <a href="https://gitee.com/Elisoar/hnnu-jiaowu-app/releases"><img src="https://img.shields.io/badge/Gitee-%E9%95%9C%E5%83%8F%E4%BB%93%E5%BA%93-c71d23?style=flat-square" alt="Gitee"/></a>
+  <a href="https://gitee.com/Elisoar/hnnu-jiaowu-app/releases"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-%E6%9C%80%E6%96%B0%E7%89%88%20APK-blueviolet?style=flat-square" alt="下载最新版 APK"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License"/></a>
-  <a href="https://github.com/Elisoar111/hnnu-jiaowu-app/stargazers"><img src="https://img.shields.io/github/stars/Elisoar111/hnnu-jiaowu-app?style=flat-square" alt="Stars"/></a>
 </p>
 
 ---
@@ -86,15 +84,16 @@
 
 第二课堂：
 
-- 学分、总积分与各模块完成情况集中展示，未达标一眼可见
+- 学分、总积分、**综测附加分**与各模块完成情况集中展示，未达标一眼可见
+- 综测附加分按学校口径由各模块积分加权算出（创新创业能力权重最高 0.30，单项封顶 100 分）
 - 成绩榜单按班级 / 专业 / 院系 / 全校查询，同分共享名次
 
 杂项：
 
 - 登录页一键测试主站与备用入口的连通性，连不上时直接告诉你卡在哪一环（DNS / 超时 / 证书）
 - 应用内置用户手册（「我的」→ 用户手册），离线可读，主题跟随应用
-- 「我的」内一键检查更新（从 Gitee 获取最新版本与更新说明）
-- 公告带时间线，反馈直接发作者邮箱
+- 应用内更新：启动时自动检查（6 小时节流），发现新版本弹出液态玻璃提示，点一下由应用自己下载安装包并唤起系统安装器 —— 不经过浏览器，也就不会出现"下载下来是个压缩包"
+- 公告中心带未读红点，重要公告启动时以弹窗触达；反馈可发作者邮箱（「我的」→ 联系开发者），进不去 GitHub 的同学也可以加入 QQ 频道 **pd32446534**
 - 最多使用 3 个学生账号
 
 ---
@@ -119,11 +118,15 @@
 
 去 [Releases 页面](https://gitee.com/Elisoar/hnnu-jiaowu-app/releases) 下载最新 APK，装上就能用。Android 7.0+，建议 12 以上，玻璃效果最全。
 
+> **认准 `app-release.apk`**：同一个 Release 下的 `.zip` / `.tar.gz` 是源码包，不是安装包。
+>
+> 个别浏览器会把下载到的 APK 存成 `.zip` —— 服务端把 APK 的响应头声明成了 `application/zip`，浏览器据此给文件配了后缀，文件本身没坏。把后缀改回 `.apk` 即可安装。更省事的做法是直接用应用内的「检查更新 → 立即更新」，下载由应用自己完成，不经过浏览器。
+
+> **从 1.2.1 及更早版本升级**：1.2.2 起安装包标识由 `com.tyust.course` 改为 `com.hnnujw.course`。安卓把包名当作应用身份，新旧包名互相独立、无法覆盖升级，需要手动安装一次新版；装好后重新登录教务账号、同步一次即可恢复课表。旧版可等新版确认可用后再卸载。
+
 **鸿蒙（HarmonyOS NEXT）也能用**：通过「卓易通」兼容层安装本 APK 即可运行，安装方式与普通安卓应用一致。未做专门适配，遇到问题欢迎反馈。
 
 **iOS 暂不支持**：本应用是安卓客户端，没有 iOS 版本；iPhone 用户请直接使用学校教务网页。后续有计划会在此更新。
-
-GitHub 仓库同步维护：<https://github.com/Elisoar111/hnnu-jiaowu-app>。
 
 ### 从源码构建
 
@@ -162,7 +165,7 @@ cd hnnu-jiaowu-app
 
 ## 技术栈
 
-Kotlin + Jetpack Compose（Material 3）。玻璃渲染用 Kyant Backdrop 2.0，`blur + lens + vibrancy` 三层，按设备能力分档，低端机降级到透镜采样。动效走 Compose Animation，spring/tween 曲线全收在 `MotionTokens` 里。网络 OkHttp + Coroutines，HTML 用 Jsoup 解析。打包发布走 GitHub Actions。
+Kotlin + Jetpack Compose（Material 3）。玻璃渲染用 Kyant Backdrop 2.0，`blur + lens + vibrancy` 三层，按设备能力分档，低端机降级到透镜采样。动效走 Compose Animation，spring/tween 曲线全收在 `MotionTokens` 里。网络 OkHttp + Coroutines，HTML 用 Jsoup 解析。应用内更新由自带的下载器（OkHttp 流式下载 + FileProvider 唤起安装器）完成。安装包在本地构建后发布到 Gitee Release。
 
 ---
 

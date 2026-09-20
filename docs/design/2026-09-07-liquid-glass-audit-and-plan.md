@@ -77,7 +77,7 @@ API 32 的既有 `gfxinfo` 同时出现新旧卡顿口径不一致及无效 GPU 
 
 主界面普通控件大多采样壁纸；底栏采样壁纸与页面；部分页面另有局部内容来源。改变透明度之前，必须先确认控件应该采到什么。背景均匀时，增加折射量不会凭空增加纹理，玻璃仍应依靠边缘反射和几何表现厚度。
 
-参考：[材质角色](../../app/src/main/java/com/tyust/course/ui/system/GlassMaterial.kt#L11)、[既有 API 31/32 管线说明](../glass-lens-api32.md)。说明中的历史性能数字不是本轮实测结果。
+参考：[材质角色](../../app/src/main/java/com/hnnujw/course/ui/system/GlassMaterial.kt#L11)、[既有 API 31/32 管线说明](../glass-lens-api32.md)。说明中的历史性能数字不是本轮实测结果。
 
 ### 3.2 需要保留的工程约束
 
@@ -111,13 +111,13 @@ API 32 的既有 `gfxinfo` 同时出现新旧卡顿口径不一致及无效 GPU 
 
 证据定位：
 
-- F01：[渲染请求与回调](../../app/src/main/java/com/tyust/course/ui/system/glass/GlassLensRenderer.kt#L260)、[绘制失效与再次提交](../../app/src/main/java/com/tyust/course/ui/system/glass/GlassLens.kt#L658)。
-- F02：[工具组帧循环](../../app/src/main/java/com/tyust/course/ui/system/glass/LiquidActionGroup.kt#L487)。
-- F03/F05/F09/F13：[底栏手势](../../app/src/main/java/com/tyust/course/ui/system/CapsuleNavigationBar.kt#L620)、[图标绘制](../../app/src/main/java/com/tyust/course/ui/system/CapsuleNavigationBar.kt#L1032)、[主页面切换和收缩](../../app/src/main/java/com/tyust/course/MainActivity.kt#L213)。
-- F04：[传统成绩状态](../../app/src/main/java/com/tyust/course/ui/route/GradesRoute.kt#L40)、[适配成绩状态](../../app/src/main/java/com/tyust/course/ui/route/AcademicGradesRoute.kt#L27)。
-- F06/F07：[选择器布局高度](../../app/src/main/java/com/tyust/course/ui/system/LiquidSelectionComponents.kt#L1202)、[首帧兜底释放](../../app/src/main/java/com/tyust/course/ui/system/glass/GlassLens.kt#L221)。
-- F08/F14：[弹层 Host](../../app/src/main/java/com/tyust/course/ui/system/DialogHost.kt#L37)、[课表设置窗口](../../app/src/main/java/com/tyust/course/ui/route/ScheduleRoute.kt#L417)、[独立页面壳](../../app/src/main/java/com/tyust/course/ui/system/GlassPageScaffold.kt#L24)。
-- F10/F11：[辅助设置读取](../../app/src/main/java/com/tyust/course/ui/system/GlassMaterial.kt#L58)、[壁纸微纹理](../../app/src/main/java/com/tyust/course/ui/system/WallpaperRenderer.kt#L102)。
+- F01：[渲染请求与回调](../../app/src/main/java/com/hnnujw/course/ui/system/glass/GlassLensRenderer.kt#L260)、[绘制失效与再次提交](../../app/src/main/java/com/hnnujw/course/ui/system/glass/GlassLens.kt#L658)。
+- F02：[工具组帧循环](../../app/src/main/java/com/hnnujw/course/ui/system/glass/LiquidActionGroup.kt#L487)。
+- F03/F05/F09/F13：[底栏手势](../../app/src/main/java/com/hnnujw/course/ui/system/CapsuleNavigationBar.kt#L620)、[图标绘制](../../app/src/main/java/com/hnnujw/course/ui/system/CapsuleNavigationBar.kt#L1032)、[主页面切换和收缩](../../app/src/main/java/com/hnnujw/course/MainActivity.kt#L213)。
+- F04：[传统成绩状态](../../app/src/main/java/com/hnnujw/course/ui/route/GradesRoute.kt#L40)、[适配成绩状态](../../app/src/main/java/com/hnnujw/course/ui/route/AcademicGradesRoute.kt#L27)。
+- F06/F07：[选择器布局高度](../../app/src/main/java/com/hnnujw/course/ui/system/LiquidSelectionComponents.kt#L1202)、[首帧兜底释放](../../app/src/main/java/com/hnnujw/course/ui/system/glass/GlassLens.kt#L221)。
+- F08/F14：[弹层 Host](../../app/src/main/java/com/hnnujw/course/ui/system/DialogHost.kt#L37)、[课表设置窗口](../../app/src/main/java/com/hnnujw/course/ui/route/ScheduleRoute.kt#L417)、[独立页面壳](../../app/src/main/java/com/hnnujw/course/ui/system/GlassPageScaffold.kt#L24)。
+- F10/F11：[辅助设置读取](../../app/src/main/java/com/hnnujw/course/ui/system/GlassMaterial.kt#L58)、[壁纸微纹理](../../app/src/main/java/com/hnnujw/course/ui/system/WallpaperRenderer.kt#L102)。
 
 另需注意：`GlassRuntimeGuard` 当前实际采用实验性保持启用策略，其类注释中的“历史崩溃后自动降级”不能当作已经生效的保障。此次不改变厂商/版本启用政策，完善确定发生渲染失败时的可见回退。
 

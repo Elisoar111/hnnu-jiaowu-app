@@ -292,5 +292,5 @@ GL/引擎级与底图捕获失败用 snapshot state 存（`failed` 触发重组�
 - 库源码：`AndroidLiquidGlass/backdrop/.../internal/Shaders.kt:87`（着色器）、
   `effects/Lens.kt`（参数与形状约束）、
   `app/.../components/LiquidBottomTabs.kt`（底栏的参数取值基准）。
-- 本项目：`app/src/main/java/com/tyust/course/ui/system/glass/`。
+- 本项目：`app/src/main/java/com/hnnujw/course/ui/system/glass/`。
 - 单元测试：`app/src/test/.../glass/`（光学参数、圆角解析等 8 个文件）。

@@ -42,12 +42,24 @@ case "$VERSION" in
     *) die "版本号形如 X.Y.Z，收到: $VERSION" ;;
 esac
 
+# 上面的 case 只是粗筛（`1.2.2.3` 也能过），后面要拿三段去做算术，这里再严格卡一遍。
+if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    die "版本号必须是三个纯数字段，形如 X.Y.Z，收到: $VERSION"
+fi
+
 TAG="v${VERSION}"
 
-# versionCode = patch 位。1.0.x 这 68 个版本一直是这么编的，沿用它对用户端无感。
-# 下面那道单调性检查会在这个方案不再成立时（比如真发 1.1.0，patch 归零）当场喊停。
+# versionCode = major*10000 + minor*100 + patch（1.2.2 → 10202）。
+#
+# 旧方案是"versionCode = patch 位"，它只对 1.0.x 成立（那时 minor 恒为 0）。到 1.2.x
+# 就崩了：按 patch 位算 1.2.2 → 2，而线上 1.2.1 已经是 91（一路顺手 +1 加出来的），
+# 于是下一个版本会算出比 91 还小的 code——单调性检查当场拦下，用户端也永远升不上去。
+# 换成按位编码后，三段各自有序，且与 tag 一一对应，不会再撞。
+MAJOR="${VERSION%%.*}"
 REST="${VERSION#*.}"
-CODE="${REST#*.}"
+MINOR="${REST%%.*}"
+PATCH="${REST#*.}"
+CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
 
 NOTES_FILE="release-notes/${TAG}.md"
 VERSION_FILE="app/version.properties"
@@ -86,11 +98,16 @@ PREV_VERSION="$(
         | tail -1
 )"
 if [ -n "$PREV_VERSION" ]; then
-    PREV_CODE="${PREV_VERSION##*.}"
+    # 旧 tag 的 code 也要按新公式重算再比：仓库里 1.1.x / 1.2.x 的 code 是"顺手 +1"
+    # 加出来的（91、92…），拿它当基准会把新公式算出的 10202 误判成"没增"。
+    PREV_MAJOR="${PREV_VERSION%%.*}"
+    PREV_REST="${PREV_VERSION#*.}"
+    PREV_MINOR="${PREV_REST%%.*}"
+    PREV_PATCH="${PREV_REST#*.}"
+    PREV_CODE=$(( PREV_MAJOR * 10000 + PREV_MINOR * 100 + PREV_PATCH ))
     if [ "$CODE" -le "$PREV_CODE" ]; then
-        die "versionCode 不增：${TAG} 算出 ${CODE}，而上一个 tag v${PREV_VERSION} 是 ${PREV_CODE}。
-       versionCode = patch 位这个方案在这里失效了（跨 minor/major 时 patch 会归零）。
-       改成 major*10000+minor*100+patch，并同步修改 release.yml 的 Resolve Version From Tag。"
+        die "版本号没有递增：${TAG} 算出 ${CODE}，而上一个 tag v${PREV_VERSION} 是 ${PREV_CODE}。
+       三段数字必须整体往前走（tag 本身也不能回退）。"
     fi
     note "上一个版本 v${PREV_VERSION}（code ${PREV_CODE}）→ ${TAG}（code ${CODE}）"
 fi

@@ -5,4 +5,8 @@
     <external-cache-path name="ext_logs" path="logs/" />
     <external-cache-path name="exports" path="exports/" />
     <external-files-path name="downloads" path="Download/" />
+    <!-- 同一目录的内部存储兜底：getExternalFilesDir 返回 null（外部存储未挂载/不可用）时
+         AppDownloader 会落到 filesDir/Download，这里不登记的话 FileProvider 找不到
+         configured root，会直接抛异常，用户看到的是"没有可用的安装器"这种误导性提示。 -->
+    <files-path name="internal_downloads" path="Download/" />
 </paths>
