@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ 的备份 / 迁移规则（data-extraction-rules）。
+
+  两条通道都排除含会话凭证的两个文件，理由见 backup_rules.xml：
+  - secure_credentials.xml：Keystore 密文，换设备必然解不开，备份无意义且有风险。
+  - course_selector_prefs.xml：saved_cookie / saved_accounts（内嵌 Cookie），
+    落到别的设备等于会话可以直接被复用。
+
+  platform 只能按文件排除、不能按 key 排除，所以这里是整文件排除 ——
+  会话数据换设备重登即可，普通设置都在别的 prefs 文件里，不受影响。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="sharedpref" path="." />
+        <include domain="database" path="." />
+        <exclude domain="sharedpref" path="secure_credentials.xml" />
+        <exclude domain="sharedpref" path="course_selector_prefs.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="sharedpref" path="." />
+        <include domain="database" path="." />
+        <exclude domain="sharedpref" path="secure_credentials.xml" />
+        <exclude domain="sharedpref" path="course_selector_prefs.xml" />
+    </device-transfer>
+</data-extraction-rules>

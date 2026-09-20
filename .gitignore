@@ -1,0 +1,169 @@
+# Gradle
+*.iml
+.gradle/
+build/
+app/build/
+
+# IDE
+/.idea/
+*.iml
+.DS_Store
+
+# Cursor / agent plan scratch
+/.zcode/
+
+# Android
+/local.properties
+local.properties
+/captures
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.ap_
+*.dex
+*.class
+bin/
+gen/
+out/
+
+# Firebase
+.google_services.json
+google-services.json
+
+# Keystore (sensitive)
+*.jks
+*.keystore
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+release-key.jks
+
+# Secrets
+.env
+.env.*
+secrets.properties
+secret.properties
+service-account*.json
+credentials*.json
+
+# Proguard
+proguard-rules.pro
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.spec
+
+# PyInstaller
+dist/
+
+# Logs
+*.log
+build_error.txt
+build_output.log
+build*.txt
+build_out*.txt
+signature_report.txt
+
+# Whitelist (sensitive)
+whitelist.json
+
+# Other
+*.bak
+*.tmp
+*.swp
+k_b64.txt
+tmp.txt
+*base64.txt
+
+# Test screenshots & debug artifacts
+/test-screenshots/
+
+# Documentation & Tools (not needed in repo)
+api.md
+使用教程.html
+add_device.py
+paper.md
+log.txt
+update.json
+announcement.json
+
+# Agent Skills
+.agent/
+/web-app
+.vscode
+.gocache
+PLAN.md
+work
+UI_pic
+backdrop_docs_summary.md
+backdrop_library_guide.md
+demo
+!app/src/main/java/com/tyust/course/demo/
+!app/src/main/java/com/tyust/course/demo/**
+AndroidLiquidGlass
+.gomodcache/
+.kotlin
+.gogetcache
+.claude
+成绩查询接口技术文档.md
+.playwright-mcp/page-2026-07-13T15-32-15-216Z.yml
+.playwright-mcp/page-2026-07-13T15-32-34-484Z.yml
+.playwright-mcp/page-2026-07-13T15-33-23-441Z.yml
+.playwright-mcp/page-2026-07-13T15-34-05-259Z.yml
+.playwright-mcp/page-2026-07-13T15-34-21-766Z.yml
+.playwright-mcp/page-2026-07-13T15-34-42-688Z.yml
+.playwright-mcp/page-2026-07-13T15-35-11-134Z.yml
+.playwright-mcp/page-2026-07-13T15-35-30-767Z.yml
+.playwright-mcp/page-2026-07-13T15-35-51-585Z.png
+zfapk-app-screen-small.jpg
+# Reference screenshots from chip surface tuning
+/c4.png
+/chip.png
+/chip2.png
+/chip3.png
+cmp_diff.png
+cmp_rest_vs_press.png
+cmp_three.png
+s_a.png
+s_a2.png
+s_after.png
+s_press.png
+v1_rest_crop.png
+v1_rest.png
+v2_head_crop.png
+v2_press_crop.png
+v2_press.png
+v2_rest_b.png
+v2_rest_c.png
+v2_rest.png
+promo_hyperframes
+正方教务助手宣传片
+姝ｆ柟鏁欏姟鍔╂墜瀹ｄ紶鐗嘰hf
+.npm-cache
+promo-video
+.superpowers
+
+# Tool caches & debug artifacts
+.survey-work/
+.gradle-user/
+.playwright-cli/
+.playwright-mcp/
+/artifacts/
+/screenshot_domain_error.png
+/ui.xml
+output
+
+# AI 助手记忆目录（含本地路径、测试凭据、设备序列号，绝不入库）
+.workbuddy/
+.workbuddy-ai/
+.claude/
+.agent/
+.superpowers

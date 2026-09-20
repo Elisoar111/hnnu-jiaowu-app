@@ -1,0 +1,249 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+}
+
+// ============ 自动版本号迭代 ============
+def versionPropsFile = file('version.properties')
+def versionProps = new Properties()
+
+if (versionPropsFile.exists()) {
+    versionProps.load(new FileInputStream(versionPropsFile))
+} else {
+    versionProps['VERSION_CODE'] = '1'
+    versionProps['VERSION_NAME'] = '1.0.0'
+}
+
+def code = versionProps['VERSION_CODE'].toInteger()
+def name = versionProps['VERSION_NAME']
+def localSecrets = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+
+if (localPropertiesFile.exists()) {
+    localSecrets.load(new FileInputStream(localPropertiesFile))
+}
+
+def readSecret = { String envName, String propertyName = envName ->
+    def envValue = System.getenv(envName)
+    if (envValue != null && !envValue.trim().isEmpty()) {
+        return envValue.trim()
+    }
+
+    def propertyValue = localSecrets.getProperty(propertyName)
+    if (propertyValue != null && !propertyValue.trim().isEmpty()) {
+        return propertyValue.trim()
+    }
+
+    return null
+}
+
+def quoteForBuildConfig = { String value ->
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+}
+
+// 版本号完全由 version.properties 静态控制，发版前由开发者手动修改并 commit
+// 不再在构建时自动自增，避免 CI 容器中的改动无法同步回 Git 仓库导致版本锁死
+
+def isReleaseTask = gradle.startParameter.taskNames.any { taskName ->
+    def lower = taskName.toLowerCase()
+    (lower.contains('release') && (lower.contains('assemble') || lower.contains('bundle')))
+}
+
+println "📦 当前版本: versionCode=$code, versionName=$name (isRelease=$isReleaseTask)"
+
+def releaseKeystoreFile = System.getenv("RELEASE_SIGNING_CONFIG_FILE") != null
+    ? file(System.getenv("RELEASE_SIGNING_CONFIG_FILE"))
+    : (file('release-key.jks').exists() ? file('release-key.jks') : null)
+def releaseStorePassword = readSecret("RELEASE_STORE_PASSWORD")
+def releaseKeyAlias = readSecret("RELEASE_KEY_ALIAS")
+def releaseKeyPassword = readSecret("RELEASE_KEY_PASSWORD")
+def hasReleaseSigning = releaseKeystoreFile != null &&
+    releaseStorePassword != null &&
+    releaseKeyAlias != null &&
+    releaseKeyPassword != null
+def feedbackSigningSecret = readSecret("FEEDBACK_SIGNING_SECRET") ?: ""
+
+if (releaseKeystoreFile != null && isReleaseTask && !hasReleaseSigning) {
+    throw new GradleException("Release signing credentials are missing. Configure RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, and RELEASE_KEY_PASSWORD via environment variables or local.properties.")
+}
+
+android {
+    namespace 'com.tyust.course'
+    compileSdk 37
+
+    defaultConfig {
+        applicationId "com.tyust.course"
+        minSdk 24
+        targetSdk 34
+        versionCode code
+        versionName name
+        buildConfigField "String", "FEEDBACK_SIGNING_SECRET", quoteForBuildConfig(feedbackSigningSecret)
+        buildConfigField "boolean", "UI_PREVIEW", "false"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // 本地出包兜底：没有正式签名配置时退回 debug keystore。
+    // 否则 assembleRelease 只产出 app-release-unsigned.apk，装不上，
+    // 每次都得手工补签（而且下一次 packageRelease 还会把它删掉）。
+    def fallbackStore = file("${System.getProperty("user.home")}/.android/debug.keystore")
+    def hasFallbackSigning = !hasReleaseSigning && fallbackStore.exists()
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile releaseKeystoreFile
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            } else if (hasFallbackSigning) {
+                storeFile fallbackStore
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasReleaseSigning || hasFallbackSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+        debug {
+            minifyEnabled false
+            debuggable true
+        }
+        uiPreview {
+            initWith debug
+            applicationIdSuffix '.uipreview'
+            versionNameSuffix '-ui-preview'
+            matchingFallbacks = ['debug']
+            signingConfig signingConfigs.debug
+            buildConfigField "boolean", "UI_PREVIEW", "true"
+        }
+        benchmark {
+            initWith release
+            proguardFile 'benchmark-rules.pro'
+            applicationIdSuffix '.benchmark'
+            versionNameSuffix '-benchmark'
+            matchingFallbacks = ['release']
+            signingConfig signingConfigs.debug
+            buildConfigField "boolean", "UI_PREVIEW", "true"
+        }
+    }
+    testBuildType providers.gradleProperty('uiTestBuildType').getOrElse('debug')
+    
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+    
+    buildFeatures {
+        buildConfig true
+        compose true
+    }
+
+    testOptions {
+        // CourseParser 等被测类内部调用 android.util.Log，JVM 单测返回默认值而非抛异常
+        unitTests.returnDefaultValues = true
+    }
+}
+
+dependencies {
+    // Core AndroidX
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.activity:activity-compose:1.10.1'
+    implementation 'androidx.core:core-splashscreen:1.2.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.9.1'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1'
+    
+    // Jetpack Compose BOM (Bill of Materials)
+    def composeBom = platform('androidx.compose:compose-bom:2026.01.00')
+    implementation composeBom
+    
+    // Compose UI
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-graphics'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'androidx.compose.foundation:foundation'
+    
+    // Compose Navigation
+    implementation 'androidx.navigation:navigation-compose:2.7.7'
+    
+    // Compose Debug Tools
+    debugImplementation 'androidx.compose.ui:ui-tooling'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
+    uiPreviewImplementation 'androidx.compose.ui:ui-test-manifest'
+    
+    // Legacy Material (for transition period)
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    
+    // Networking
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.squareup.okhttp3:logging-interceptor:4.12.0'
+    
+    // HTML Parsing
+    implementation 'org.jsoup:jsoup:1.15.3'
+    implementation 'com.squareup.okio:okio:3.6.0'
+    
+    // Async (Coroutines for Compose)
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
+    
+    // Modern UI & Animations
+    implementation 'com.airbnb.android:lottie-compose:6.3.0'
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+    
+    // Fragments (for gradual migration)
+    implementation 'androidx.fragment:fragment-ktx:1.6.2'
+    
+    // CircleImageView for avatar (legacy)
+    implementation 'de.hdodenhof:circleimageview:3.1.0'
+    
+    // GridLayout for schedule (legacy)
+    implementation 'androidx.gridlayout:gridlayout:1.0.0'
+    
+    // Coil for image loading in Compose
+    implementation 'io.coil-kt:coil-compose:2.5.0'
+
+    // EXIF 取向（自定义图片壁纸导入时正过来）。一条路径覆盖 minSdk 24+，
+    // 不必在 ImageDecoder(28+) 与已废弃的 android.media.ExifInterface 之间分叉。
+    // 版本跟随 Coil 已传递引入的那一档，避免多解析出一个副本。
+    implementation 'androidx.exifinterface:exifinterface:1.3.6'
+
+    // Markdown Rendering for Compose
+    implementation "com.halilibo.compose-richtext:richtext-commonmark:0.17.0"
+    implementation "com.halilibo.compose-richtext:richtext-ui-material3:0.17.0"
+
+    // Liquid Glass (Kyant Backdrop) — iOS 26 风格折射 / 色散
+    implementation 'io.github.kyant0:backdrop:2.0.0'
+    implementation 'io.github.kyant0:shapes:1.2.0'
+
+    // 仪器测试：验证 API 31/32 折射所依赖的平台行为，以及离屏 GL 真的出图。
+    // test-only，不进发布 APK。
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test:rules:1.6.1'
+    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'
+    androidTestImplementation composeBom
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+    // org.json 在 JVM 单测中来自 android.jar 桩(默认抛异常), 补真实实现供单元测试使用
+    testImplementation 'org.json:json:20231013'
+}

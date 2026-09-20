@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    
+    <!-- 后台服务权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 相册读取：只用于"用户自己挑一张图当头像"。
+         点「更换头像」时**先检查并按需申请**权限，再打开系统相册——部分 ROM 的相册
+         在无权限时会让选图这一步静默失败，应用连"读不到"都收不到，表现为
+         "头像读不出来"。所以不再只做失败兜底。
+         READ_EXTERNAL_STORAGE 在 13 起已被 READ_MEDIA_IMAGES 取代，限高版本声明；
+         READ_MEDIA_VISUAL_USER_SELECTED 对应 Android 14 的"仅允许访问选中的照片"。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    
+    <!-- 定时任务权限 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    
+    <!-- 应用更新权限 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application
+        android:name=".CourseApplication"
+        android:allowBackup="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.CourseSelector"
+        tools:targetApi="31">
+
+        <provider
+            android:name=".manager.AppearanceThemeProvider"
+            android:authorities="${applicationId}.appearance"
+            android:exported="false" />
+        
+        <!-- 竖屏锁定：整套几何是按竖屏手机调的，横屏可用高只剩约 360dp，
+             顶栏加底栏会吃掉六成，那是一套从未验过的布局 -->
+        <activity
+            android:name=".MainActivity"
+            android:theme="@style/Theme.CourseSelector.Starting"
+            android:configChanges="uiMode"
+            android:enableOnBackInvokedCallback="true"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".LoginActivity"
+            android:theme="@style/Theme.CourseSelector.Starting"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".AcademicWebViewActivity"
+            android:configChanges="uiMode"
+            android:process=":academic_webview"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
+        <!-- 取景框裁剪页：头像与自定义背景共用同一条「选图 → 调整 → 保存」路径 -->
+        <activity
+            android:name=".ImageCropActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+        <activity android:name=".CourseDetailActivity" android:exported="false" android:configChanges="uiMode" />
+        <activity
+            android:name=".MessageCenterActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+        
+        <!-- Background grab service -->
+        <service
+            android:name=".service.GrabService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        
+        <!-- Scheduled grab alarm receiver -->
+        <receiver android:name=".schedule.CourseReminderReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".receiver.GrabAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.tyust.course.action.SCHEDULED_GRAB" />
+            </intent-filter>
+            <!-- 重启 / 应用更新 / 改时间后系统会清空所有闹钟：抢课定时任务需要据此重排，
+                 否则用户设好的任务会静默消失（此前只有课程提醒和消息巡检做了重排）。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 消息中心每 12 小时巡检一次：有新消息就发系统通知。
+             开机 / 应用更新 / 改时间后闹钟会被系统清掉，靠这些广播重排。 -->
+        <receiver
+            android:name=".academic.MessageCheckReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.tyust.course.action.MESSAGE_CHECK" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        
+        <!-- FileProvider for sharing iCal files -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+        
+    </application>
+
+</manifest>
+
