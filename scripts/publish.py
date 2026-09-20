@@ -526,13 +526,15 @@ def _push_gitee(tag):
     Windows 凭据管理器），而这个仓库是公开的，一旦误提交就是事故。临时文件与
     临时目录一起销毁，令牌不落任何持久位置。
 
-    两个必须照做的细节（都是实测出来的，错了不会报错、只会静默失败）：
+    三个必须照做的细节（都是实测出来的；错了不会报错、只会静默失败 —— 症状统一是
+    `could not read Username for 'https://gitee.com'`，看着像"令牌不对"，其实不是）：
 
-    1. `--file=` 的路径**必须用正斜杠**。Windows 上写 `C:\\Users\\...\\credentials`
-       时 git-credential-store 找不到文件，却**不报错**，只是返回空凭据，
-       于是 push 报 "could not read Username for 'https://gitee.com'" —— 看起来
-       完全像是"令牌不对"或"仓库要登录"，离真正的原因很远。
-    2. 先 `credential.helper=` 清空 helper 列表再加 store：默认 helper
+    1. 写凭据文件必须传 `newline="\\n"`。Windows 上 `write_text` 默认把 `\\n` 翻成
+       `\\r\\n`，git-credential-store 按行切分后 host 变成 `gitee.com\\r`，匹配不上
+       就**静默返回空凭据**。这是本机 2026-09-20 踩到的真正原因（曾误判成路径反斜杠）。
+    2. `--file=` 的路径必须是 git.exe 认得的 **Windows 绝对路径**。正斜杠写法
+       `C:/Users/.../credentials` 可用；`/tmp/...` 这类 MSYS 路径 git.exe 解析不了。
+    3. 先 `credential.helper=` 清空 helper 列表再加 store：默认 helper
        （本机是 `helper-selector`）会在缺凭据时弹交互框，把无人值守脚本挂住。
     """
     if not TOKEN:
@@ -541,7 +543,8 @@ def _push_gitee(tag):
     with tempfile.TemporaryDirectory(prefix="hnnu-publish-") as tmp:
         cred = pathlib.Path(tmp) / "credentials"
         if not DRY:
-            cred.write_text(f"https://{TOKEN}:{TOKEN}@gitee.com\n", encoding="utf-8")
+            cred.write_text(f"https://{TOKEN}:{TOKEN}@gitee.com\n", encoding="utf-8",
+                            newline="\n")
         helper = f"credential.helper=store --file={cred.as_posix()}"
         base = ["git", "-c", "credential.helper=", "-c", helper]
         if not DRY:
@@ -551,8 +554,10 @@ def _push_gitee(tag):
                 input="protocol=https\nhost=gitee.com\n\n",
             )
             if "password=" not in (probe.stdout or ""):
-                die("临时凭据文件读不出来，push 一定会报 could not read Username。"
-                    "先检查 --file 的路径是不是写成了反斜杠（Windows 上必须正斜杠）。")
+                die("临时凭据文件写好了，但 git-credential-store 匹配不到它，push 一定会报 "
+                    "could not read Username。两个已知原因：行尾被写成 CRLF"
+                    "（write_text 必须传 newline=\"\\n\"）、或 --file 不是 git.exe 能解析的 "
+                    "Windows 绝对路径（如 MSYS 的 /tmp/...）。")
         run(base + ["push", "gitee", "main"])
         run(base + ["push", "gitee", f"refs/tags/{tag}"])
     ok(f"Gitee：main 与 {tag} 已推送")
