@@ -70,6 +70,8 @@ fun AcademicGradesRoute(school: SchoolConfig) {
                     if (!sessions.isCurrent(expected)) return@LaunchedEffect
                     report = loaded
                     GradesCacheManager.saveReport(context, account, loaded)
+                    // 成绩已在页面上可见：重建成绩推送基线，避免后台巡检重复播报
+                    com.tyust.course.academic.GradeWatcher.markSeen(context, account)
                     cacheFetchedAt = System.currentTimeMillis()
                     val available = AcademicStudyBridge.semesters(loaded.grades)
                     if (semester.isBlank() || semester !in available)
@@ -86,6 +88,7 @@ fun AcademicGradesRoute(school: SchoolConfig) {
             report = loaded
             reportLoaded = true
             GradesCacheManager.saveReport(context, account, loaded)
+            com.tyust.course.academic.GradeWatcher.markSeen(context, account)
             cacheFetchedAt = System.currentTimeMillis()
             val available = AcademicStudyBridge.semesters(loaded.grades)
             if (semester.isBlank() || semester !in available) semester = available.firstOrNull() ?: AcademicStudyReader.calendarTerm().id
@@ -113,6 +116,8 @@ fun AcademicGradesRoute(school: SchoolConfig) {
                     if (!sessions.isCurrent(expected)) return@LaunchedEffect
                     exams = loaded
                     GradesCacheManager.saveExams(context, account, loaded)
+                    // 考试数据更新即对齐考前提醒（解析不出时间的考试自动跳过）
+                    com.tyust.course.schedule.ExamReminderScheduler.reconcile(context, loaded)
                     examCacheFetchedAt = System.currentTimeMillis()
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { /* 后台静默,失败不打扰用户 */ }
@@ -130,6 +135,7 @@ fun AcademicGradesRoute(school: SchoolConfig) {
             exams = loaded
             examsLoaded = true
             GradesCacheManager.saveExams(context, account, loaded)
+            com.tyust.course.schedule.ExamReminderScheduler.reconcile(context, loaded)
             examCacheFetchedAt = System.currentTimeMillis()
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {

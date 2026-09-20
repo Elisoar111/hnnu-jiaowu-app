@@ -17,8 +17,8 @@ import java.util.concurrent.TimeUnit
  */
 object AnnouncementManager {
     private const val TAG = "AnnouncementManager"
-    private const val PREFS_NAME = "announcement_prefs"
-    private const val KEY_READ_IDS = "read_announcement_ids"
+    internal const val PREFS_NAME_OF = "announcement_prefs"
+    internal const val KEY_READ_IDS = "read_announcement_ids"
     
     // 公告 JSON 地址（Gitee Raw，指向本项目自己的仓库）
     private const val ANNOUNCEMENT_URL = "https://gitee.com/Elisoar/hnnu-jiaowu-app/raw/main/announcement.json"
@@ -29,7 +29,7 @@ object AnnouncementManager {
         .build()
     
     private fun getPrefs(context: Context): SharedPreferences {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return context.getSharedPreferences(PREFS_NAME_OF, Context.MODE_PRIVATE)
     }
     
     /**
@@ -171,11 +171,14 @@ object AnnouncementManager {
         return getPrefs(context).getStringSet(KEY_READ_IDS, emptySet()) ?: emptySet()
     }
     
+    /** 公告是否已读（公告中心红点用）。 */
+    fun isRead(context: Context, announcementId: String): Boolean =
+        announcementId in getReadIds(context)
+
     /**
      * 标记公告已读
      */
-    fun markAsRead(context: Context, announcementId: String) {
-        val readIds = getReadIds(context).toMutableSet()
+    fun markAsRead(context: Context, announcementId: String) {        val readIds = getReadIds(context).toMutableSet()
         readIds.add(announcementId)
         
         // 只保留最近100条已读记录，避免无限增长

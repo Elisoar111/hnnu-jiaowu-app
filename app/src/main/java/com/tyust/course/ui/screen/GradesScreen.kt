@@ -807,6 +807,14 @@ private fun ExamScheduleContent(
         }
 
         else -> {
+            // 考试倒计时：解析考试开始时刻，按时间升序（解析失败的沉底），
+            // 并给每场考试算"还有 N 天"徽标——期末季一眼看到最近的一场。
+            val ordered = remember(exams) {
+                exams.map { exam ->
+                    val start = com.tyust.course.schedule.ExamCountdown.parseStart(exam.examTime)
+                    Triple(exam, start, start?.let { com.tyust.course.schedule.ExamCountdown.countdownLabel(it) })
+                }.sortedWith(compareBy { it.second ?: Long.MAX_VALUE })
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 state = listState,
@@ -824,18 +832,18 @@ private fun ExamScheduleContent(
                             items = listOf(
                                 "考试数" to exams.size.toString(),
                                 "最近状态" to "已同步",
-                                "查看方式" to "列表"
+                                "查看方式" to "倒计时"
                             )
                         )
                         SystemSectionHeader(
                             title = "考试列表",
-                            subtitle = "按时间顺序展示"
+                            subtitle = "按考试时间排序，临近的排最前"
                         )
                     }
                 }
 
-                items(exams) { exam ->
-                    Box(Modifier.moduleEntrance(2)) { ExamItemRow(exam = exam) }
+                items(ordered) { (exam, _, countdown) ->
+                    Box(Modifier.moduleEntrance(2)) { ExamItemRow(exam = exam, countdown = countdown) }
                 }
             }
         }
@@ -844,9 +852,14 @@ private fun ExamScheduleContent(
 
 @Composable
 private fun ExamItemRow(
-    exam: ExamItemUi
+    exam: ExamItemUi,
+    countdown: String? = null
 ) {
     val examTone = if (exam.examName.contains("期中")) SystemTone.Warning else SystemTone.Info
+    // 48 小时内的考试用警示色：今天/明天开考的场次要更醒目
+    val urgent = countdown == "今天开考" || countdown == "明天开考"
+    val badgeText = countdown ?: if (exam.examName.isBlank()) "考试" else exam.examName
+    val badgeTone = if (urgent) SystemTone.Warning else examTone
 
     SystemCard(
         modifier = Modifier.fillMaxWidth()
@@ -867,8 +880,8 @@ private fun ExamItemRow(
             )
             Spacer(modifier = Modifier.width(12.dp))
             SystemStatusBadge(
-                text = if (exam.examName.isBlank()) "考试" else exam.examName,
-                tone = examTone
+                text = badgeText,
+                tone = badgeTone
             )
         }
 

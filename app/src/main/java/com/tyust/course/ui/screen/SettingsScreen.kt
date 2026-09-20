@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AssignmentInd
+import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CloudSync
@@ -120,6 +121,9 @@ fun SettingsScreen(
     secondClassSubtitle: String = "",
     onSecondClassLogin: () -> Unit = {},
     onMessageCenter: () -> Unit = {},
+    /** 公告中心未读数；> 0 时入口显示红点。 */
+    announcementUnread: Int = 0,
+    onAnnouncements: () -> Unit = {},
     /** 检查更新（Gitee Release）。 */
     onCheckUpdate: () -> Unit = {},
     /** 应用内阅读用户手册。 */
@@ -228,6 +232,18 @@ fun SettingsScreen(
                     },
                     badgeCount = messageUnread,
                     onClick = onMessageCenter
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.Campaign,
+                    iconTint = Color(0xFFFF3B30),
+                    title = "公告",
+                    subtitle = if (announcementUnread > 0) {
+                        "有 $announcementUnread 条未读公告"
+                    } else {
+                        "开发者发布的更新与迁移说明"
+                    },
+                    badgeCount = announcementUnread,
+                    onClick = onAnnouncements
                 )
             }
 

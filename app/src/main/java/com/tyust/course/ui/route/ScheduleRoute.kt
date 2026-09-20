@@ -254,8 +254,13 @@ fun ScheduleRoute() {
         }
     }
 
-    val snapshotForCache = ScheduleRouteSnapshot(
-        savedAtMs = System.currentTimeMillis(),
+    // 桌面小组件跟随课表数据刷新：courses 变化（同步/自定义课程/补课）即重推，
+    // 数据全部来自本地缓存，刷新没有网络开销。
+    LaunchedEffect(courses, resolvedTermId, routeAccountKey) {
+        com.tyust.course.widget.WidgetRefresher.updateAll(context)
+    }
+
+    val snapshotForCache = ScheduleRouteSnapshot(        savedAtMs = System.currentTimeMillis(),
         currentWeek = currentWeek,
         courses = courses,
         periodTimes = periodTimes,

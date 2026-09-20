@@ -72,6 +72,9 @@ android {
     compileSdk 37
 
     defaultConfig {
+        // 1.2.1（含）之前保持原作者包名：老用户「检查更新」可无缝覆盖升级。
+        // 1.2.1 是旧包名的最后一版；之后的新版本将切换为 com.hnnujw.course，
+        // 切换时必须配合应用内公告引导用户手动下载迁移（不同包名无法覆盖安装）。
         applicationId "com.tyust.course"
         minSdk 24
         targetSdk 34

@@ -40,6 +40,8 @@ class MessageCheckReceiver : BroadcastReceiver() {
                 val accountKey = user.currentAccountStorageKey
                 // force = true：闹钟本身已经是 12 小时一次，不再叠加节流
                 MessageCenterNotifier.check(app, school, accountKey, force = true)
+                // 成绩订阅与消息巡检共用这颗 12 小时闹钟：出成绩季自动 diff 推送
+                runCatching { GradeWatcher.check(app, school, accountKey, force = true) }
             } catch (_: Throwable) {
                 // 巡检失败不需要惊动用户：红点保持上一次缓存值即可
             } finally {

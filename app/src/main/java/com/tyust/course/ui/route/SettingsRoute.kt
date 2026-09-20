@@ -265,6 +265,41 @@ fun SettingsRoute(
             )
         }
     }
+    // 开发者公告：进入「我的」就按节流刷一次红点；列表与单条详情走弹窗
+    val announcementUnread = com.tyust.course.announcement.AnnouncementCenter.unreadCount
+    LaunchedEffect(isDemoMode) {
+        if (isDemoMode) return@LaunchedEffect
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.tyust.course.announcement.AnnouncementCenter.refresh(context)
+        }
+    }
+    var showAnnouncementList by remember { mutableStateOf(false) }
+    /** 列表里点开的单条公告 → 液态玻璃详情弹窗 */
+    var openedAnnouncement by remember { mutableStateOf<com.tyust.course.announcement.AnnouncementManager.Announcement?>(null) }
+    if (showAnnouncementList) {
+        com.tyust.course.announcement.AnnouncementListDialog(
+            announcements = com.tyust.course.announcement.AnnouncementCenter.announcements,
+            isLoading = com.tyust.course.announcement.AnnouncementCenter.isLoading,
+            isRead = com.tyust.course.announcement.AnnouncementCenter::isRead,
+            onRefresh = {
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    com.tyust.course.announcement.AnnouncementCenter.refresh(context, force = true)
+                }
+            },
+            onOpen = { announcement ->
+                openedAnnouncement = announcement
+                com.tyust.course.announcement.AnnouncementCenter.markRead(context, announcement.id)
+            },
+            onDismiss = { showAnnouncementList = false }
+        )
+    }
+    openedAnnouncement?.let { announcement ->
+        com.tyust.course.announcement.AnnouncementDialog(
+            announcement = announcement,
+            onDismiss = { openedAnnouncement = null }
+        )
+    }
+
     val secondClassSubtitle = remember(session.token, secondClassRefresh, currentAccountKey) {
         if (!com.tyust.course.secondclass.SecondClassroomStore.isAvailable(UserManager.getInstance().currentSchool)) {
             "当前学校未接入第二课堂"
@@ -420,6 +455,8 @@ fun SettingsRoute(
         showClassRank = AppearanceSettingsManager.showClassRank,
         onShowClassRankChange = { AppearanceSettingsManager.updateShowClassRank(it) },
         messageUnread = messageUnread,
+        announcementUnread = announcementUnread,
+        onAnnouncements = { showAnnouncementList = true },
         isSuper = isSuper,
         canRefreshCookie = canRefreshCookie,
         isRefreshingCookie = isRefreshingCookie,

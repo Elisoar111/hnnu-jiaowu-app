@@ -148,6 +148,9 @@ class MainActivity : FragmentActivity() {
     companion object {
         private const val PREFS_NAME = "app_prefs"
         private const val KEY_HAS_SEEN_ONBOARDING = "has_seen_onboarding"
+
+        /** 小组件 / 通知点击时携带：期望落地的 StartupPage route。 */
+        const val EXTRA_OPEN_TAB = "com.tyust.course.extra.OPEN_TAB"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -155,7 +158,10 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
 
         UserManager.getInstance().init(this)
-        if (savedInstanceState == null) com.tyust.course.schedule.CourseReminderNavigation.accept(intent)
+        if (savedInstanceState == null) {
+            com.tyust.course.schedule.CourseReminderNavigation.accept(intent)
+            AppTabNavigation.accept(intent)
+        }
 
         val userManager = UserManager.getInstance()
         if (BuildConfig.UI_PREVIEW) {
@@ -212,7 +218,26 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         com.tyust.course.schedule.CourseReminderNavigation.accept(intent)
+        AppTabNavigation.accept(intent)
     }
+}
+
+/**
+ * 桌面小组件 / 系统通知的「落到指定 Tab」入口。
+ *
+ * 挂在伴生对象而非 Activity 上：冷启动时 [MainScreen] 的组合先于
+ * Activity 的 intent 消费，用 Compose state 跨越这条时序差。
+ * 消费一次即清空，避免后台返回时又跳一次。
+ */
+object AppTabNavigation {
+    var requestedPage by androidx.compose.runtime.mutableStateOf<StartupPage?>(null)
+        private set
+
+    fun accept(intent: Intent?) {
+        intent?.getStringExtra(MainActivity.EXTRA_OPEN_TAB)?.let { requestedPage = StartupPage.decode(it) }
+    }
+
+    fun consume() { requestedPage = null }
 }
 
 sealed class BottomNavItem(
@@ -293,6 +318,15 @@ fun MainScreen(
         }
     }
     val dialogHostState = key(currentAccountStorageKey) { rememberDialogHostState() }
+    // 小组件 / 成绩通知的跳页请求：落到底栏对应 Tab，消费一次即清空
+    val requestedTabPage = AppTabNavigation.requestedPage
+    LaunchedEffect(requestedTabPage) {
+        if (requestedTabPage != null) {
+            val index = items.indexOfFirst { it.page == requestedTabPage }
+            if (index >= 0 && index != selectedTab) selectedTab = index
+            AppTabNavigation.consume()
+        }
+    }
     val density = LocalDensity.current
     val pageTravelPx = with(density) { 8.dp.roundToPx() }
     val recovery by SessionRenewer.state.collectAsState()
@@ -341,7 +375,41 @@ fun MainScreen(
                 school = user.currentSchool,
                 accountKey = currentAccountStorageKey
             )
+            // 成绩巡检与消息巡检同节奏（各自 12 小时节流）：前台化顺带查一次，
+            // 出成绩季不用等后台闹钟也能在一小时内知道新成绩。
+            runCatching {
+                com.tyust.course.academic.GradeWatcher.check(
+                    context = context,
+                    school = user.currentSchool,
+                    accountKey = currentAccountStorageKey
+                )
+            }
         }
+    }
+
+    // 开发者公告：启动后拉取一次（10 分钟节流），有未读就逐条弹液态玻璃公告。
+    // 包名迁移这类重大通知都在这里触达；全部公告可在「我的 → 公告」查看。
+    var announcementShownThisSession by remember { mutableStateOf(false) }
+    LaunchedEffect(currentAccountStorageKey, foreground, isDemoMode, showOnboarding) {
+        if (isDemoMode || showOnboarding || currentAccountStorageKey.isBlank()) return@LaunchedEffect
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.tyust.course.announcement.AnnouncementCenter.refresh(context)
+        }
+        if (!announcementShownThisSession &&
+            com.tyust.course.announcement.AnnouncementCenter.unreadCount > 0) {
+            // 稍等首帧就绪，别和「欢迎回来」提示挤在同一瞬间
+            kotlinx.coroutines.delay(600)
+            announcementShownThisSession = true
+        }
+    }
+    val pendingAnnouncement = com.tyust.course.announcement.AnnouncementCenter.firstUnread
+    if (announcementShownThisSession && pendingAnnouncement != null) {
+        com.tyust.course.announcement.AnnouncementDialog(
+            announcement = pendingAnnouncement,
+            onDismiss = {
+                com.tyust.course.announcement.AnnouncementCenter.markRead(context, pendingAnnouncement.id)
+            }
+        )
     }
 
     // 底栏滚动最小化：捕获页面内任意滚动的方向（nested scroll 冒泡，页面零改动）

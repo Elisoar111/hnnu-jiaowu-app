@@ -143,6 +143,48 @@
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
         </receiver>
+
+        <!-- 桌面小组件：4x1 下一节课 / 2x2 今日课程。
+             数据只读本地课表缓存；开机 / 更新 / 改时间 / 改时区后立即重刷。 -->
+        <receiver
+            android:name=".widget.NextCourseWidgetProvider"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_next_course_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.TodayCoursesWidgetProvider"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_today_courses_info" />
+        </receiver>
+
+        <!-- 考前 24 小时提醒（一次性闹钟）；开机 / 更新 / 改时间后按本地考试缓存重排。 -->
+        <receiver android:name=".schedule.ExamReminderReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="com.tyust.course.action.EXAM_REMINDER" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
         
         <!-- FileProvider for sharing iCal files -->
         <provider
