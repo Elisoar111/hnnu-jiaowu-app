@@ -500,8 +500,23 @@ fun ScheduleScreen(
                     pageSpacing = 0.dp
                 ) { page ->
                     val weekNumber = page + 1
-                    val displayedCourses = remember(courses, conflictIds, liveIds, weekNumber, actualWeek) {
-                        courses.map { it.copy(hasConflict = it.id in conflictIds,
+                    // 「本节上哪门」：冲突时段的用户选择。一门课只要覆盖到任何一个
+                    // 选了别人的节次，就整体让位隐藏（key 只到节，A 占 1-2、B 占 2-3
+                    // 只在第 2 节撞车时，A 的第 1 节不受影响）。
+                    val conflictChoices = com.tyust.course.schedule.ScheduleConflictStore.choices
+                    val conflictHiddenIds = remember(courses, conflictChoices) {
+                        if (conflictChoices.isEmpty()) {
+                            emptySet()
+                        } else {
+                            courses.filter { course ->
+                                (course.startPeriod..course.endPeriod).any { p ->
+                                    conflictChoices["${course.day}:$p"]?.let { it != course.id } == true
+                                }
+                            }.map { it.id }.toSet()
+                        }
+                    }
+                    val displayedCourses = remember(courses, conflictIds, liveIds, weekNumber, actualWeek, conflictHiddenIds) {
+                        courses.filter { it.id !in conflictHiddenIds }.map { it.copy(hasConflict = it.id in conflictIds,
                             isCurrent = weekNumber == actualWeek && it.id in liveIds) }
                     }
                     Box(Modifier.fillMaxSize().graphicsLayer {

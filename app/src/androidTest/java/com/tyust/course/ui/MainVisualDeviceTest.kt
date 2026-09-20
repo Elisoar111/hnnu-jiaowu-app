@@ -29,7 +29,7 @@ class MainVisualDeviceTest {
             val override = Regex("Override size: (\\d+x\\d+)").find(originalSize)?.groupValues?.get(1) ?: "reset"
             fun settle() { SystemClock.sleep(2200); ui.waitText("课程") }
             fun capture(prefix: String) {
-                for (page in listOf("课程", "课表", "抢课", "成绩", "设置")) {
+                for (page in listOf("课程", "课表", "选课", "成绩", "设置")) {
                     ui.navigate(page)
                     ui.screenshot("$prefix-$page")
                 }

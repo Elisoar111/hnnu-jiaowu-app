@@ -121,7 +121,7 @@ class GrabService : Service() {
     private var currentKeywordIndex = 0
     private var multiKeywordTotalSuccess = 0
     
-    // 并行抢课模式
+    // 并行选课模式
     private var isParallelMode = false
     private var parallelWorkerCount = 2  // 同时处理2门课
     private val activeWorkers = mutableSetOf<Int>()  // 活跃的工作线程ID
@@ -165,7 +165,7 @@ class GrabService : Service() {
                     return
                 }
                 if (isRunning) {
-                    Log.e(TAG, "收到服务账号 Cookie 失效广播，正在停止抢课服务")
+                    Log.e(TAG, "收到服务账号 Cookie 失效广播，正在停止选课服务")
                     handleCookieInvalid()
                 }
             }
@@ -359,14 +359,14 @@ class GrabService : Service() {
         if (serviceAccountKey.isNotBlank() && serviceAccountKey != userManager.currentAccountKey) {
             val switched = userManager.switchToAccount(serviceAccountKey)
             if (!switched) {
-                broadcastLogForAccount(serviceAccountStorageKey, "抢课启动失败：找不到绑定账号，请重新登录")
+                broadcastLogForAccount(serviceAccountStorageKey, "选课启动失败：找不到绑定账号，请重新登录")
                 return false
             }
         }
 
         currentSchool = userManager.currentSchool
         if (currentSchool == null) {
-            broadcastLogForAccount(serviceAccountStorageKey, "抢课启动失败：当前账号未登录")
+            broadcastLogForAccount(serviceAccountStorageKey, "选课启动失败：当前账号未登录")
             return false
         }
         return true
@@ -387,7 +387,7 @@ class GrabService : Service() {
                 stopSelf()
             } else {
                 val requestAccountStorageKey = intent.getStringExtra(EXTRA_ACCOUNT_STORAGE_KEY).orEmpty()
-                broadcastLogForAccount(requestAccountStorageKey, "当前账号没有正在运行的抢课任务")
+                broadcastLogForAccount(requestAccountStorageKey, "当前账号没有正在运行的选课任务")
             }
             return START_STICKY
         }
@@ -425,7 +425,7 @@ class GrabService : Service() {
                 courseParams = SmartSelector.getInstance().courseParams?.toMap()
                 
                 if (targetCourse != null && currentSchool != null) {
-                    startForeground(NOTIFICATION_ID, createNotification("正在抢课: $courseName"))
+                    startForeground(NOTIFICATION_ID, createNotification("正在选课: $courseName"))
                     startGrabbing()
                 } else {
                     Log.e(TAG, "Missing course or school info")
@@ -434,7 +434,7 @@ class GrabService : Service() {
                 }
             }
             ACTION_START_KEYWORD -> {
-                // 关键词模式：先获取课程列表，匹配后开始抢课
+                // 关键词模式：先获取课程列表，匹配后开始选课
                 val keywords = intent.getStringExtra(EXTRA_COURSE_KEYWORDS) ?: ""
                 interval = intent.getIntExtra(EXTRA_INTERVAL, 1500)
                 maxRetry = intent.getIntExtra(EXTRA_MAX_RETRY, 100)
@@ -449,7 +449,7 @@ class GrabService : Service() {
                 
                 if (currentSchool == null) {
                     Log.e(TAG, "未登录")
-                    broadcastLog("失败：未登录，无法抢课")
+                    broadcastLog("失败：未登录，无法选课")
                     stopSelf()
                     return START_STICKY
                 }
@@ -462,7 +462,7 @@ class GrabService : Service() {
                     startForeground(NOTIFICATION_ID, createNotification("正在获取课程列表..."))
                     broadcastLog("正在获取课程列表… [$modeText]")
                     
-                    // 开始关键词抢课流程
+                    // 开始关键词选课流程
                     startKeywordGrabbing(keywords)
                 }
             }
@@ -489,8 +489,8 @@ class GrabService : Service() {
                 checkCookieValidity(currentSchool!!) { isValid ->
                     if (!isValid) return@checkCookieValidity
                     
-                    val modeText = if (isParallelMode && queue.size > 1) "并行队列抢课" else "直接队列抢课"
-                    startForeground(NOTIFICATION_ID, createNotification("正在准备队列抢课..."))
+                    val modeText = if (isParallelMode && queue.size > 1) "并行队列选课" else "直接队列选课"
+                    startForeground(NOTIFICATION_ID, createNotification("正在准备队列选课..."))
                     broadcastLog("启动$modeText (共 ${queue.size} 门，仅当前账号)")
                     
                     isQueueMode = true
@@ -498,7 +498,7 @@ class GrabService : Service() {
                     totalQueueSuccess = 0
                     
                     if (isParallelMode && queue.size > 1) {
-                        startParallelCourseTasks(queue, origin = "queue", label = "队列抢课")
+                        startParallelCourseTasks(queue, origin = "queue", label = "队列选课")
                     } else {
                         startNextQueueItem()
                     }
@@ -561,8 +561,8 @@ class GrabService : Service() {
         val items = (if (targetOnly) listOfNotNull(store.target(account)) else store.items(account))
             .filter { it.enabled && it.schoolId == school.id }
         if (items.isEmpty()) {
-            startForeground(NOTIFICATION_ID, createNotification("抢课队列为空"))
-            broadcastLog("当前账号的抢课队列为空")
+            startForeground(NOTIFICATION_ID, createNotification("选课队列为空"))
+            broadcastLog("当前账号的选课队列为空")
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
@@ -579,8 +579,8 @@ class GrabService : Service() {
         isRunning = true
         store.resetStatuses(account, items)
         successCount = 0; failCount = 0; retryCount = 0
-        startForeground(NOTIFICATION_ID, createNotification("教务抢课：${items.size} 门课程"))
-        broadcastLog("开始教务抢课：${items.size} 门课程，$workers 个执行任务")
+        startForeground(NOTIFICATION_ID, createNotification("教务选课：${items.size} 门课程"))
+        broadcastLog("开始教务选课：${items.size} 门课程，$workers 个执行任务")
         academicJob = academicScope.launch {
             val semaphore = Semaphore(workers)
             val queueHalted = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -667,7 +667,7 @@ class GrabService : Service() {
         if (Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
         val open = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher).setContentTitle("抢课任务需要处理")
+            .setSmallIcon(R.mipmap.ic_launcher).setContentTitle("选课任务需要处理")
             .setContentText(courseName + "：" + message).setContentIntent(open).setAutoCancel(true).build()
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID + 1, notification)
     }
@@ -692,7 +692,7 @@ class GrabService : Service() {
                 "选课服务",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "后台抢课服务通知"
+                description = "后台选课服务通知"
                 setShowBadge(false)
             }
             val manager = getSystemService(NotificationManager::class.java)
@@ -724,7 +724,7 @@ class GrabService : Service() {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
-            .addAction(0, "停止抢课", stopPendingIntent)
+            .addAction(0, "停止选课", stopPendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
@@ -799,7 +799,7 @@ class GrabService : Service() {
 
         val workerLimit = minOf(parallelWorkerCount, pendingGrabTasks.size)
         startForeground(NOTIFICATION_ID, createNotification("$label：并行 $workerLimit/$parallelTaskTotal"))
-        broadcastLog("启动并行抢课：$label，共 $parallelTaskTotal 门，仅使用当前账号")
+        broadcastLog("启动并行选课：$label，共 $parallelTaskTotal 门，仅使用当前账号")
         fillParallelTaskSlots(school)
     }
 
@@ -814,7 +814,7 @@ class GrabService : Service() {
             broadcastLog("线程 ${task.workerId} 开始处理：${courseDisplayName(task.course)}")
             runParallelTaskLoop(school, task)
         }
-        updateNotification("并行抢课中 | 运行：${activeGrabTasks.size} | 等待：${pendingGrabTasks.size} | 成功：$successCount | 失败：$failCount")
+        updateNotification("并行选课中 | 运行：${activeGrabTasks.size} | 等待：${pendingGrabTasks.size} | 成功：$successCount | 失败：$failCount")
         finishParallelPoolIfIdle()
     }
 
@@ -859,7 +859,7 @@ class GrabService : Service() {
                     fetchHiddenParamsAndProceed(school, task)
                 }
             }
-            updateNotification("并行抢课中 | 成功：$successCount | 失败：$failCount | 尝试：$retryCount")
+            updateNotification("并行选课中 | 成功：$successCount | 失败：$failCount | 尝试：$retryCount")
         }
     }
 
@@ -1125,7 +1125,7 @@ class GrabService : Service() {
                 } else {
                     broadcastLog("线程 ${task.workerId} 服务器返回成功，验证未通过：${courseDisplayName(task.course)}")
                 }
-                finishParallelTask(task, success = true, message = "抢课成功")
+                finishParallelTask(task, success = true, message = "选课成功")
             }
         }.start()
     }
@@ -1173,7 +1173,7 @@ class GrabService : Service() {
 
     private fun finishParallelPoolIfIdle() {
         if (!isParallelTaskPoolRunning || activeGrabTasks.isNotEmpty() || pendingGrabTasks.isNotEmpty()) return
-        val summary = "并行抢课完成。成功: $successCount/$parallelTaskTotal，失败: $failCount"
+        val summary = "并行选课完成。成功: $successCount/$parallelTaskTotal，失败: $failCount"
         broadcastLog(summary)
         updateNotification(summary)
         isParallelTaskPoolRunning = false
@@ -1200,7 +1200,7 @@ class GrabService : Service() {
         }
         
         val course = targetCourse
-        broadcastUpdate("开始抢课：${course?.name}")
+        broadcastUpdate("开始选课：${course?.name}")
         
         // 发送 GRABBING 状态给 UI
         if (course != null) {
@@ -1230,7 +1230,7 @@ class GrabService : Service() {
         
         isRunning = false // 先重置状态以允许启动
         broadcastLog("队列进度 [${currentQueueIndex + 1}/${queue.size}]: ${course.name}")
-        updateNotification("队列抢课：${course.name} [${currentQueueIndex + 1}/${queue.size}]")
+        updateNotification("队列选课：${course.name} [${currentQueueIndex + 1}/${queue.size}]")
         
         // 🔧 发送 GRABBING 状态 (使用完整课程名，与UI匹配)
         broadcastCourseStatus(course, "grabbing")
@@ -1254,7 +1254,7 @@ class GrabService : Service() {
         // 发送停止状态，让 UI 知道服务已停止
         val intent = Intent(BROADCAST_UPDATE).apply {
             putExtra(EXTRA_IS_RUNNING, false)
-            putExtra(EXTRA_LOG_MESSAGE, "⏹ 抢课已停止")
+            putExtra(EXTRA_LOG_MESSAGE, "⏹ 选课已停止")
             putExtra(EXTRA_SUCCESS_COUNT, successCount)
             putExtra(EXTRA_FAIL_COUNT, failCount)
             putExtra(EXTRA_RETRY_COUNT, retryCount)
@@ -1284,7 +1284,7 @@ class GrabService : Service() {
                 
                 // 🔧 检查是否还有更多关键词需要处理
                 if (keywordQueue.size > 1 && currentKeywordIndex < keywordQueue.size - 1) {
-                    broadcastLog("当前关键词未抢到，切换到下一个关键词…")
+                    broadcastLog("当前关键词未选到，切换到下一个关键词…")
                     currentKeywordIndex++
                     isRunning = false
                     handler.postDelayed({
@@ -1341,7 +1341,7 @@ class GrabService : Service() {
 
             when (result) {
                 is ServerHealthCheckResult.Healthy -> {
-                    // 服务器正常，开始抢课
+                    // 服务器正常，开始选课
                     retryCount++
                     broadcastLog("第 $retryCount 次尝试 (响应：${result.responseTimeMs}ms)")
                     updateNotification("第 $retryCount 次尝试 | 成功：$successCount | 失败：$failCount | 跳过：$skipCount")
@@ -1359,7 +1359,7 @@ class GrabService : Service() {
                     scheduleNextAttempt()
                 }
                 is ServerHealthCheckResult.Failed -> {
-                    // 快速失败不等同于响应慢，继续交给真实抢课接口判断
+                    // 快速失败不等同于响应慢，继续交给真实选课接口判断
                     retryCount++
                     broadcastLog("健康检查失败 (${result.responseTimeMs}ms)：${result.reason}，改为直接尝试")
                     broadcastLog("第 $retryCount 次尝试 (健康探针异常)")
@@ -1431,7 +1431,7 @@ class GrabService : Service() {
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("登录状态已失效")
-            .setContentText("抢课已停止，请点击此通知重新登录")
+            .setContentText("选课已停止，请点击此通知重新登录")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_HIGH) // 强提醒
             .setDefaults(Notification.DEFAULT_ALL)         // 震动+声音
@@ -2049,10 +2049,10 @@ class GrabService : Service() {
                     if (details != null) {
                         executeSelection(school, course, details, rwlx, xklc)
                     } else {
-                        // 🔧 Fallback: 如果解析失败（如返回"0"）但我们有保存的 doJxbId，直接尝试抢课
+                        // 🔧 Fallback: 如果解析失败（如返回"0"）但我们有保存的 doJxbId，直接尝试选课
                         if (TeachingClassMatcher.canUseSavedClass(course) && !course.doJxbId.isNullOrEmpty() && !course.classId.isNullOrEmpty()) {
                             Log.w(TAG, "⚠️ 解析失败，强制使用保存的 doJxbId=${course.doJxbId}")
-                            broadcastLog("注意：解析失败，强制使用保存的 ID 抢课")
+                            broadcastLog("注意：解析失败，强制使用保存的 ID 选课")
                             
                             val fallbackDetails = SelectionDetails(
                                 doJxbId = course.doJxbId!!,
@@ -2219,7 +2219,7 @@ class GrabService : Service() {
                     broadcastLog("注意：验证未通过，但服务器已返回成功")
                 }
                 
-                // 成功抢到后从服务队列快照中移除
+                // 成功选到后从服务队列快照中移除
                 val removedFromServiceQueue = removeCourseFromServiceQueue(course)
                 if (removedFromServiceQueue) {
                     broadcastLog("已从队列移除：${course.name}")
@@ -2248,7 +2248,7 @@ class GrabService : Service() {
                     return@post
                 }
                 
-                // 🔧 队列模式抢到后继续下一个
+                // 🔧 队列模式选到后继续下一个
                 if (isQueueMode) {
                     val currentQueue = serviceQueue
                     if (currentQueue.isEmpty()) {
@@ -2373,7 +2373,7 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
         )
         
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("抢课成功")
+            .setContentTitle("选课成功")
             .setContentText("已成功选上：$courseName")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setAutoCancel(true)
@@ -2385,7 +2385,7 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
         manager.notify(NOTIFICATION_ID + 1, notification)
     }
     
-    // ============ 关键词抢课模式 ============
+    // ============ 关键词选课模式 ============
     
     private fun broadcastLog(message: String) {
         Log.d(TAG, message)
@@ -2415,7 +2415,7 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
         prefs.edit().putString(logKey, appendGrabLog(currentLog, "[$timestamp] $message")).apply()
     }
     
-    // 关键词抢课重试计数
+    // 关键词选课重试计数
     private var keywordFetchRetryCount = 0
     private val MAX_FETCH_RETRIES = 5
     private val FETCH_RETRY_DELAY = 10000L // 10秒
@@ -2457,17 +2457,17 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
         
         if (isParallelMode && keywordQueue.size > 1) {
             val keywordCourses = keywordQueue.map { keywordToCourse(it) }
-            startParallelCourseTasks(keywordCourses, origin = "keyword", label = "关键词抢课")
+            startParallelCourseTasks(keywordCourses, origin = "keyword", label = "关键词选课")
         } else {
             // 顺序模式：开始处理第一个关键词
             startSingleKeywordGrabbing(keywordQueue[currentKeywordIndex])
         }
     }
     
-    // 并行抢课：同时处理多个关键词
+    // 并行选课：同时处理多个关键词
     private fun startParallelGrabbing() {
         val workersToStart = minOf(parallelWorkerCount, keywordQueue.size)
-        broadcastLog("并行启动 $workersToStart 个抢课任务")
+        broadcastLog("并行启动 $workersToStart 个选课任务")
         
         activeWorkers.clear()
         
@@ -2493,14 +2493,14 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
         val displayName = keyParts.firstOrNull() ?: keywords
         broadcastQueueUpdate(displayName, "grabbing", keywords)
         
-        // 直接开始获取课程参数和抢课 (复用单关键词逻辑)
+        // 直接开始获取课程参数和选课 (复用单关键词逻辑)
         currentKeywords = keywords
         currentKeywordIndex = workerId
         keywordFetchRetryCount = 0
         fetchCourseParamsWithRetry()
     }
     
-    // 处理单个关键词组的抢课
+    // 处理单个关键词组的选课
     private fun startSingleKeywordGrabbing(keywords: String) {
         currentKeywords = keywords
         keywordFetchRetryCount = 0
@@ -2510,7 +2510,7 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
         allFetchedCourses.clear()
         currentTabIndex = 0
         
-        // 重置单次抢课计数
+        // 重置单次选课计数
         successCount = 0
         failCount = 0
         retryCount = 0
@@ -3121,7 +3121,7 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
             return
         }
         if (queueCourse != null && queueCourse.useExactMatch && !queueCourse.classId.isNullOrEmpty()) {
-            broadcastLog("注意：使用队列中的精确配置进行强制抢课：classId=${queueCourse.classId}")
+            broadcastLog("注意：使用队列中的精确配置进行强制选课：classId=${queueCourse.classId}")
             val fallbackCourse = Course().apply {
                 uuid = queueCourse.getUuid()
                 jxbmc = queueCourse.jxbmc
@@ -3150,7 +3150,7 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
         }
     }
     
-    // 使用匹配到的课程开始抢课
+    // 使用匹配到的课程开始选课
     private fun useMatchedCourseAndGrab(match: Course) {
         targetCourse = match
         saveServiceTargetCourseSnapshot(match)
@@ -3169,10 +3169,10 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
         }
         saveServiceQueueSnapshot()
         
-        // 保存 courseParams 供抢课使用
+        // 保存 courseParams 供选课使用
         courseParams = indexParams.toMap()
         
-        updateNotification("正在抢课：${match.name}")
+        updateNotification("正在选课：${match.name}")
         startGrabbing()
     }
     
@@ -3389,14 +3389,14 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
                             vacancyCourses.add(vacancyCourse)
                             
                             broadcastLog("检测到 $targetCourseName [$teacher] 有人退课")
-                            broadcastLog("人数变化，剩余 ${capacity - currentSelected} 个名额，立即抢课")
+                            broadcastLog("人数变化，剩余 ${capacity - currentSelected} 个名额，立即选课")
                         }
                     }
                     
                     if (vacancyCourses.isNotEmpty()) {
                         isFuzzyMatchMode = false // 暂停轮询
                         if (isParallelMode && vacancyCourses.size > 1) {
-                            startParallelCourseTasks(vacancyCourses, origin = "fuzzy", label = "模糊候选抢课")
+                            startParallelCourseTasks(vacancyCourses, origin = "fuzzy", label = "模糊候选选课")
                         } else {
                             val vacancyCourse = vacancyCourses.first()
                             targetCourse = vacancyCourse
@@ -3488,10 +3488,10 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
     }
     
     /**
-     * 执行模糊匹配抢课
+     * 执行模糊匹配选课
      */
     private fun executeFuzzyMatchSelection(school: SchoolConfig, course: Course) {
-        broadcastLog("开始抢课：${course.name} [${course.teacher}]")
+        broadcastLog("开始选课：${course.name} [${course.teacher}]")
         successCount = 0
         failCount = 0
         retryCount = 0
@@ -3511,8 +3511,8 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
         if (!isRunning) return
         
         retryCount++
-        if (retryCount > 10) { // 模糊匹配抢课最多尝试10次
-            broadcastLog("注意：抢课失败次数过多，恢复监控")
+        if (retryCount > 10) { // 模糊匹配选课最多尝试10次
+            broadcastLog("注意：选课失败次数过多，恢复监控")
             isFuzzyMatchMode = true
             // 🔧 恢复监控时重新获取隐藏参数
             handler.postDelayed({ fetchHiddenParamsAndStartFuzzyMatch(school) }, interval.toLong())
@@ -3577,7 +3577,7 @@ private fun broadcastQueueUpdate(courseName: String? = null, status: String? = n
                     if (success) {
                         successCount++
                         broadcastLog("成功：模糊匹配已选上 ${course.name}")
-                        updateNotification("抢课成功：${course.name}")
+                        updateNotification("选课成功：${course.name}")
                         
                         // 清除模糊匹配目标，停止服务
                         clearServiceFuzzyMatchTarget()

@@ -32,27 +32,10 @@ object StartupLogoAnimation {
         private set
 
     fun install(activity: Activity) {
-        val splash = activity.installSplashScreen()
-        splash.setOnExitAnimationListener { provider ->
-            if (played || activity.isFinishing) { provider.remove(); return@setOnExitAnimationListener }
-            played = true
-            val animationsEnabled = if (Build.VERSION.SDK_INT >= 26) ValueAnimator.areAnimatorsEnabled()
-                else Settings.Global.getFloat(activity.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
-            if (!animationsEnabled) { provider.remove(); return@setOnExitAnimationListener }
-            val root = activity.window.decorView as? ViewGroup
-            if (root == null) { provider.remove(); return@setOnExitAnimationListener }
-            val location = IntArray(2)
-            provider.iconView.getLocationInWindow(location)
-            val rootLocation = IntArray(2)
-            root.getLocationInWindow(rootLocation)
-            val width = provider.iconView.width.takeIf { it > 0 } ?: (240 * activity.resources.displayMetrics.density).toInt()
-            val height = provider.iconView.height.takeIf { it > 0 } ?: width
-            val bounds = Rect(location[0] - rootLocation[0], location[1] - rootLocation[1],
-                location[0] - rootLocation[0] + width, location[1] - rootLocation[1] + height)
-            val overlay = LogoOverlay(activity, bounds)
-            root.addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            overlay.doOnPreDraw { provider.remove(); overlay.start { root.removeView(overlay) } }
-        }
+        // 开机 Logo 动画已移除：只保留系统默认闪屏（显示图标的第一帧），
+        // 不再挂自绘的 LogoOverlay，contentProgress 恒为 1f，内容直接完整呈现。
+        // StartupChoreography / LogoOverlay 保留（单测与设备测试仍引用其轨迹与资源）。
+        activity.installSplashScreen()
     }
 
     private class LogoOverlay(context: Context, private val logoBounds: Rect) : View(context) {

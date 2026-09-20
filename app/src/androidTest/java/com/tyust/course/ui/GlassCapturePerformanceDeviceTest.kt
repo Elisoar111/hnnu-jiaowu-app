@@ -26,7 +26,7 @@ class GlassCapturePerformanceDeviceTest {
         }
         try {
             DemoUiDriver().use { ui ->
-                ui.navigate("抢课")
+                ui.navigate("选课")
                 val activity = requireNotNull(ui.main)
                 val decor = activity.window.decorView
                 val origin = IntArray(2)

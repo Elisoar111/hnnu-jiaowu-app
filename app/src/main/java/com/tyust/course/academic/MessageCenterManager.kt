@@ -26,8 +26,8 @@ object MessageCenterManager {
     /**
      * 当前账号的未读数，**Compose state**。
      *
-     * 设置页的「消息中心」入口与底栏角标都直接订阅它，所以任何一次刷新
-     * （进设置页、前台轮询、打开消息中心）都会当帧把红点更新掉。
+     * 「我的」页的「消息中心」入口与底栏角标都直接订阅它，所以任何一次刷新
+     * （进「我的」页、前台轮询、打开消息中心）都会当帧把红点更新掉。
      */
     var unread by mutableIntStateOf(0)
         private set

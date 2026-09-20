@@ -2,6 +2,7 @@ package com.tyust.course.ui.screen
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -15,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -25,6 +27,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,7 +49,9 @@ data class CourseDetailUiState(
     val isMakeUp: Boolean = false,
     /** 该补课对应的平时上课星期（1-5）；找不到同名平日课程时为 null。 */
     val makeUpWeekday: Int? = null,
-    val sourceCenterX: Float? = null
+    val sourceCenterX: Float? = null,
+    /** 时间冲突时的候选课程：自己 + 全部撞车的课（有冲突才 > 1）。 */
+    val conflictCandidates: List<ScheduleCourseUi> = emptyList()
 )
 
 /** Content-sized sheet with a bounded scroll body and a persistent, single primary action. */
@@ -54,7 +59,9 @@ data class CourseDetailUiState(
 fun CourseDetailContent(
     ui: CourseDetailUiState, sheet: ScheduleBottomSheetState, onClose: () -> Unit,
     onReminderChanged: (Boolean) -> Unit, onPermission: () -> Unit,
-    onConfigureTime: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit
+    onConfigureTime: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit,
+    onChooseConflictCourse: (String) -> Unit = {},
+    onClearConflictChoice: () -> Unit = {}
 ) {
     val colors = MaterialTheme.colorScheme
     val density = LocalDensity.current
@@ -162,6 +169,84 @@ fun CourseDetailContent(
                                     Text("与「${conflict.otherName}」在第 ${conflict.weeks.joinToString("、")} 周、第 " +
                                         "${conflict.startPeriod}–${conflict.endPeriod} 节重叠", color = colors.onErrorContainer,
                                         style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                        // 时间冲突选课：列出撞车的全部课程，选出"本节要上"的那门。
+                        // 选中的课正常显示在课表上，其余的让位隐藏；随时可清除选择恢复全部。
+                        if (ui.conflictCandidates.size > 1) {
+                            val overlapPeriods = ui.conflicts.flatMap { c -> c.startPeriod..c.endPeriod }.toSet()
+                            val chosenId = com.tyust.course.schedule.ScheduleConflictStore.choices.entries
+                                .firstOrNull { (key, _) ->
+                                    key.startsWith("${course.day}:") &&
+                                        key.removePrefix("${course.day}:").toIntOrNull() in overlapPeriods
+                                }?.value
+                            Surface(Modifier.fillMaxWidth(), color = colors.surfaceContainerLow,
+                                shape = RoundedCornerShape(18.dp)) {
+                                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                                        AnimatedLineIcon(AnimatedIconSpec.Warning, Modifier.size(18.dp), tint = colors.primary)
+                                        Text("时间冲突 · 本节上哪门？", style = MaterialTheme.typography.titleSmall)
+                                    }
+                                    Text("点选要上的课程，另一门会从课表格子里让位；随时可清除选择。",
+                                        style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, lineHeight = 17.sp)
+                                    ui.conflictCandidates.forEach { candidate ->
+                                        val picked = chosenId == candidate.id
+                                        Row(
+                                            Modifier.fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(
+                                                    if (picked) colors.primary.copy(alpha = 0.10f)
+                                                    else colors.surfaceVariant.copy(alpha = 0.35f))
+                                                .clickable { onChooseConflictCourse(candidate.id) }
+                                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Box(Modifier.size(18.dp, 4.dp).background(candidate.color, RoundedCornerShape(2.dp)))
+                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                                Text(
+                                                    candidate.name + if (candidate.id == course.id) "（本节课）" else "",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = colors.onSurface,
+                                                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                                                )
+                                                val meta = buildString {
+                                                    append("第 ${candidate.startPeriod}–${candidate.endPeriod} 节")
+                                                    if (candidate.teacher.isNotBlank()) append(" · ${candidate.teacher}")
+                                                    if (candidate.location.isNotBlank()) append(" · ${candidate.location}")
+                                                }
+                                                Text(meta, style = MaterialTheme.typography.bodySmall,
+                                                    color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            }
+                                            if (picked) {
+                                                Text("已选择", style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.Bold, color = colors.primary)
+                                            } else {
+                                                Text("上这门", style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.SemiBold, color = colors.primary,
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(999.dp))
+                                                        .background(colors.primary.copy(alpha = 0.12f))
+                                                        .padding(horizontal = 10.dp, vertical = 4.dp))
+                                            }
+                                        }
+                                    }
+                                    if (chosenId != null) {
+                                        Text(
+                                            "清除选择 · 显示全部冲突课程",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = colors.error,
+                                            fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .clickable(onClick = onClearConflictChoice)
+                                                .padding(vertical = 8.dp),
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
                                 }
                             }
                         }

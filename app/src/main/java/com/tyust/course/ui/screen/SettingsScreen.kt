@@ -27,8 +27,12 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AssignmentInd
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.ContentPasteSearch
-import androidx.compose.material.icons.automirrored.outlined.Login
+import androidx.compose.material.icons.outlined.ImportContacts
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.Info
@@ -64,6 +68,16 @@ import com.tyust.course.ui.system.SystemTone
 import com.tyust.course.ui.system.SystemTopBar
 import com.tyust.course.ui.theme.SemanticDanger
 
+/** 推荐网站（名字 to 链接）：点击后用系统默认浏览器打开，不走应用内 WebView。 */
+val recommendedSites: List<Pair<String, String>> = listOf(
+    "全国大学英语四六级考试（CET）报名" to "https://cet-bm.neea.edu.cn",
+    "中国教育考试网（四六级 / 教资 / 等级考试）" to "https://www.neea.edu.cn",
+    "中小学教师资格考试（NTCE）" to "https://ntce.neea.edu.cn",
+    "全国计算机等级考试（NCRE）" to "https://ncre.neea.edu.cn",
+    "学信网（学籍 / 学历查询）" to "https://www.chsi.com.cn",
+    "淮南师范学院官网" to "https://www.hnnu.edu.cn"
+)
+
 @Composable
 fun SettingsScreen(
     studentName: String,
@@ -71,9 +85,11 @@ fun SettingsScreen(
     schoolName: String,
     currentVersion: String = "1.0.0",
     onSchoolSelect: () -> Unit,
-    onCookieConfig: () -> Unit,
     onAccountManage: () -> Unit = {},
+    /** 设备上已绑定的账号数（上限 3）。 */
     savedAccountCount: Int = 0,
+    /** 账号管理的空槽位：登录一个新账号。 */
+    onAddAccount: () -> Unit = {},
     onClearCache: () -> Unit,
     onLogout: () -> Unit,
     onRefreshCookieClick: () -> Unit = {},
@@ -103,7 +119,23 @@ fun SettingsScreen(
     /** 第二课堂登录状态摘要；留空时显示默认引导文案。 */
     secondClassSubtitle: String = "",
     onSecondClassLogin: () -> Unit = {},
-    onMessageCenter: () -> Unit = {}
+    onMessageCenter: () -> Unit = {},
+    /** 检查更新（Gitee Release）。 */
+    onCheckUpdate: () -> Unit = {},
+    /** 应用内阅读用户手册。 */
+    onOpenManual: () -> Unit = {},
+    /** 推荐网站（四六级报名、学信网等）。 */
+    onRecommendedSites: () -> Unit = {},
+    /** 把项目链接分享给同学。 */
+    onShareApp: () -> Unit = {},
+    /** 为本项目点 Star。 */
+    onStarProject: () -> Unit = {},
+    /** 为原作者项目点 Star。 */
+    onStarUpstream: () -> Unit = {},
+    /** 联系开发者（GitHub Issue / 邮箱）。 */
+    onContactDeveloper: () -> Unit = {},
+    /** 关于项目。 */
+    onAbout: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
     // 折叠进度随滚动偏移连续变化（约 96px 行程），全程跟手
@@ -115,7 +147,7 @@ fun SettingsScreen(
         topBar = {
             Box(Modifier.moduleEntrance(0)) {
             SystemTopBar(
-                title = "设置",
+                title = "我的",
                 collapseFraction = headerCollapse
             )
             }
@@ -150,14 +182,15 @@ fun SettingsScreen(
             InsetGroupedSection(Modifier.moduleEntrance(2), header = "账号与教务") {
                 // 学校固定为淮南师范学院、教务支持范围与配额说明不再作为可点条目暴露，
                 // 这里只保留真正需要用户操作的入口。
+                // 「重新登录」并入了账号管理：空槽位即"登录其它账号"，点账号卡即切换。
                 SettingsRow(
                     icon = Icons.Outlined.ManageAccounts,
                     iconTint = Color(0xFF32ADE6),
                     title = "账号管理",
                     subtitle = if (savedAccountCount > 0) {
-                        "已保存 $savedAccountCount 个账号 · 可切换或删除"
+                        "已绑定 $savedAccountCount / 3 个账号 · 点击切换或添加"
                     } else {
-                        "切换账号、删除已存密码与账号"
+                        "绑定与切换账号（每台设备最多 3 个）"
                     },
                     onClick = onAccountManage
                 )
@@ -195,14 +228,6 @@ fun SettingsScreen(
                     },
                     badgeCount = messageUnread,
                     onClick = onMessageCenter
-                )
-                SettingsRow(
-                    icon = Icons.AutoMirrored.Outlined.Login,
-                    iconTint = Color(0xFF32ADE6),
-                    title = "重新登录",
-                    subtitle = "退出当前会话并返回登录页（保留已存密码）",
-                    onClick = onCookieConfig,
-                    showDivider = false
                 )
             }
 
@@ -249,11 +274,71 @@ fun SettingsScreen(
                     onClick = onStartupPageSelect
                 )
                 SettingsRow(
+                    icon = Icons.Outlined.CloudSync,
+                    iconTint = Color(0xFF32ADE6),
+                    title = "检查更新",
+                    subtitle = "从 Gitee 获取最新版本与更新说明",
+                    onClick = onCheckUpdate
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.ImportContacts,
+                    iconTint = Color(0xFFFF9F0A),
+                    title = "用户手册",
+                    subtitle = "功能说明、使用技巧与常见问题",
+                    onClick = onOpenManual
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.Public,
+                    iconTint = Color(0xFF30B0C7),
+                    title = "推荐网站",
+                    subtitle = "四六级报名、学信网等常用入口",
+                    onClick = onRecommendedSites
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.Share,
+                    iconTint = Color(0xFF64D2FF),
+                    title = "分享给校友",
+                    subtitle = "把项目链接发给需要的同学",
+                    onClick = onShareApp
+                )
+                SettingsRow(
                     icon = Icons.Outlined.ContentPasteSearch,
                     iconTint = Color(0xFF64D2FF),
                     title = "导出日志",
                     subtitle = "导出本地运行日志",
                     onClick = onLogExport,
+                    showDivider = false
+                )
+            }
+
+            InsetGroupedSection(Modifier.moduleEntrance(3), header = "支持项目") {
+                SettingsRow(
+                    icon = Icons.Outlined.StarBorder,
+                    iconTint = Color(0xFFFFD60A),
+                    title = "为本项目点 Star",
+                    subtitle = "GitHub · Elisoar111/hnnu-jiaowu-app",
+                    onClick = onStarProject
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.FavoriteBorder,
+                    iconTint = Color(0xFFFF375F),
+                    title = "为原作者项目点 Star",
+                    subtitle = "GitHub · znjhahaha/zhengfang-apk",
+                    onClick = onStarUpstream
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.Email,
+                    iconTint = Color(0xFF34C759),
+                    title = "联系开发者",
+                    subtitle = "GitHub Issue 或邮件反馈问题与建议",
+                    onClick = onContactDeveloper
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.Info,
+                    iconTint = Color(0xFF8E8E93),
+                    title = "关于项目",
+                    subtitle = "介绍、开源地址与反馈方式",
+                    onClick = onAbout,
                     showDivider = false
                 )
             }
@@ -281,7 +366,7 @@ fun SettingsScreen(
             }
 
             Text(
-                text = "教务助手 · $currentVersion",
+                text = "教务助理 · $currentVersion",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.align(Alignment.CenterHorizontally)

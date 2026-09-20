@@ -281,7 +281,7 @@ jobs:
           prerelease: false
           name: Release ${{ steps.target.outputs.tag }}
           body: |
-            感谢使用教务助手！
+            感谢使用教务助理！
 
             **更新日志：**
             ${{ steps.notes.outputs.release_notes }}
@@ -303,9 +303,9 @@ jobs:
     #
     # Gitee 仓库不再写死：优先读仓库变量 GITEE_REPO（Settings → Secrets and
     # variables → Actions → Variables，形如 owner/repo）。未设置时回退到
-    # 原仓库，继承旧发布通道。
+    # 本项目仓库（Elisoar/hnnu-jiaowu-app）。
     env:
-      GITEE_REPO: ${{ vars.GITEE_REPO || 'znj12345/zhengfang' }}
+      GITEE_REPO: ${{ vars.GITEE_REPO || 'Elisoar/hnnu-jiaowu-app' }}
     steps:
       - name: Checkout Code (for version.properties)
         uses: actions/checkout@v4
@@ -484,7 +484,7 @@ jobs:
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           # 与上面 Sync to Gitee 同一个仓库变量，保证公告写进同一个仓库。
-          GITEE_REPO: ${{ vars.GITEE_REPO || 'znj12345/zhengfang' }}
+          GITEE_REPO: ${{ vars.GITEE_REPO || 'Elisoar/hnnu-jiaowu-app' }}
           RELEASE_NOTES: ${{ needs.build.outputs.release_notes }}
           TAG: ${{ needs.build.outputs.release_tag }}
         run: python3 scripts/publish_announcement.py --tag "$TAG"

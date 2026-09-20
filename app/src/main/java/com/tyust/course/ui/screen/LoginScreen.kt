@@ -253,84 +253,6 @@ fun LoginScreen(
                             modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                         )
 
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // 站点连通性自检：主站与备用入口各探一次。
-                        // 用途是让用户**不连电脑也能分清**"登录不上"到底是
-                        // 账号/Cookie 的问题，还是这个站点这条路根本不通
-                        // （校外访问、DNS、备用站只有 http 等）。
-                        SystemSecondaryButton(
-                            text = if (probeRunning) "正在测试…" else "测试站点连通性",
-                            onClick = {
-                                val target = school
-                                if (target != null && !probeRunning) {
-                                    probeRunning = true
-                                    probeResults = emptyList()
-                                    probeScope.launch {
-                                        val collected = mutableListOf<SiteConnectivityProbe.Result>()
-                                        collected += SiteConnectivityProbe.probe(
-                                            label = "主站",
-                                            protocol = target.protocol,
-                                            host = target.domain,
-                                            path = target.loginPagePath
-                                        )
-                                        if (target.hasAlternate()) {
-                                            collected += SiteConnectivityProbe.probe(
-                                                label = "备用入口",
-                                                protocol = target.alternateProtocol,
-                                                host = target.alternateDomain.trim(),
-                                                path = target.loginPagePath
-                                            )
-                                        }
-                                        probeResults = collected
-                                        probeRunning = false
-                                    }
-                                }
-                            },
-                            enabled = !probeRunning && school != null,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp)
-                        )
-
-                        if (probeResults.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            probeResults.forEach { result ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = if (result.reachable) "✓" else "✕",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (result.reachable) SemanticSuccess else SemanticDanger
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = result.label,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (result.reachable) {
-                                            "连通 · ${result.latencyMs} ms"
-                                        } else {
-                                            result.detail
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (result.reachable) {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        } else {
-                                            SemanticDanger
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
                         Spacer(modifier = Modifier.height(20.dp))
 
                         // 登录方式切换
@@ -441,6 +363,82 @@ fun LoginScreen(
                                     .height(56.dp),
                                 enabled = username.isNotBlank() && password.isNotBlank() && !isLoading
                             )
+
+                            // 站点连通性自检：按用户要求放在「密码登录」按钮的下方，
+                            // 用来区分"登录不上"是账号/Cookie 的问题，还是站点这条路不通
+                            // （校外访问、DNS、备用站只有 http 等）。主站与备用入口各探一次。
+                            Spacer(modifier = Modifier.height(16.dp))
+                            SystemSecondaryButton(
+                                text = if (probeRunning) "正在测试…" else "测试站点连通性",
+                                onClick = {
+                                    val target = school
+                                    if (target != null && !probeRunning) {
+                                        probeRunning = true
+                                        probeResults = emptyList()
+                                        probeScope.launch {
+                                            val collected = mutableListOf<SiteConnectivityProbe.Result>()
+                                            collected += SiteConnectivityProbe.probe(
+                                                label = "主站",
+                                                protocol = target.protocol,
+                                                host = target.domain,
+                                                path = target.loginPagePath
+                                            )
+                                            if (target.hasAlternate()) {
+                                                collected += SiteConnectivityProbe.probe(
+                                                    label = "备用入口",
+                                                    protocol = target.alternateProtocol,
+                                                    host = target.alternateDomain.trim(),
+                                                    path = target.loginPagePath
+                                                )
+                                            }
+                                            probeResults = collected
+                                            probeRunning = false
+                                        }
+                                    }
+                                },
+                                enabled = !probeRunning && school != null,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                            )
+
+                            if (probeResults.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                probeResults.forEach { result ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = if (result.reachable) "✓" else "✕",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (result.reachable) SemanticSuccess else SemanticDanger
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = result.label,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (result.reachable) {
+                                                "连通 · ${result.latencyMs} ms"
+                                            } else {
+                                                result.detail
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (result.reachable) {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            } else {
+                                                SemanticDanger
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         } else {
                             SystemPrimaryButton(
                                 text = if (isLoading) "登录中…" else "Cookie 登录",

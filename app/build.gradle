@@ -62,7 +62,6 @@ def hasReleaseSigning = releaseKeystoreFile != null &&
     releaseStorePassword != null &&
     releaseKeyAlias != null &&
     releaseKeyPassword != null
-def feedbackSigningSecret = readSecret("FEEDBACK_SIGNING_SECRET") ?: ""
 
 if (releaseKeystoreFile != null && isReleaseTask && !hasReleaseSigning) {
     throw new GradleException("Release signing credentials are missing. Configure RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, and RELEASE_KEY_PASSWORD via environment variables or local.properties.")
@@ -78,7 +77,6 @@ android {
         targetSdk 34
         versionCode code
         versionName name
-        buildConfigField "String", "FEEDBACK_SIGNING_SECRET", quoteForBuildConfig(feedbackSigningSecret)
         buildConfigField "boolean", "UI_PREVIEW", "false"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

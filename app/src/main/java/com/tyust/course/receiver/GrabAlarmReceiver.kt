@@ -15,7 +15,7 @@ import com.tyust.course.utils.GrabTaskUtils.appendGrabLog
 import com.tyust.course.utils.GrabTaskUtils.parseScheduledDateTime
 
 /**
- * 定时抢课广播接收器
+ * 定时选课广播接收器
  * 使用 AlarmManager 触发
  * 🔧 修复说明：GrabService 已经修改为在匹配教学班时优先使用 SmartSelector.queue 中保存的 classId
  * 而不是只按关键词匹配老师/时间，这确保了精确模式能正确选择用户指定的教学班
@@ -47,7 +47,7 @@ class GrabAlarmReceiver : BroadcastReceiver() {
             if (intent.action in RESCHEDULE_ACTIONS) rescheduleAll(context)
             return
         }
-        Log.d(TAG, "⏰ 定时抢课触发!")
+        Log.d(TAG, "⏰ 定时选课触发!")
 
         val userManager = UserManager.getInstance()
         userManager.init(context.applicationContext)
@@ -111,7 +111,7 @@ class GrabAlarmReceiver : BroadcastReceiver() {
             putExtra(GrabService.EXTRA_PARALLEL_MODE, isParallelMode)
         }
         
-        Log.d(TAG, "🚀 启动关键词抢课服务...")
+        Log.d(TAG, "🚀 启动关键词选课服务...")
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent)

@@ -99,7 +99,7 @@ import com.tyust.course.activation.ActivationScreen
 import com.tyust.course.manager.AppearanceSettingsManager
 import com.tyust.course.manager.SmartSelector
 import com.tyust.course.manager.UserManager
-import com.tyust.course.ui.screen.OnboardingScreen
+import com.tyust.course.ui.screen.OnboardingDialog
 import com.tyust.course.ui.system.CapsuleNavigationBar
 import com.tyust.course.ui.system.DialogHost
 import com.tyust.course.ui.system.GlassToastHost
@@ -192,17 +192,17 @@ class MainActivity : FragmentActivity() {
                         ActivationScreen(onActivated = { activationState = 2 })
                     }
 
-                    showOnboarding -> {
-                        OnboardingScreen(
-                            onFinish = {
+                    else -> {
+                        // 主界面常驻渲染；首次启动的引导以液态玻璃弹框叠加其上，
+                        // 点引导条目直接跳到对应页面（见 MainScreen 内 OnboardingDialog 挂载点）。
+                        MainScreen(
+                            fragmentActivity = this@MainActivity,
+                            showOnboarding = showOnboarding,
+                            onOnboardingFinish = {
                                 prefs.edit().putBoolean(KEY_HAS_SEEN_ONBOARDING, true).apply()
                                 showOnboarding = false
                             }
                         )
-                    }
-
-                    else -> {
-                        MainScreen(fragmentActivity = this@MainActivity)
                     }
                 }
             }
@@ -234,7 +234,11 @@ sealed class BottomNavItem(
 }
 
 @Composable
-fun MainScreen(fragmentActivity: FragmentActivity) {
+fun MainScreen(
+    fragmentActivity: FragmentActivity,
+    showOnboarding: Boolean = false,
+    onOnboardingFinish: () -> Unit = {}
+) {
     val context = LocalContext.current
     val appWallpaper = com.tyust.course.ui.theme.rememberAppWallpaperStyle()
     val isDemoMode = remember { UserManager.getInstance().isDemoMode }
@@ -257,6 +261,26 @@ fun MainScreen(fragmentActivity: FragmentActivity) {
         }
     }
     val navigationMotion = com.tyust.course.ui.theme.rememberNavigationMotionState(selectedTab, currentAccountStorageKey, accessibility.reduceMotion)
+
+    // 冷启动进入应用时弹一条「欢迎回来」（仅首次 ON_RESUME，进程存活期内只弹一次；
+    // 从后台切回不再弹，避免打扰）。
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    var hasResumedOnce by remember { mutableStateOf(false) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                if (!hasResumedOnce) {
+                    val name = UserManager.getInstance().studentName
+                    if (!name.isNullOrBlank()) {
+                        GlassToaster.show("欢迎回来，$name")
+                    }
+                }
+                hasResumedOnce = true
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val reminderRequest = com.tyust.course.schedule.CourseReminderNavigation.requestedId
     LaunchedEffect(reminderRequest, currentAccountStorageKey) {
         if (reminderRequest != null) {
@@ -305,7 +329,7 @@ fun MainScreen(fragmentActivity: FragmentActivity) {
     }
 
     // 消息中心巡检：回到前台时按节流（30 分钟）检查一次，有新消息发系统通知，
-    // 并把未读数推到全局 state（设置页入口红点 + 底栏「设置」图标红点都读它）。
+    // 并把未读数推到全局 state（「我的」页入口红点 + 底栏「我的」图标红点都读它）。
     val messageUnread = com.tyust.course.academic.MessageCenterManager.unread
     LaunchedEffect(currentAccountStorageKey, foreground, isDemoMode) {
         if (isDemoMode || !foreground || currentAccountStorageKey.isBlank()) return@LaunchedEffect
@@ -571,7 +595,7 @@ fun MainScreen(fragmentActivity: FragmentActivity) {
                 onExpandRequest = { navBarMinimized = false },
                 backdrop = navBarBackdrop,
                 lensFreshness = lensFreshness,
-                // 消息中心藏在设置页里，未读时至少让「设置」这个 tab 有红点，
+                // 消息中心藏在「我的」页里，未读时至少让「我的」这个 tab 有红点，
                 // 否则用户没有任何理由点进去
                 badgeTabs = if (messageUnread > 0) setOf(items.indexOf(BottomNavItem.Settings)) else emptySet(),
                 modifier = Modifier.align(Alignment.BottomCenter).graphicsLayer {
@@ -608,6 +632,20 @@ fun MainScreen(fragmentActivity: FragmentActivity) {
 
             // 悬浮玻璃通知：叠加在正文之上，落点由顶栏上报的底边决定，不压顶栏操作
             FloatingNoticeHost(modifier = Modifier.fillMaxSize())
+
+            // 首次启动引导：液态玻璃弹框。点条目跳到对应页面并结束引导。
+            if (showOnboarding) {
+                OnboardingDialog(
+                    onNavigate = { targetPage ->
+                        val targetIndex = items.indexOfFirst { it.page == targetPage }
+                        if (targetIndex >= 0 && targetIndex != selectedTab) {
+                            selectedTab = targetIndex
+                        }
+                        onOnboardingFinish()
+                    },
+                    onFinish = onOnboardingFinish
+                )
+            }
         }
     }
 }

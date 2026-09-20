@@ -5,7 +5,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 抢课任务共享工具：日志追加与定时时间解析。
+ * 选课任务共享工具：日志追加与定时时间解析。
  *
  * 为什么集中到这里：`GrabService` / `GrabAlarmReceiver`（后台）和 `GrabProRoute`（前台）
  * 原先各自维护一份"追加日志"和"解析 yyyy/MM/dd HH:mm"的实现，行为不一致——

@@ -42,7 +42,7 @@ class MotionPolishFlowDeviceTest {
                     SystemClock.sleep(delay)
                 }
                 DisplayRecording(requireNotNull(ui.main), "motion-01-navigation-segments").use {
-                    listOf("课表", "抢课", "成绩", "设置", "课程").forEach { label ->
+                    listOf("课表", "选课", "成绩", "设置", "课程").forEach { label ->
                         ui.navigate(label)
                         tap(ui.boundsOf(label, bottomMost = true), 650)
                     }
@@ -111,7 +111,7 @@ class MotionPolishFlowDeviceTest {
                     }
                     ui.onMain { ui.main!!.requestedOrientation = oldOrientation }
                 }
-                ui.navigate("抢课")
+                ui.navigate("选课")
                 DisplayRecording(requireNotNull(ui.main), "motion-03-start-button").use {
                     ui.screenshot("motion-start-light")
                     ui.longClick("开始执行")

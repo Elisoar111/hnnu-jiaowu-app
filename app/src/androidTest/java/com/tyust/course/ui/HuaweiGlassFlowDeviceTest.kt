@@ -53,7 +53,7 @@ class HuaweiGlassFlowDeviceTest {
                     }
                 }
                 repeat(3) { round ->
-                    ui.navigate("抢课")
+                    ui.navigate("选课")
                     capture("matching-fresh-$round")
                     repeat(2) {
                         ui.shell("input -d $display swipe ${width / 2} ${height * 3 / 4} ${width / 2} ${height / 3} 350")
@@ -132,7 +132,7 @@ class HuaweiGlassFlowDeviceTest {
                 restored.recycle()
             }
             expected.recycle()
-            ui.navigate("抢课")
+            ui.navigate("选课")
             ui.screenshot("$prefix-start-rest")
             ui.longClick("开始执行")
             ui.waitText("关闭操作菜单")

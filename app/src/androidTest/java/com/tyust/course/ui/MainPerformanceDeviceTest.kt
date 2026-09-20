@@ -31,7 +31,7 @@ class MainPerformanceDeviceTest {
         }
         try {
             DemoUiDriver().use { ui ->
-                ui.navigate("抢课")
+                ui.navigate("选课")
                 val activity = requireNotNull(ui.main)
                 val display = activity.display!!.displayId
                 val output = File(activity.getExternalFilesDir(null), "performance-validation").apply { mkdirs() }
@@ -103,7 +103,7 @@ class MainPerformanceDeviceTest {
         try {
             driver.onMain { activity.window.addOnFrameMetricsAvailableListener(listener, Handler(worker.looper)) }
             val label = InstrumentationRegistry.getArguments().getString("capturePrefix") ?: "sample"
-            for (tab in listOf("课程", "课表", "抢课", "成绩", "设置")) {
+            for (tab in listOf("课程", "课表", "选课", "成绩", "设置")) {
                 // Refresh accessibility state and verify selection before attributing
                 // frame metrics to this page. Cached nodes can point at a previous tab.
                 driver.navigate(tab)
@@ -132,12 +132,12 @@ class MainPerformanceDeviceTest {
                 driver.navigate("成绩")
                 measure("idle", round) { SystemClock.sleep(10_000) }
                 measure("navigation", round) {
-                    for (tab in listOf("设置", "课程", "课表", "抢课", "成绩")) driver.navigate(tab)
+                    for (tab in listOf("设置", "课程", "课表", "选课", "成绩")) driver.navigate(tab)
                 }
                 measure("grades-scroll", round) { repeat(2) { scroll(true); scroll(false) } }
                 driver.navigate("课表")
                 measure("schedule-scroll", round) { repeat(2) { scroll(true); scroll(false) } }
-                driver.navigate("抢课")
+                driver.navigate("选课")
                 measure("grab-scroll", round) { repeat(2) { scroll(true); scroll(false) } }
             }
         } finally {

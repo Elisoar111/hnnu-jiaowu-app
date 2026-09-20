@@ -26,9 +26,9 @@ public class Course {
     // 状态
     public boolean isSelected = false; // 是否已选
 
-    // 🔧 抢课模式标记
-    // true = 精确模式（使用保存的 classId/doJxbId，适用于本次抢课）
-    // false = 智能模式（按课程名+老师+时间重新匹配，适用于跨轮次抢课）
+    // 🔧 选课模式标记
+    // true = 精确模式（使用保存的 classId/doJxbId，适用于本次选课）
+    // false = 智能模式（按课程名+老师+时间重新匹配，适用于跨轮次选课）
     public boolean useExactMatch = true; // 默认使用精确模式
 
     // 用于选课的额外参数

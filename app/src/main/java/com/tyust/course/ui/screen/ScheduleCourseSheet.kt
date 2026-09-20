@@ -64,6 +64,24 @@ private fun ScheduleCourseSheetContent(course: ScheduleCourseUi, account: String
     val status = remember(key, revision) { scheduler.status(key) }
     val permissionRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { scheduler.reconcile() }
     val conflicts = remember(course, allCourses) { scheduleConflicts(course.record(), allCourses.map { it.record() }) }
+    // 冲突选课的候选：自己 + 与自己撞车的全部课程（从课表全量里解析出完整信息）。
+    // 只要有冲突就展示"本节上哪门"，用户把要上的课选出来，另一门在网格里让位。
+    val conflictCandidates = remember(course, conflicts, allCourses) {
+        listOf(course) + conflicts.mapNotNull { c -> allCourses.firstOrNull { it.id == c.otherId } }
+    }
+    val onChooseConflict = { otherId: String ->
+        val conflict = conflicts.firstOrNull { it.otherId == otherId }
+        if (conflict != null) {
+            com.tyust.course.schedule.ScheduleConflictStore.choose(
+                course.day, conflict.startPeriod, conflict.endPeriod, otherId
+            )
+        }
+    }
+    val onClearConflict = {
+        conflicts.forEach { c ->
+            com.tyust.course.schedule.ScheduleConflictStore.clear(course.day, c.startPeriod, c.endPeriod)
+        }
+    }
     // 周末（周六=6、周日=7）课程视为补课/调休：尝试在同名平日课程里找到它对应补的星期几。
     val makeUpWeekday = if (course.day == 6 || course.day == 7) {
         allCourses.firstOrNull { it.id != course.id && it.day in 1..5 && it.name == course.name }?.day
@@ -81,7 +99,8 @@ private fun ScheduleCourseSheetContent(course: ScheduleCourseUi, account: String
         CourseDetailUiState(course, conflicts, record?.enabled == true, term.isNotBlank(), description,
             record?.enabled == true && status.availability == ReminderAvailability.NeedsPermission,
             status.availability == ReminderAvailability.NeedsTime, !ScheduleWeeks.parse(course.weeks).valid,
-            isMakeUp = course.day == 6 || course.day == 7, makeUpWeekday = makeUpWeekday, sourceCenterX),
+            isMakeUp = course.day == 6 || course.day == 7, makeUpWeekday = makeUpWeekday, sourceCenterX,
+            conflictCandidates = conflictCandidates),
         state, close, onReminderChanged = { scheduler.setEnabled(key, course.record(), it) },
         onPermission = {
             val permissions = scheduler.permissions()
@@ -95,6 +114,8 @@ private fun ScheduleCourseSheetContent(course: ScheduleCourseUi, account: String
                 else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
                 runCatching { context.startActivity(intent) }
             }
-        }, onConfigureTime, onEdit, onDelete
+        }, onConfigureTime, onEdit, onDelete,
+        onChooseConflictCourse = onChooseConflict,
+        onClearConflictChoice = onClearConflict
     )
 }

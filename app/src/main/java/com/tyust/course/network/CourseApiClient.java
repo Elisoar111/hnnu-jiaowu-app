@@ -52,7 +52,7 @@ public class CourseApiClient {
 
                 // 【安全】不再全局信任任意证书。此前这里装了一个"接受一切"的 X509TrustManager
                 // 并把 hostnameVerifier 恒置 true（注释写的"解决部分学校证书问题"），
-                // 于是账密、Cookie、选课/抢课请求全部可以被中间人完整劫持。
+                // 于是账密、Cookie、选课/选课请求全部可以被中间人完整劫持。
                 // 实测淮南师范学院主站 jwgl.hnnu.edu.cn 用的是公共 CA 签发的通配证书
                 // （TrustAsia DV TLS RSA CA 2024 / *.hnnu.edu.cn），系统信任链可直接校验通过；
                 // 备用入口 211.70.176.172 走的是 http，没有 TLS 参与，改由
@@ -86,7 +86,7 @@ public class CourseApiClient {
                                                         
                                                         if (isCoreApi) {
                                                                 try {
-                                                                        // 【惩罚一：龟速发包】让高频抢课化为泡影，随机加时 3000ms到8000ms
+                                                                        // 【惩罚一：龟速发包】让高频选课化为泡影，随机加时 3000ms到8000ms
                                                                         Thread.sleep(3000 + new java.util.Random().nextInt(5000));
                                                                 } catch (InterruptedException ignored) { }
                                                                 
@@ -984,7 +984,7 @@ public class CourseApiClient {
         }
 
         // ============================================
-        // 同步方法（用于批量抢课）
+        // 同步方法（用于批量选课）
         // ============================================
 
         // 同步获取选课详情 - 完整参数版本

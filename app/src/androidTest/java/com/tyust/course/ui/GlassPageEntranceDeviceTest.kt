@@ -25,7 +25,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = 31, maxSdkVersion = 32)
 class GlassPageEntranceDeviceTest {
-    @Test fun captureGrabEntranceFrames() = captureEntrance("抢课", "精确执行")
+    @Test fun captureGrabEntranceFrames() = captureEntrance("选课", "精确执行")
 
     @Test fun selectedLabelsSurviveRepeatedPageChangesAndIdle() {
         val captures = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Bitmap>>()
@@ -45,7 +45,7 @@ class GlassPageEntranceDeviceTest {
                     ?.toIntOrNull()?.coerceIn(1, 20) ?: 5
                 repeat(rounds) { round ->
                     for ((page, label, tag) in listOf(
-                        Triple("抢课", "精确执行", "seg-精确执行_模糊监控")
+                        Triple("选课", "精确执行", "seg-精确执行_模糊监控")
                     )) {
                         ui.navigate(page)
                         val bounds = Rect(ui.boundsOf(label)).apply {

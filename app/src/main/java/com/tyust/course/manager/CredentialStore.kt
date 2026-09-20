@@ -17,7 +17,7 @@ import javax.crypto.spec.GCMParameterSpec
  * 为什么需要它：密码原先只活在 [UserManager] 的内存里（`sessionPasswords`），
  * 进程一死就没了。于是冷启动后 `canAutoRelogin()` 恒为 false，正方的 JSESSIONID
  * 在服务端超时之后没人能悄悄换一张新的 —— 用户看到的就是「登录已过期」横幅，
- * 以及设置页「更新 Cookie」报的"没有保存密码"。
+ * 以及「我的」页「更新 Cookie」报的"没有保存密码"。
  *
  * 实现约束：
  * - **不引新依赖**。用系统自带的 AndroidKeyStore（AES/GCM，API 23 起可用，

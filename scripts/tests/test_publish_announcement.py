@@ -18,7 +18,7 @@ ANNOUNCEMENT = {
     "created_at": "2026-09-12T12:00:00Z",
 }
 OLD = {"id": "old", "title": "旧公告", "content": "原文", "audience": "web"}
-URL = "https://gitee.com/znj12345/zhengfang/releases/download/v1.0.74/app-release.apk"
+URL = "https://gitee.com/Elisoar/hnnu-jiaowu-app/releases/download/v1.0.74/app-release.apk"
 
 
 class FakeGitee:

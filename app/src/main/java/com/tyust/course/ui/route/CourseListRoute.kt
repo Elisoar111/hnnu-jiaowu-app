@@ -1560,7 +1560,7 @@ fun CourseListRoute() {
                             } else {
                                 val success = SmartSelector.getInstance().addToQueue(course)
                                 if (success) {
-                                // 🔧 重置该课程在 UI 中的状态，防止显示之前的抢课结果
+                                // 🔧 重置该课程在 UI 中的状态，防止显示之前的选课结果
                                 try {
                                     val prefs = context.getSharedPreferences("grab_pro_prefs", Context.MODE_PRIVATE)
                                     val statusKey = "queue_item_statuses_${UserManager.getInstance().currentAccountStorageKey}"
@@ -1680,7 +1680,7 @@ fun CourseListRoute() {
                 }
             }
 
-            // 底部 accessory 玻璃胶囊：多选批量抢课（替代 FAB）
+            // 底部 accessory 玻璃胶囊：多选批量选课（替代 FAB）
             androidx.compose.animation.AnimatedVisibility(
                 visible = isMultiSelectMode && selectedClassIds.isNotEmpty() && !showSelectedCourses,
                 modifier = Modifier

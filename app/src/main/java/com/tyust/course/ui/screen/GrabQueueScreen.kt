@@ -61,17 +61,17 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 /**
- * 抢课队列项状态
+ * 选课队列项状态
  */
 enum class GrabQueueItemStatus {
     WAITING,    // 等待中
-    GRABBING,   // 抢课中
+    GRABBING,   // 选课中
     SUCCESS,    // 成功
     FAILED      // 失败
 }
 
 /**
- * 抢课队列屏幕组件
+ * 选课队列屏幕组件
  */
 @OptIn(ExperimentalFoundationApi::class)
 fun LazyListScope.grabQueueItems(

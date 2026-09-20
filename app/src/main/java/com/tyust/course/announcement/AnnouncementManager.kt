@@ -20,8 +20,8 @@ object AnnouncementManager {
     private const val PREFS_NAME = "announcement_prefs"
     private const val KEY_READ_IDS = "read_announcement_ids"
     
-    // 公告 JSON 地址（Gitee Raw）
-    private const val ANNOUNCEMENT_URL = "https://gitee.com/znj12345/zhengfang/raw/main/announcement.json"
+    // 公告 JSON 地址（Gitee Raw，指向本项目自己的仓库）
+    private const val ANNOUNCEMENT_URL = "https://gitee.com/Elisoar/hnnu-jiaowu-app/raw/main/announcement.json"
     
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)

@@ -106,6 +106,11 @@ fun ScheduleRoute() {
     val session by sessions.state.collectAsState()
     val requests = remember { com.tyust.course.manager.SessionRequestGate(sessions) }
     DisposableEffect(requests) { onDispose { requests.cancelAll() } }
+    // 冲突时段的「本节上哪门」选择按账号隔离存储：切账号 / 冷启动后在这里重载，
+    // 课表网格与课程详情弹层直接读它的 Compose state，重载后当帧生效。
+    LaunchedEffect(routeAccountKey) {
+        com.tyust.course.schedule.ScheduleConflictStore.refresh(context)
+    }
     val restoredSnapshot = remember(routeAccountKey) {
         ScheduleRouteMemoryCache.get(routeAccountKey)
     }

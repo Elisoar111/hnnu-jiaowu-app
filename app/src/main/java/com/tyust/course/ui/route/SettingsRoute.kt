@@ -2,6 +2,7 @@ package com.tyust.course.ui.route
 
 import com.tyust.course.ui.system.GlassToaster
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +58,7 @@ import android.util.Base64
 import android.util.Log
 import java.io.ByteArrayOutputStream
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -183,9 +185,62 @@ fun SettingsRoute(
         launchAvatarPicker()
     }
     
-    // 版本号只用于页脚展示。应用内更新功能（含更新弹窗）已整体移除，
-    // 这里直接读构建产物里的 VERSION_NAME，不再依赖 UpdateManager。
+    // 版本号用于页脚展示与「检查更新」比较。应用内自动更新已移除，
+    // 检查更新按需从 Gitee 拉取最新 Release。
     val currentVersion = remember { com.tyust.course.BuildConfig.VERSION_NAME }
+
+    // ── 「我的」页新增功能的状态 ────────────────────────────────────────
+    val scope = rememberCoroutineScope()
+    var showContactDialog by remember { mutableStateOf(false) }
+    var showSitesDialog by remember { mutableStateOf(false) }
+    var showAboutDialog by remember { mutableStateOf(false) }
+    var updateChecking by remember { mutableStateOf(false) }
+    var updateInfo by remember { mutableStateOf<com.tyust.course.network.AppUpdateInfo?>(null) }
+
+    /** 用系统默认浏览器打开链接（推荐网站、Star、下载等，不走应用内 WebView）。 */
+    fun openInBrowser(url: String) {
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        }.onFailure { GlassToaster.show("未找到可以打开网页的应用") }
+    }
+
+    /** 跳登录页登录/切换账号：账号管理的空槽位与"重新登录"共用这条路。 */
+    fun launchRelogin() {
+        relogin.launch(Intent(context, LoginActivity::class.java).apply {
+            putExtra("force_relogin", true)
+            putExtra(LoginActivity.EXTRA_RETURN_TO_CALLER, true)
+        })
+    }
+
+    fun shareAppToClassmates() {
+        val text = "教务助理 · 开源免费的高校教务客户端（课表 / 选课 / 成绩 / 第二课堂）\n" +
+            "GitHub：https://github.com/Elisoar111/hnnu-jiaowu-app\n" +
+            "Gitee：https://gitee.com/Elisoar/hnnu-jiaowu-app"
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        runCatching {
+            context.startActivity(Intent.createChooser(send, "分享给校友"))
+        }.onFailure { GlassToaster.show("没有可用的分享应用") }
+    }
+
+    fun checkForUpdate() {
+        if (updateChecking) return
+        updateChecking = true
+        scope.launch {
+            val result = com.tyust.course.network.AppUpdateChecker.check(currentVersion)
+            updateChecking = false
+            when (result) {
+                is com.tyust.course.network.AppUpdateChecker.Result.UpToDate ->
+                    GlassToaster.show("已是最新版本 · v${result.versionName}")
+                is com.tyust.course.network.AppUpdateChecker.Result.Failure ->
+                    GlassToaster.show("检查更新失败：${result.message}")
+                is com.tyust.course.network.AppUpdateChecker.Result.Update ->
+                    updateInfo = result.info
+            }
+        }
+    }
 
     // 第二课堂登录
     var showSecondClassLogin by remember { mutableStateOf(false) }
@@ -345,15 +400,10 @@ fun SettingsRoute(
         onSchoolSelect = {
             GlassToaster.show("本应用仅支持淮南师范学院")
         },
-        onCookieConfig = {
-            relogin.launch(Intent(context, LoginActivity::class.java).apply {
-                putExtra("force_relogin", true)
-                putExtra(LoginActivity.EXTRA_RETURN_TO_CALLER, true)
-            })
-        },
         onAccountManage = {
             if (isDemoMode) GlassToaster.show("本地演示模式不读取真实账号") else showAccountManagerDialog = true
         },
+        onAddAccount = { launchRelogin() },
         savedAccountCount = allAccounts.size,
         onClearCache = { showClearCacheDialog = true },
         onLogout = { showLogoutDialog = true },
@@ -377,6 +427,17 @@ fun SettingsRoute(
         secondClassSubtitle = secondClassSubtitle,
         onSecondClassLogin = { showSecondClassLogin = true },
         onMessageCenter = { context.startActivity(Intent(context, MessageCenterActivity::class.java)) },
+        onCheckUpdate = { checkForUpdate() },
+        onOpenManual = {
+            runCatching { context.startActivity(Intent(context, com.tyust.course.ManualActivity::class.java)) }
+                .onFailure { GlassToaster.show("无法打开用户手册") }
+        },
+        onRecommendedSites = { showSitesDialog = true },
+        onShareApp = { shareAppToClassmates() },
+        onStarProject = { openInBrowser("https://github.com/Elisoar111/hnnu-jiaowu-app") },
+        onStarUpstream = { openInBrowser("https://github.com/znjhahaha/zhengfang-apk") },
+        onContactDeveloper = { showContactDialog = true },
+        onAbout = { showAboutDialog = true },
         hasAvatar = hasAvatar,
         avatarRefreshKey = avatarRefreshKey,
         // 先要权限、再选图：见 [requestAvatarPicker] 的说明。
@@ -447,8 +508,325 @@ fun SettingsRoute(
             },
             onDeletePassword = { pendingPasswordDelete = it },
             onDeleteAccount = { pendingAccountDelete = it },
+            onAddAccount = {
+                showAccountManagerDialog = false
+                launchRelogin()
+            },
             onDismiss = { showAccountManagerDialog = false }
         )
+    }
+
+    // ── 检查更新：发现新版本时的弹窗 ────────────────────────────────
+    updateInfo?.let { info ->
+        SystemDialog(
+            onDismissRequest = { updateInfo = null },
+            title = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "发现新版本 v${info.versionName}",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "当前版本 v$currentVersion",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            },
+            confirmButton = {
+                SystemPrimaryButton(
+                    text = "前往下载",
+                    onClick = {
+                        updateInfo = null
+                        openInBrowser(info.downloadUrl)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            dismissButton = {
+                SystemSecondaryButton(
+                    text = "以后再说",
+                    onClick = { updateInfo = null },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = if (info.notes.isBlank()) "暂无更新说明。" else info.notes,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    lineHeight = 20.sp
+                )
+            }
+        }
+    }
+
+    // ── 推荐网站：点条目用系统默认浏览器打开 ────────────────────────
+    if (showSitesDialog) {
+        SystemDialog(
+            onDismissRequest = { showSitesDialog = false },
+            title = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "推荐网站",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "点击后使用手机默认浏览器打开",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            },
+            confirmButton = {
+                SystemPrimaryButton(
+                    text = "关闭",
+                    onClick = { showSitesDialog = false },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                com.tyust.course.ui.screen.recommendedSites.forEach { site ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showSitesDialog = false
+                                openInBrowser(site.second)
+                            },
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                            Text(
+                                text = site.first,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = site.second.removePrefix("https://"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 联系开发者：GitHub Issue / 邮件 ─────────────────────────────
+    if (showContactDialog) {
+        SystemDialog(
+            onDismissRequest = { showContactDialog = false },
+            title = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "联系开发者",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "反馈问题、提出建议，或直接发邮件",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            },
+            confirmButton = {
+                SystemPrimaryButton(
+                    text = "关闭",
+                    onClick = { showContactDialog = false },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            showContactDialog = false
+                            openInBrowser("https://github.com/Elisoar111/hnnu-jiaowu-app/issues")
+                        },
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                        Text(
+                            text = "GitHub Issue（推荐）",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "提交问题与建议，进度公开可追踪",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            showContactDialog = false
+                            val mail = Intent(Intent.ACTION_SENDTO).apply {
+                                data = Uri.parse("mailto:elisoar@qq.com")
+                                putExtra(Intent.EXTRA_SUBJECT, "教务助理反馈")
+                            }
+                            runCatching { context.startActivity(mail) }
+                                .onFailure { GlassToaster.show("未找到可以发送邮件的应用") }
+                        },
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                        Text(
+                            text = "发邮件给作者",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "elisoar@qq.com · 建议附上「导出日志」里的日志文件",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 关于项目 ────────────────────────────────────────────────────
+    if (showAboutDialog) {
+        SystemDialog(
+            onDismissRequest = { showAboutDialog = false },
+            title = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "关于项目",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "教务助理 · v$currentVersion",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            },
+            confirmButton = {
+                SystemPrimaryButton(
+                    text = "完成",
+                    onClick = { showAboutDialog = false },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "开源、免费、无广告的高校教务客户端。" +
+                        "课表、选课、成绩、第二课堂、教务消息一站式完成，" +
+                        "全套液态玻璃界面，折射、色散与跟手形变实时渲染。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    lineHeight = 20.sp
+                )
+                AboutSection(title = "隐私与安全") {
+                    Text(
+                        text = "密码经系统密钥库加密，仅保存在本机；" +
+                            "不采集、不上传任何使用数据，运行日志已脱敏。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 20.sp
+                    )
+                }
+                AboutSection(title = "项目地址") {
+                    Text(
+                        text = "GitHub：github.com/Elisoar111/hnnu-jiaowu-app\n" +
+                            "Gitee：gitee.com/Elisoar/hnnu-jiaowu-app\n" +
+                            "基于 GPL-3.0 协议开源，欢迎 Star 与参与贡献。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 20.sp
+                    )
+                }
+                AboutSection(title = "致谢") {
+                    Text(
+                        text = "本应用基于原作者 znjhahaha 的开源项目 zhengfang-apk " +
+                            "修改与扩展而来，感谢原作者的慷慨开源。\n" +
+                            "原项目：github.com/znjhahaha/zhengfang-apk",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 20.sp
+                    )
+                }
+                AboutSection(title = "反馈与声明") {
+                    Text(
+                        text = "问题与建议：GitHub Issue 或邮件 elisoar@qq.com\n" +
+                            "本应用与学校官方无关，选课规则与数据以学校教务为准。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 20.sp
+                    )
+                }
+            }
+        }
     }
 
     pendingPasswordDelete?.let { record ->
@@ -502,6 +880,7 @@ private fun AccountManagerDialog(
     onSwitchAccount: (String) -> Unit,
     onDeletePassword: (UserManager.AccountRecord) -> Unit,
     onDeleteAccount: (UserManager.AccountRecord) -> Unit,
+    onAddAccount: () -> Unit,
     onDismiss: () -> Unit
 ) {
     SystemDialog(
@@ -520,7 +899,7 @@ private fun AccountManagerDialog(
                     textAlign = TextAlign.Center
                 )
                 Text(
-                    text = "切换账号、管理已保存的密码",
+                    text = "点账号卡切换 · 空槽位登录新账号（最多 3 个）",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -538,88 +917,128 @@ private fun AccountManagerDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 420.dp)
+                .heightIn(max = 440.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            if (accounts.isEmpty()) {
-                Text(
-                    text = "本机还没有保存任何账号。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                accounts.forEach { account ->
-                    val isCurrent = account.key == currentAccountKey
-                    val hasPassword = accountsWithPassword.contains(account.key)
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = if (isCurrent) NeuPrimary.copy(alpha = 0.12f)
-                            else MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-                        shape = RoundedCornerShape(16.dp)
+            accounts.forEach { account ->
+                val isCurrent = account.key == currentAccountKey
+                val hasPassword = accountsWithPassword.contains(account.key)
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !isCurrent) { onSwitchAccount(account.key) },
+                    color = if (isCurrent) NeuPrimary.copy(alpha = 0.12f)
+                        else MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                                ) {
-                                    Text(
-                                        text = account.displayName,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = "${account.accountIdText} · " +
-                                            if (account.loginMode == "password") "密码登录" else "Cookie 登录",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = account.schoolName.ifBlank { "未记录学校" },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                SystemStatusBadge(
-                                    text = if (hasPassword) "已存密码" else "未存密码",
-                                    tone = if (hasPassword) SystemTone.Success else SystemTone.Neutral
+                                Text(
+                                    text = account.displayName,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "${account.accountIdText} · " +
+                                        if (account.loginMode == "password") "密码登录" else "Cookie 登录",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = account.schoolName.ifBlank { "未记录学校" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
+                            SystemStatusBadge(
+                                text = if (hasPassword) "已存密码" else "未存密码",
+                                tone = if (hasPassword) SystemTone.Success else SystemTone.Neutral
+                            )
+                        }
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (isCurrent) {
-                                    SystemStatusBadge(text = "当前账号", tone = SystemTone.Info)
-                                } else {
-                                    AccountActionButton(
-                                        text = "切换",
-                                        onClick = { onSwitchAccount(account.key) }
-                                    )
-                                }
-                                Spacer(modifier = Modifier.weight(1f))
-                                if (hasPassword) {
-                                    AccountActionButton(
-                                        text = "删除密码",
-                                        onClick = { onDeletePassword(account) }
-                                    )
-                                }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isCurrent) {
+                                SystemStatusBadge(text = "当前账号", tone = SystemTone.Info)
+                            } else {
                                 AccountActionButton(
-                                    text = "删除账号",
-                                    tint = com.tyust.course.ui.theme.SemanticDanger,
-                                    onClick = { onDeleteAccount(account) }
+                                    text = "切换到此账号",
+                                    onClick = { onSwitchAccount(account.key) }
                                 )
                             }
+                            Spacer(modifier = Modifier.weight(1f))
+                            if (hasPassword) {
+                                AccountActionButton(
+                                    text = "删除密码",
+                                    onClick = { onDeletePassword(account) }
+                                )
+                            }
+                            AccountActionButton(
+                                text = "删除账号",
+                                tint = com.tyust.course.ui.theme.SemanticDanger,
+                                onClick = { onDeleteAccount(account) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 空槽位：点一下跳登录页，登录后即绑定新账号（上限 3）。
+            repeat((3 - accounts.size).coerceAtLeast(0)) { _ ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onAddAccount),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        NeuPrimary.copy(alpha = 0.35f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Surface(
+                            shape = androidx.compose.foundation.shape.CircleShape,
+                            color = NeuPrimary.copy(alpha = 0.12f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = null,
+                                tint = NeuPrimary,
+                                modifier = Modifier.padding(6.dp).size(20.dp)
+                            )
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "登录其它账号",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "点这里跳转登录页，登录后自动绑定到本机",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
@@ -633,6 +1052,23 @@ private fun AccountManagerDialog(
                 lineHeight = 18.sp
             )
         }
+    }
+}
+
+/** 「关于项目」的分节：小号加粗标题 + 正文。 */
+@Composable
+private fun AboutSection(
+    title: String,
+    content: @Composable () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = com.tyust.course.ui.theme.NeuPrimary
+        )
+        content()
     }
 }
 

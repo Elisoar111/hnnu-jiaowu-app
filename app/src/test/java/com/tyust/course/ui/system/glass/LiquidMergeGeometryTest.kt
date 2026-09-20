@@ -9,7 +9,7 @@ import org.junit.Test
 import kotlin.math.abs
 
 class LiquidMergeGeometryTest {
-    // 抢课顶栏真实量级：38dp 芯片 (r≈50px) + 4dp 间距 (gap≈10px)，这里取整数便于断言
+    // 选课顶栏真实量级：38dp 芯片 (r≈50px) + 4dp 间距 (gap≈10px)，这里取整数便于断言
     private val left = LiquidMergeGeometry.MergeCircle(Offset(100f, 100f), 50f)
     private val right = LiquidMergeGeometry.MergeCircle(Offset(220f, 100f), 50f)
     private val gap = 220f - 100f - 50f - 50f // 20

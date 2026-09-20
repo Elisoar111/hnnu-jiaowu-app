@@ -13,8 +13,8 @@ from urllib.request import Request, urlopen
 
 # Gitee 仓库可由环境变量 GITEE_REPO 覆盖（形如 owner/repo），与
 # .github/workflows/release.yml 的 sync-to-gitee job 用同一个仓库变量；
-# 未设置时回退到原仓库，继承旧发布通道。
-_GITEE_REPO = os.environ.get("GITEE_REPO") or "znj12345/zhengfang"
+# 未设置时回退到本项目仓库。
+_GITEE_REPO = os.environ.get("GITEE_REPO") or "Elisoar/hnnu-jiaowu-app"
 API_ROOT = f"https://gitee.com/api/v5/repos/{_GITEE_REPO}"
 DOWNLOAD_ROOT = f"https://gitee.com/{_GITEE_REPO}/releases/download"
 REPO_ROOT = Path(__file__).resolve().parents[1]

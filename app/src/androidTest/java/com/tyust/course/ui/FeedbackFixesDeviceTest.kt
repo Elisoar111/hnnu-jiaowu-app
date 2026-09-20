@@ -233,7 +233,7 @@ class FeedbackFixesDeviceTest {
         compose.setContent {
             CourseSelectorTheme { GlassWindowHost(Modifier.testTag("feedback-frame")) {
                 Column(Modifier.fillMaxSize().systemBarsPadding().padding(24.dp)) {
-                    Text("抢课工作台", style = MaterialTheme.typography.headlineMedium)
+                    Text("选课工作台", style = MaterialTheme.typography.headlineMedium)
                     Spacer(Modifier.height(16.dp))
                     Text("长按展开任务操作，滑动后松手执行。", style = MaterialTheme.typography.bodyMedium)
                 }

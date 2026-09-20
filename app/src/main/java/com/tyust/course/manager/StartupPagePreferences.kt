@@ -8,7 +8,7 @@ enum class StartupPage(val route: String, val label: String) {
     Grab("grab", "选课"),
     Grades("grades", "成绩"),
     SecondClass("secondclass", "二课"),
-    Settings("settings", "设置");
+    Settings("settings", "我的");
 
     companion object {
         fun decode(value: String?): StartupPage = entries.firstOrNull { it.route == value } ?: Schedule

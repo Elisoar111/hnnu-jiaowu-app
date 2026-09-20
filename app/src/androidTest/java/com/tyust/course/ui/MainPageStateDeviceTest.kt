@@ -13,7 +13,7 @@ class MainPageStateDeviceTest {
     @Test fun captureFiveMainPages() {
         DemoUiDriver().use { ui ->
             val prefix = InstrumentationRegistry.getArguments().getString("capturePrefix") ?: "pages"
-            listOf("课程", "课表", "抢课", "成绩", "设置").forEachIndexed { index, page ->
+            listOf("课程", "课表", "选课", "成绩", "设置").forEachIndexed { index, page ->
                 ui.navigate(page)
                 ui.screenshot("$prefix-$index")
             }

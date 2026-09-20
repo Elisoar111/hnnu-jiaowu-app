@@ -157,7 +157,7 @@ fun SecondClassroomRoute() {
             level = level,
             boardLoading = boardLoading,
             boardError = boardError,
-            // 直接读全局 state：在设置页拨动开关，回到二课页立刻生效，无需重建页面
+            // 直接读全局 state：在「我的」页拨动开关，回到二课页立刻生效，无需重建页面
             showClassRank = com.tyust.course.manager.AppearanceSettingsManager.showClassRank,
         ),
         onBind = { showLogin = true },

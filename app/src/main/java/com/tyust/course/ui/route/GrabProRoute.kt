@@ -451,7 +451,7 @@ fun GrabProRoute() {
             isRunning = true
             GlassToaster.show("后台选课已启动")
         } else {
-            GlassToaster.show("请先在「课程」页面长按选择要抢的课程，或在下方添加课程到队列")
+            GlassToaster.show("请先在「课程」页面长按选择要选的课程，或在下方添加课程到队列")
         }
     }
     
@@ -662,7 +662,7 @@ fun GrabProRoute() {
                     } else {
                         context.startService(serviceIntent)
                     }
-                    appendLog("定时任务触发，已启动队列抢课服务")
+                    appendLog("定时任务触发，已启动队列选课服务")
                     isRunning = true
                 } else {
                     appendLog("定时任务失败：找不到创建任务的账号，请重新登录")
@@ -823,7 +823,7 @@ fun GrabProRoute() {
     // 玻璃滚轮日期时间选择器（替代原生 DatePicker/TimePicker）
     if (showGlassDateTimePicker) {
         com.tyust.course.ui.system.GlassDateTimePickerDialog(
-            title = "选择抢课时间",
+            title = "选择选课时间",
             initialMillis = remember(scheduledDateTime) {
                 com.tyust.course.utils.GrabTaskUtils.parseScheduledDateTime(scheduledDateTime)
                     ?: System.currentTimeMillis()

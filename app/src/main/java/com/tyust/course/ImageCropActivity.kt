@@ -181,7 +181,7 @@ private fun CropHost(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    if (outputPath == null) "请重新进入设置页再试一次。" else "请返回重新选一张。",
+                    if (outputPath == null) "请重新进入「我的」页再试一次。" else "请返回重新选一张。",
                     color = Color.White.copy(alpha = 0.7f),
                     fontSize = 13.sp
                 )

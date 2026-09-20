@@ -90,7 +90,7 @@ fun MessageCenterScreen(
      */
     var filterTab by remember { mutableIntStateOf(0) }
 
-    // 未读数走全局 state：在详情里读掉一条之后，设置页入口的红点也当帧消失
+    // 未读数走全局 state：在详情里读掉一条之后，「我的」页入口的红点也当帧消失
     val unread = MessageCenterManager.unread
 
     suspend fun reload() {

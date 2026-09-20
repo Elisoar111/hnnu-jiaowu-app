@@ -301,7 +301,7 @@ public class SmartSelector {
         }
     }
 
-    // 使用队列模式启动抢课
+    // 使用队列模式启动选课
     public void startWithQueue(SchoolConfig school) {
         if (isRunning)
             return;
@@ -329,7 +329,7 @@ public class SmartSelector {
         Course targetMatch = courseQueue.get(currentQueueIndex);
         this.retryCount = 0;
 
-        log("📋 开始抢第 " + (currentQueueIndex + 1) + "/" + courseQueue.size() + " 门: " + targetMatch.name);
+        log("📋 开始选第 " + (currentQueueIndex + 1) + "/" + courseQueue.size() + " 门: " + targetMatch.name);
 
         if (listener != null) {
             handler.post(() -> listener.onQueueProgress(currentQueueIndex + 1, courseQueue.size(), targetMatch.name));
@@ -340,7 +340,7 @@ public class SmartSelector {
         findAndGrabCourse(targetMatch, currentSchool);
     }
 
-    // 动态搜索并抢课 (核心逻辑)
+    // 动态搜索并选课 (核心逻辑)
     private void findAndGrabCourse(Course targetMatch, SchoolConfig school) {
         if (!isRunning)
             return;
@@ -544,7 +544,7 @@ public class SmartSelector {
                 } catch (Exception e) {
                     log("⚠️ 精确模式解析失败: " + e.getMessage());
 
-                    // 🔧 Fallback: 如果解析失败（如返回"0"）但我们有保存的 doJxbId，直接尝试抢课
+                    // 🔧 Fallback: 如果解析失败（如返回"0"）但我们有保存的 doJxbId，直接尝试选课
                     if (targetCourse != null && TeachingClassMatcher.canUseSavedClass(targetCourse)
                             && targetCourse.doJxbId != null && !targetCourse.doJxbId.isEmpty()) {
                         log("⚠️ 解析失败，强制使用保存的 doJxbId=" + targetCourse.doJxbId);
@@ -720,7 +720,7 @@ public class SmartSelector {
         // 🔧 唯一标识符
         json.put("uuid", course.getUuid());
 
-        // 🔧 抢课模式
+        // 🔧 选课模式
         json.put("useExactMatch", course.useExactMatch); // 精确模式/智能模式
 
         return json;
@@ -759,7 +759,7 @@ public class SmartSelector {
             course.uuid = savedUuid;
         }
 
-        // 🔧 抢课模式（默认精确模式）
+        // 🔧 选课模式（默认精确模式）
         course.useExactMatch = json.optBoolean("useExactMatch", true);
 
         return course;
@@ -825,13 +825,13 @@ public class SmartSelector {
         this.failCount = 0;
         this.retryCount = 0;
 
-        log("🚀 开始抢课: " + course.name);
+        log("🚀 开始选课: " + course.name);
         runLoop(school);
     }
 
     public void stop() {
         isRunning = false;
-        log("⏹ 抢课已停止");
+        log("⏹ 选课已停止");
     }
 
     public boolean isRunning() {

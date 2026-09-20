@@ -20,7 +20,7 @@ import com.tyust.course.utils.CourseParser
  * 宣传片和首次体验共用的本地演示内容。
  *
  * 每个读取函数都返回新对象，因为 [Course] 是可变模型；页面中的选课等演示操作
- * 不应修改下一次进入演示模式时的基线数据。抢课队列只记录当前演示会话的班级 ID。
+ * 不应修改下一次进入演示模式时的基线数据。选课队列只记录当前演示会话的班级 ID。
  */
 object DemoData {
     const val SCHOOL_ID = "demo"
