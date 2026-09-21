@@ -92,6 +92,12 @@ android {
     def hasFallbackSigning = !hasReleaseSigning && fallbackStore.exists()
 
     signingConfigs {
+        // 内置 debug 签名也要 v1：Debug 包同样会被发给别人装，
+        // Android 7.0 以下装 v2-only 的包会报「安装包解析失败/损坏」。
+        debug {
+            enableV1Signing true
+            enableV2Signing true
+        }
         release {
             if (hasReleaseSigning) {
                 storeFile releaseKeystoreFile
@@ -104,6 +110,12 @@ android {
                 keyAlias "androiddebugkey"
                 keyPassword "android"
             }
+            // 三代签名全开：minSdk 24 时 AGP 默认只签 v2，Android 7.0 以下的设备
+            // 无法验证 v2-only 的包，安装时会报「安装包解析失败/损坏」。补上 v1
+            // 兜住老设备，v3 兜住密钥轮换场景。
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing true
         }
     }
 
@@ -237,6 +249,12 @@ dependencies {
     // Liquid Glass (Kyant Backdrop) — iOS 26 风格折射 / 色散
     implementation 'io.github.kyant0:backdrop:2.0.0'
     implementation 'io.github.kyant0:shapes:1.2.0'
+
+    // 二维码：第二课堂的签到码是 qutuo:// 明文载荷，需要"扫码"与"出示码"两个方向。
+    // zxing-android-embedded 自带 CaptureActivity（含运行时权限申请），且**不依赖
+    // Google Play 服务** —— ML Kit 那条路在无 GMS 的国行机上会直接不可用。
+    // 它内部已传递引入 com.google.zxing:core，生成二维码用同一个 core。
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
 
     // 仪器测试：验证 API 31/32 折射所依赖的平台行为，以及离屏 GL 真的出图。
     // test-only，不进发布 APK。

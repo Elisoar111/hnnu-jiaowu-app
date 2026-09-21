@@ -1,6 +1,7 @@
 package com.hnnujw.course.ui.route
 
 import com.hnnujw.course.ui.system.GlassToaster
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
@@ -34,6 +35,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import com.hnnujw.course.LoginActivity
+import com.hnnujw.course.MainActivity
 import com.hnnujw.course.MessageCenterActivity
 import com.hnnujw.course.login.PasswordLoginCallback
 import com.hnnujw.course.login.PasswordLoginGatewayFactory
@@ -76,7 +78,15 @@ import com.hnnujw.course.ui.system.SystemStatusBadge
 import com.hnnujw.course.ui.system.SystemTone
 import com.hnnujw.course.ui.theme.NeuPrimary
 import com.hnnujw.course.ui.theme.SemanticSuccess
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** 官方反馈 QQ 频道号（见用户手册「反馈渠道」）。 */
+private const val QQ_CHANNEL_ID = "pd32446534"
+
+/** 「我的」页日志标签（院系/专业表头、账号切换等）。 */
+private const val TAG = "SettingsRoute"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -89,6 +99,16 @@ fun SettingsRoute(
     var studentName by remember { mutableStateOf("") }
     var deviceId by remember { mutableStateOf("") }
     var schoolName by remember { mutableStateOf("") }
+    /**
+     * 本人院系 / 专业（「我的」页头像下面那行，替换原先只显示校名的做法）。
+     *
+     * 教务侧拿不到 —— `CourseParser` 只解析姓名与学号；唯一来源是二课的
+     * `/student/achievement/detail`（`user.collegeName` / `user.majorName`）。
+     * 因此**只在已绑定二课（本地有 token）时才发这个请求**；没有 token 就保持空串，
+     * 界面回退成显示校名，不会因为一个装饰性信息去打扰用户。
+     */
+    var collegeName by remember { mutableStateOf("") }
+    var majorName by remember { mutableStateOf("") }
     
     // UI States
     var showLogoutDialog by remember { mutableStateOf(false) }
@@ -240,10 +260,8 @@ fun SettingsRoute(
         }
     }
 
-    // 第二课堂登录
-    var showSecondClassLogin by remember { mutableStateOf(false) }
-    var secondClassRefresh by remember { mutableIntStateOf(0) }
-    // 未读消息红点：读的是全局 Compose state，消息中心里读掉一条这里就当帧消失
+    // 第二课堂「成绩单」已迁到底栏「二课」页最右侧的「成绩单」Tab（在「消息」右边），
+    // 与本页无关；未读消息红点：读的是全局 Compose state，消息中心里读掉一条这里就当帧消失
     val messageUnread = com.hnnujw.course.academic.MessageCenterManager.unread
     // 必须用 **storage key**：MessageCenterActivity 传给消息中心的就是它，
     // 缓存文件名按这个 key 生成。这里若用 currentAccountKey（未经 toStorageKey
@@ -273,18 +291,18 @@ fun SettingsRoute(
         com.hnnujw.course.announcement.AnnouncementCenter.load(context)
     }
 
-    val secondClassSubtitle = remember(session.token, secondClassRefresh, currentAccountKey) {
-        if (!com.hnnujw.course.secondclass.SecondClassroomStore.isAvailable(UserManager.getInstance().currentSchool)) {
-            "当前学校未接入第二课堂"
-        } else {
-            val key = UserManager.getInstance().currentAccountKey
-            val store = com.hnnujw.course.secondclass.SecondClassroomStore
-            when {
-                store.token(context, key).isNotBlank() -> "已登录 · ${store.academicStudentId()}"
-                store.hasPassword(context, key) -> "已保存密码 · 登录状态失效时自动续期"
-                else -> "用教务学号登录成绩单系统"
+    // 通知权限状态：Android 13+ 需要在系统里授权才会弹成绩发布/站内消息/考前提醒。
+    // 用户在系统设置里改完回到前台时，生命周期回到 RESUMED，这里跟着更新。
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    var notificationsAllowed by remember { mutableStateOf(MainActivity.notificationsAllowed(context)) }
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                notificationsAllowed = MainActivity.notificationsAllowed(context)
             }
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
 
@@ -322,6 +340,27 @@ fun SettingsRoute(
     LaunchedEffect(session.token) {
         refreshAccountUiState()
     }
+
+    // 院系 / 专业：只在已绑定二课时拉一次（切账号会随 session.token 变化重拉）。
+    // 失败静默 —— 这是装饰性信息，拿不到就回退显示校名，不弹任何提示。
+    LaunchedEffect(session.token, isDemoMode) {
+        // 先清空：切账号后若新账号没绑二课，不能把上一个账号的院系留在表头上
+        collegeName = ""
+        majorName = ""
+        if (isDemoMode) return@LaunchedEffect
+        val userManager = UserManager.getInstance()
+        val secondClassClient = com.hnnujw.course.secondclass.SecondClassroomStore
+            .clientFor(userManager.currentSchool) ?: return@LaunchedEffect
+        val token = com.hnnujw.course.secondclass.SecondClassroomStore
+            .token(context, userManager.currentAccountKey)
+        if (token.isBlank()) return@LaunchedEffect
+        val profile = runCatching {
+            withContext(Dispatchers.IO) { secondClassClient.profile(token) }
+        }.getOrNull() ?: return@LaunchedEffect
+        collegeName = profile.collegeName
+        majorName = profile.majorName
+        Log.d(TAG, "已取到本人院系/专业（用于「我的」页表头）")
+    }
     
     fun performLogout() {
         UserManager.getInstance().clearLoginState()
@@ -358,7 +397,13 @@ fun SettingsRoute(
         val storageKey = userManager.deleteAccount(record.key)
         if (storageKey.isNotEmpty()) {
             com.hnnujw.course.manager.CourseCacheManager.clearAccountCache(context, storageKey)
+            // 删号不能只清课程缓存：成绩/考试缓存、消息中心缓存都是按账号落盘的，
+            // 留着就是"删了号还能翻出旧数据"的残留。
+            com.hnnujw.course.manager.GradesCacheManager.clearAccount(context, storageKey)
+            com.hnnujw.course.academic.MessageCenterManager.clearCache(context, storageKey)
         }
+        // 第二课堂的 token 与已保存密码是按 accountKey 存的，一起删掉才算"彻底删号"
+        com.hnnujw.course.secondclass.SecondClassroomStore.clearAccount(context, record.key)
         refreshAccountUiState()
         if (isCurrent) {
             // 当前账号被删掉，会话已经没有依据了，直接回登录页
@@ -400,10 +445,26 @@ fun SettingsRoute(
         }
     }
     
+    // ── QQ 频道 ─────────────────────────────────────────────────────────
+    // QQ 频道没有可公开分享的网页直达链接，稳妥做法：频道号进剪贴板，
+    // 再顺手拉起本机 QQ（没装就静默失败），用户切过去粘贴搜索即可加入。
+    fun joinQqChannel() {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("qq_channel", QQ_CHANNEL_ID))
+        GlassToaster.show("频道号 $QQ_CHANNEL_ID 已复制，打开 QQ 频道搜索加入")
+        runCatching {
+            context.packageManager.getLaunchIntentForPackage("com.tencent.mobileqq")?.let {
+                context.startActivity(it)
+            }
+        }
+    }
+
     SettingsScreen(
         studentName = studentName,
         studentId = deviceId,
         schoolName = schoolName,
+        collegeName = collegeName,
+        majorName = majorName,
         currentVersion = currentVersion,
         onSchoolSelect = {
             GlassToaster.show("本应用仅支持淮南师范学院")
@@ -421,12 +482,11 @@ fun SettingsRoute(
         wallpaperName = currentWallpaperName,
         themeName = AppearanceSettingsManager.themeMode.label,
         onThemeSelect = { showThemeDialog = true },
+        // 启动页选择器：二课 Tab 已恢复，无需兜底
         startupPageName = startupPage.label,
         onStartupPageSelect = { showStartupPageDialog = true },
         glassEffectEnabled = AppearanceSettingsManager.glassEffectEnabled,
         onGlassEffectChange = { AppearanceSettingsManager.updateGlassEffect(it) },
-        showClassRank = AppearanceSettingsManager.showClassRank,
-        onShowClassRankChange = { AppearanceSettingsManager.updateShowClassRank(it) },
         messageUnread = messageUnread,
         announcementUnread = announcementUnread,
         onAnnouncements = { context.startActivity(Intent(context, com.hnnujw.course.AnnouncementActivity::class.java)) },
@@ -434,8 +494,8 @@ fun SettingsRoute(
         canRefreshCookie = canRefreshCookie,
         isRefreshingCookie = isRefreshingCookie,
         academicSystemName = com.hnnujw.course.academic.AcademicCapabilities.name(UserManager.getInstance().currentSchool?.academicSystem),
-        secondClassSubtitle = secondClassSubtitle,
-        onSecondClassLogin = { showSecondClassLogin = true },
+        notificationsAllowed = notificationsAllowed,
+        onNotificationSettings = { MainActivity.openNotificationSettings(context) },
         onMessageCenter = { context.startActivity(Intent(context, MessageCenterActivity::class.java)) },
         onCheckUpdate = { checkForUpdate() },
         onOpenManual = {
@@ -447,19 +507,12 @@ fun SettingsRoute(
         onStarProject = { openInBrowser("https://github.com/Elisoar111/hnnu-jiaowu-app") },
         onStarUpstream = { openInBrowser("https://github.com/znjhahaha/zhengfang-apk") },
         onContactDeveloper = { showContactDialog = true },
+        onJoinQqChannel = { joinQqChannel() },
         onAbout = { showAboutDialog = true },
         hasAvatar = hasAvatar,
         avatarRefreshKey = avatarRefreshKey,
         // 先要权限、再选图：见 [requestAvatarPicker] 的说明。
         onAvatarClick = { requestAvatarPicker() }
-    )
-    com.hnnujw.course.ui.screen.SecondClassLoginHost(
-        visible = showSecondClassLogin,
-        onDismiss = { showSecondClassLogin = false },
-        onLoggedIn = {
-            showSecondClassLogin = false
-            secondClassRefresh++
-        }
     )
     if (showThemeDialog) {
         com.hnnujw.course.ui.screen.AppThemeSettingsDialog { showThemeDialog = false }
@@ -500,7 +553,19 @@ fun SettingsRoute(
         SimpleConfirmDialog(
             title = "清除缓存",
             text = "确定要清除所有本地缓存数据吗？",
-            onConfirm = { 
+            onConfirm = {
+                // 之前这里只弹了一句 Toast、什么都没清。现在真正落地清理：
+                // 课程列表缓存 + 成绩/考试缓存 + 消息中心缓存 + 课表缓存。
+                // 注意不动账号、密码、激活码、外观与提醒设置等"配置"类数据。
+                val cacheAccountKey = UserManager.getInstance().currentAccountStorageKey
+                com.hnnujw.course.manager.CourseCacheManager.clearCache(context)
+                if (cacheAccountKey.isNotBlank()) {
+                    com.hnnujw.course.manager.GradesCacheManager.clearAccount(context, cacheAccountKey)
+                    com.hnnujw.course.academic.MessageCenterManager.clearCache(context, cacheAccountKey)
+                }
+                context.getSharedPreferences("schedule_cache", android.content.Context.MODE_PRIVATE)
+                    .edit().clear().apply()
+                com.hnnujw.course.ui.system.PageDataClearSignal.bump()
                 GlassToaster.show("缓存已清除")
                 showClearCacheDialog = false
             },

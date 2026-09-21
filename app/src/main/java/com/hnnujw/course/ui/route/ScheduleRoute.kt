@@ -55,6 +55,7 @@ import com.hnnujw.course.ui.screen.isInWeek
 import com.hnnujw.course.ui.system.DisablePlatformDialogDim
 import com.hnnujw.course.ui.system.SystemDialog
 import com.hnnujw.course.ui.system.SystemPrimaryButton
+import com.hnnujw.course.ui.system.SystemSecondaryButton
 import com.hnnujw.course.ui.theme.MotionDuration
 import com.hnnujw.course.ui.theme.MotionEasing
 import com.hnnujw.course.ui.theme.MotionSpring
@@ -70,6 +71,11 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.Calendar
 import com.hnnujw.course.utils.ICalExporter
+import com.hnnujw.course.schedule.ScheduleExcelCourse
+import com.hnnujw.course.schedule.ScheduleExcelIO
+import com.hnnujw.course.document.XlsxParser
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 
 private const val ScheduleRouteSnapshotMaxAgeMs = 5 * 60 * 1000L
 
@@ -161,6 +167,8 @@ fun ScheduleRoute() {
      * 用户看到的结果和点击时的预期对不上。
      */
     var makeUpWeek by remember { mutableIntStateOf(1) }
+    /** true = 顶栏导出按钮弹「日历 / Excel」格式选择。 */
+    var showExportChooser by rememberSaveable { mutableStateOf(false) }
     
     // Managers
     val settingsManager = remember { ScheduleSettingsManager.getInstance().apply { init(context) } }
@@ -251,6 +259,59 @@ fun ScheduleRoute() {
                 detailId = it.course.id
             }
             CourseReminderNavigation.consume()
+        }
+    }
+
+    // 从 Excel 导入课表：系统文件选择器 → 读字节 → 解析 → 落自定义课程。
+    // 解析在 IO 线程做，落库与提示回主线程；失败给出具体原因。
+    val excelImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch(Dispatchers.IO) {
+            val parsed = runCatching {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: error("无法读取所选文件")
+                val document = XlsxParser.parse(bytes)
+                document.sheets.firstOrNull { it.rows.isNotEmpty() }?.rows
+                    ?: error("表格里没有内容")
+            }.mapCatching { grid -> ScheduleExcelIO.parseImported(grid) }
+            launch(Dispatchers.Main) {
+                val coursesToImport = parsed.getOrNull().orEmpty()
+                when {
+                    parsed.isFailure -> GlassToaster.show("导入失败：${parsed.exceptionOrNull()?.message ?: "文件无法识别"}")
+                    coursesToImport.isEmpty() -> GlassToaster.show("表格里没有识别到课程，请检查表头")
+                    else -> {
+                        val existingKeys = courses.map {
+                            "${ScheduleIdentity.colorKey(it.name)}|${it.day}|${it.startPeriod}|${it.endPeriod}|${ScheduleWeeks.canonical(it.weeks)}"
+                        }.toMutableSet()
+                        var added = 0
+                        var skipped = 0
+                        coursesToImport.forEach { course ->
+                            val key = "${ScheduleIdentity.colorKey(course.name)}|${course.day}|${course.startPeriod}|${course.endPeriod}|${ScheduleWeeks.canonical(course.weeks)}"
+                            if (key in existingKeys) {
+                                skipped++
+                                return@forEach
+                            }
+                            existingKeys.add(key)
+                            val saved = ScheduleSettingsManager.CustomCourse(
+                                id = java.util.UUID.randomUUID().toString(),
+                                name = course.name, teacher = course.teacher, location = course.location,
+                                day = course.day, startPeriod = course.startPeriod, endPeriod = course.endPeriod,
+                                weeks = course.weeks.ifBlank { "1-25周" },
+                            )
+                            settingsManager.addCustomCourse(saved, routeAccountKey)
+                            // 与手动添加一致：导入的课也要有提醒记录（默认关），详情页才能一键开启
+                            reminderScheduler.updateCustomCourse(routeAccountKey, ScheduleCourseRecord(
+                                "custom:${saved.id}", saved.name, saved.teacher, saved.location,
+                                saved.day, saved.startPeriod, saved.endPeriod, saved.weeks, true))
+                            added++
+                        }
+                        showSettingsDialog = false
+                        GlassToaster.show(
+                            if (skipped > 0) "已导入 $added 门课程（跳过 $skipped 门重复）" else "已导入 $added 门课程"
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -517,28 +578,67 @@ fun ScheduleRoute() {
             if (courses.isEmpty()) {
                 GlassToaster.show("课表为空，无法导出")
             } else {
-                try {
-                    val semesterStart = ScheduleDates.firstMonday(displayedTimeBase?.firstWeekDate)
-                    if (semesterStart == null) {
-                        GlassToaster.show("请先设置这个学期的第一周周一日期")
-                        settingsTermOverride = null
-                        showSettingsDialog = true
-                    } else {
-                    ICalExporter.exportAndShare(
-                        context = context,
-                        courses = courses,
-                        semesterStartDate = semesterStart,
-                        totalWeeks = ScheduleMaxWeeks,
-                        periodTimes = periodTimes.associate { it.period to (it.startTime to it.endTime) }
-                    )
-                    GlassToaster.show("课表已导出，可导入到系统日历中查看")
-                    }
-                } catch (e: Exception) {
-                    GlassToaster.show("导出失败：${e.message}")
-                }
+                showExportChooser = true
             }
         }
     )
+    }
+
+    // ── 导出 ─────────────────────────────────────────────────────────────
+    fun exportScheduleIcal() {
+        try {
+            val semesterStart = ScheduleDates.firstMonday(displayedTimeBase?.firstWeekDate)
+            if (semesterStart == null) {
+                GlassToaster.show("请先设置这个学期的第一周周一日期")
+                settingsTermOverride = null
+                showSettingsDialog = true
+            } else {
+                ICalExporter.exportAndShare(
+                    context = context,
+                    courses = courses,
+                    semesterStartDate = semesterStart,
+                    totalWeeks = ScheduleMaxWeeks,
+                    periodTimes = periodTimes.associate { it.period to (it.startTime to it.endTime) }
+                )
+                GlassToaster.show("课表已导出，可导入到系统日历中查看")
+            }
+        } catch (e: Exception) {
+            GlassToaster.show("导出失败：${e.message}")
+        }
+    }
+
+    fun exportScheduleExcel() {
+        try {
+            val excelCourses = courses.map {
+                ScheduleExcelCourse(it.name, it.teacher, it.location, it.day, it.startPeriod, it.endPeriod, it.weeks)
+            }
+            val file = ScheduleExcelIO.exportToCache(context, excelCourses)
+            ScheduleExcelIO.shareWorkbook(context, file)
+            GlassToaster.show("课表已导出为 Excel，可分享或用表格软件打开")
+        } catch (e: Exception) {
+            GlassToaster.show("导出失败：${e.message}")
+        }
+    }
+
+    if (showExportChooser) {
+        com.hnnujw.course.ui.system.SystemDialog(
+            onDismissRequest = { showExportChooser = false },
+            title = { Text("导出课表") },
+            content = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SystemSecondaryButton(
+                        text = "日历文件（.ics）",
+                        onClick = { showExportChooser = false; exportScheduleIcal() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    SystemSecondaryButton(
+                        text = "Excel 表格（.xlsx）",
+                        onClick = { showExportChooser = false; exportScheduleExcel() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+        )
     }
     if (makeUpDay != 0) {
         val targetWeek = makeUpWeek
@@ -660,6 +760,10 @@ fun ScheduleRoute() {
                     close()
                     loadSchedule(true)
                 },
+                onImportExcel = { excelImportLauncher.launch(arrayOf(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "application/vnd.ms-excel",
+                )) },
                 effectiveFirstWeekDate = displayedTimeBase?.firstWeekDate,
                 onClose = {
                     periodCount = settingsManager.periodCount

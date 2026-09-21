@@ -17,11 +17,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -39,13 +42,14 @@ import androidx.compose.ui.unit.sp
 import com.hnnujw.course.secondclass.SecondClassExtraScore
 import com.hnnujw.course.secondclass.SecondClassModule
 import com.hnnujw.course.secondclass.SecondClassProfile
-import com.hnnujw.course.secondclass.SecondClassRankBoard
 import com.hnnujw.course.secondclass.SecondClassRankEntry
 import com.hnnujw.course.secondclass.SecondClassRankLevel
 import com.hnnujw.course.secondclass.SecondClassSnapshot
 import com.hnnujw.course.ui.system.GlassProgressBar
 import com.hnnujw.course.ui.system.GlassStatChip
+import com.hnnujw.course.ui.system.InsetGroupedRow
 import com.hnnujw.course.ui.system.InsetGroupedSection
+import com.hnnujw.course.ui.system.LiquidSwitch
 import com.hnnujw.course.ui.system.PagePadding
 import com.hnnujw.course.ui.system.SectionSpacing
 import com.hnnujw.course.ui.system.SystemEmptyState
@@ -80,11 +84,18 @@ data class SecondClassroomUi(
 )
 
 @Composable
-fun SecondClassroomScreen(
+fun SecondClassTranscriptScreen(
     ui: SecondClassroomUi,
     onBind: () -> Unit,
     onRefresh: () -> Unit,
     onLevelSelect: (SecondClassRankLevel) -> Unit,
+    onShowClassRankChange: (Boolean) -> Unit,
+    onClose: (() -> Unit)? = null,
+    /**
+     * true = 作为别页的 Tab 内容嵌入（如「二课 → 成绩单」）：
+     * 不画自己的顶栏、不吃窗口内边距 —— 否则会出现两条标题、两段顶部留白。
+     */
+    embedded: Boolean = false,
 ) {
     val scrollState = rememberScrollState()
     val headerCollapse by remember {
@@ -93,11 +104,23 @@ fun SecondClassroomScreen(
 
     Scaffold(
         containerColor = Color.Transparent,
+        contentWindowInsets = if (embedded) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
         topBar = {
-            Box(Modifier.moduleEntrance(0)) {
+            if (!embedded) Box(Modifier.moduleEntrance(0)) {
                 SystemTopBar(
-                    title = "第二课堂",
+                    title = "第二课堂成绩单",
                     collapseFraction = headerCollapse,
+                    navigationIcon = if (onClose != null) {
+                        {
+                            SystemIconButton(
+                                icon = Icons.AutoMirrored.Outlined.ArrowBack,
+                                contentDescription = "返回",
+                                onClick = onClose
+                            )
+                        }
+                    } else {
+                        null
+                    },
                     actions = {
                         if (ui.available && ui.bound) {
                             SystemIconButton(
@@ -119,7 +142,8 @@ fun SecondClassroomScreen(
                 .padding(
                     start = PagePadding,
                     end = PagePadding,
-                    top = padding.calculateTopPadding() + 8.dp,
+                    // 嵌入模式外层已经给过顶栏高度，这里只留一点呼吸位
+                    top = if (embedded) 8.dp else padding.calculateTopPadding() + 8.dp,
                     bottom = com.hnnujw.course.ui.system.LocalAppOverlayBottomInset.current + 24.dp
                 ),
             verticalArrangement = Arrangement.spacedBy(SectionSpacing)
@@ -127,7 +151,7 @@ fun SecondClassroomScreen(
             when {
                 !ui.available -> SystemEmptyState(
                     title = "该校暂未接入第二课堂",
-                    message = "当前学校的第二课堂成绩单系统还没有在应用里配置，先去看课表吧。",
+                    message = "当前学校的第二课堂成绩单系统还没有在应用里配置。",
                     icon = Icons.Outlined.School
                 )
 
@@ -148,7 +172,8 @@ fun SecondClassroomScreen(
                     RankSection(
                         ui = ui,
                         modifier = Modifier.moduleEntrance(3),
-                        onLevelSelect = onLevelSelect
+                        onLevelSelect = onLevelSelect,
+                        onShowClassRankChange = onShowClassRankChange
                     )
                     if (ui.refreshing) {
                         Text(
@@ -289,7 +314,7 @@ private fun ProfileHeader(
     }
 }
 
-// ── 各模块积分状况 ────────────────────────────────────────────────────────
+// ── 活动中心入口 ──────────────────────────────────────────────────────────
 
 @Composable
 private fun ModulesSection(
@@ -376,6 +401,7 @@ private fun RankSection(
     ui: SecondClassroomUi,
     modifier: Modifier = Modifier,
     onLevelSelect: (SecondClassRankLevel) -> Unit,
+    onShowClassRankChange: ((Boolean) -> Unit)? = null,
 ) {
     val levels = SecondClassRankLevel.all
     val board = ui.snapshot.boards[ui.level]
@@ -395,6 +421,25 @@ private fun RankSection(
             modifier = Modifier.fillMaxWidth()
         )
 
+        // 「显示班级同学排名」开关就放在榜单旁边（从「我的」页设置区迁来）：
+        // 用户看到名单/隐私的当下就能调整，不必再跳去设置里找。
+        if (onShowClassRankChange != null) {
+            InsetGroupedRow(
+                title = "显示班级同学排名",
+                subtitle = if (ui.showClassRank) {
+                    "「班级」榜单会列出全部同学"
+                } else {
+                    "已隐藏同学名单，只保留我的排名"
+                },
+                trailing = {
+                    LiquidSwitch(
+                        checked = ui.showClassRank,
+                        onCheckedChange = onShowClassRankChange
+                    )
+                }
+            )
+        }
+
         board?.myRank?.let { MyRankCard(it, ui.level, ui.snapshot.profile) }
 
         // 班级层级展示**完整榜单**（数据侧已翻页取全，不再截断在 20 条）。
@@ -402,8 +447,8 @@ private fun RankSection(
         // （数据侧也只请求 self/rank，不拉整份名单）。
         if (ui.level == SecondClassRankLevel.Classmates) {
             if (!ui.showClassRank) {
-                // 用户自己在设置里关掉了同学名单，只剩"我的排名"
-                InsetGroupedSection(footer = "可在「设置 → 显示班级同学排名」中重新打开") {
+                // 用户关掉了同学名单，只剩"我的排名"
+                InsetGroupedSection(footer = "可用上方「显示班级同学排名」开关重新打开") {
                     SectionPlaceholder("班级同学排名已隐藏。")
                 }
             } else {

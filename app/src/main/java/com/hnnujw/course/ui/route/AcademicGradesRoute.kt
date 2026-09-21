@@ -61,6 +61,11 @@ fun AcademicGradesRoute(school: SchoolConfig) {
         // 缓存命中 + 非手动刷新(revision==0) → 直接渲染,跳过 loading
         if (revision == 0 && reportLoaded) {
             loading = false
+            // 缓存命中也要把学期选中项补上：否则 semester 一直是空串,
+            // 学期 Tab 按空串过滤 → 列表恒为空,看起来像"没数据"。
+            val cachedSemesters = AcademicStudyBridge.semesters(report.grades)
+            if (semester.isBlank() || semester !in cachedSemesters)
+                semester = cachedSemesters.firstOrNull() ?: AcademicStudyReader.calendarTerm().id
             // 缓存超过一周就在后台静默刷一次,不打断用户
             if (GradesCacheManager.isStale(cacheFetchedAt)) {
                 try {
@@ -117,7 +122,7 @@ fun AcademicGradesRoute(school: SchoolConfig) {
                     exams = loaded
                     GradesCacheManager.saveExams(context, account, loaded)
                     // 考试数据更新即对齐考前提醒（解析不出时间的考试自动跳过）
-                    com.hnnujw.course.schedule.ExamReminderScheduler.reconcile(context, loaded)
+                    com.hnnujw.course.schedule.ExamReminderScheduler.reconcile(context, loaded, account)
                     examCacheFetchedAt = System.currentTimeMillis()
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { /* 后台静默,失败不打扰用户 */ }
@@ -135,7 +140,7 @@ fun AcademicGradesRoute(school: SchoolConfig) {
             exams = loaded
             examsLoaded = true
             GradesCacheManager.saveExams(context, account, loaded)
-            com.hnnujw.course.schedule.ExamReminderScheduler.reconcile(context, loaded)
+            com.hnnujw.course.schedule.ExamReminderScheduler.reconcile(context, loaded, account)
             examCacheFetchedAt = System.currentTimeMillis()
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {

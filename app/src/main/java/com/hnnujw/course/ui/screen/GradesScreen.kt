@@ -53,6 +53,7 @@ import com.hnnujw.course.ui.system.PagePadding
 import com.hnnujw.course.ui.system.SystemCard
 import com.hnnujw.course.ui.system.SystemEmptyState
 import com.hnnujw.course.ui.system.SystemLoadingState
+import com.hnnujw.course.ui.system.SystemPrimaryButton
 import com.hnnujw.course.ui.system.SystemSectionHeader
 import com.hnnujw.course.ui.system.SystemStatStrip
 import com.hnnujw.course.ui.system.SystemStatusBadge
@@ -275,7 +276,8 @@ fun GradesScreen(
                         error = semesterError,
                         listState = semesterListState,
                         topInset = contentTopInset,
-                        bottomInset = contentBottomInset
+                        bottomInset = contentBottomInset,
+                        onRefresh = onRefresh
                     )
 
                     1 -> OverallGradesContent(
@@ -285,7 +287,8 @@ fun GradesScreen(
                         error = overallError,
                         listState = overallListState,
                         topInset = contentTopInset,
-                        bottomInset = contentBottomInset
+                        bottomInset = contentBottomInset,
+                        onRefresh = onRefresh
                     )
 
                     else -> ExamScheduleContent(
@@ -294,7 +297,8 @@ fun GradesScreen(
                         error = examError,
                         listState = examListState,
                         topInset = contentTopInset,
-                        bottomInset = contentBottomInset
+                        bottomInset = contentBottomInset,
+                        onRefresh = onRefresh
                     )
                 }
             }
@@ -334,7 +338,8 @@ private fun OverallGradesContent(
     error: String,
     listState: LazyListState,
     topInset: Dp,
-    bottomInset: Dp
+    bottomInset: Dp,
+    onRefresh: () -> Unit
 ) {
     val rowKeys = remember(grades) { gradeRowKeys(grades) }
     when {
@@ -354,7 +359,13 @@ private fun OverallGradesContent(
             ) {
                 SystemEmptyState(
                     title = if (error.isNotBlank()) "总体成绩加载失败" else "暂无总体成绩",
-                    message = error.ifBlank { "点击刷新获取最新成绩" }
+                    message = error.ifBlank { "点击刷新获取最新成绩" },
+                    // 失败时把「重试」摆在错误旁边：不然用户得自己意识到要去点右上角
+                    action = if (error.isNotBlank()) {
+                        { SystemPrimaryButton(text = "重试", onClick = onRefresh) }
+                    } else {
+                        null
+                    }
                 )
             }
         }
@@ -407,7 +418,8 @@ private fun SemesterGradesContent(
     error: String,
     listState: LazyListState,
     topInset: Dp,
-    bottomInset: Dp
+    bottomInset: Dp,
+    onRefresh: () -> Unit
 ) {
     val totalCredits = remember(grades) { grades.sumOf { it.credits.toDoubleOrNull() ?: 0.0 } }
     val averageGpa = remember(grades) { semesterAverageGpa(grades) }
@@ -434,7 +446,11 @@ private fun SemesterGradesContent(
 
                 when {
                     isLoading && grades.isEmpty() -> SystemLoadingState(text = "正在加载学期成绩…")
-                    error.isNotBlank() && grades.isEmpty() -> SystemEmptyState(title = "学期成绩加载失败", message = error)
+                    error.isNotBlank() && grades.isEmpty() -> SystemEmptyState(
+                        title = "学期成绩加载失败",
+                        message = error,
+                        action = { SystemPrimaryButton(text = "重试", onClick = onRefresh) }
+                    )
                     grades.isEmpty() -> SystemEmptyState(
                         title = "暂无学期成绩",
                         message = if (currentSemester.isBlank()) {
@@ -782,7 +798,8 @@ private fun ExamScheduleContent(
     error: String,
     listState: LazyListState,
     topInset: Dp,
-    bottomInset: Dp
+    bottomInset: Dp,
+    onRefresh: () -> Unit
 ) {
     when {
         isLoading && exams.isEmpty() -> {
@@ -801,7 +818,12 @@ private fun ExamScheduleContent(
             ) {
                 SystemEmptyState(
                     title = if (error.isNotBlank()) "考试安排加载失败" else "暂无考试安排",
-                    message = error.ifBlank { "点击刷新获取最新考试信息" }
+                    message = error.ifBlank { "点击刷新获取最新考试信息" },
+                    action = if (error.isNotBlank()) {
+                        { SystemPrimaryButton(text = "重试", onClick = onRefresh) }
+                    } else {
+                        null
+                    }
                 )
             }
         }

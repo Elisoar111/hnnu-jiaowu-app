@@ -28,6 +28,14 @@ data class SecondClassProfile(
     val name: String = "",
     val code: String = "",
     val collegeName: String = "",
+    /**
+     * 本人所在院系的 id。
+     *
+     * 用途只有一处：活动中心「本院系可报」筛选（比对活动的 `collegeLimit` 院系列表）。
+     * 取不到时为 0，此时筛选**一律放行**而不是全筛掉 —— 见
+     * [SecondClassActivity.enrollableForCollege] 的说明。
+     */
+    val collegeId: Int = 0,
     val majorName: String = "",
     val grade: String = "",
     /** 总积分。单位见 [scoreUnit]（学校可能配成"学分"或"分数"）。 */

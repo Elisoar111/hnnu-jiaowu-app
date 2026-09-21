@@ -113,6 +113,8 @@ fun ScheduleSettingsScreen(
      */
     onDeleteCustomCourse: ((String) -> Unit)? = null,
     onSyncSchedule: (() -> Unit)? = null,
+    /** 从 Excel 导入课表（SAF 选文件由调用方处理，本页只发出意图）。 */
+    onImportExcel: (() -> Unit)? = null,
     /**
      * 课表当前**实际生效**的第一周日期（`yyyy-MM-dd`）。
      * 用来在「第一周开始日期」这行直接告诉用户日期是设过的还是推算出来的，
@@ -344,9 +346,20 @@ fun ScheduleSettingsScreen(
                     }
 
                     if (onSyncSchedule != null) {
-                        InsetGroupedSection(header = "课表数据") {
+                        InsetGroupedSection(
+                            header = "课表数据",
+                            footer = if (onImportExcel != null) {
+                                "从 Excel 导入的课表会作为自定义课程加入当前学期，可逐条修改或删除；列按「课程 / 教师 / 地点 / 星期 / 节次 / 周次」自动识别。"
+                            } else {
+                                null
+                            }
+                        ) {
                             InsetGroupedRow(title = "同步课表", subtitle = "从教务系统更新正在查看的学期",
-                                showDivider = false, onClick = onSyncSchedule)
+                                showDivider = onImportExcel != null, onClick = onSyncSchedule)
+                            if (onImportExcel != null) {
+                                InsetGroupedRow(title = "从 Excel 导入", subtitle = "选择 .xlsx 表格，导入为可编辑的课程",
+                                    showDivider = false, onClick = onImportExcel)
+                            }
                         }
                     }
                     StaggerIn(index = 1, settled = entranceSettled) {

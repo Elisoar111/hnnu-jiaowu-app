@@ -87,7 +87,9 @@ ASSET_NAME = "app-release.apk"
 
 # 至少要打进包里的内置资产。公告跟代码同一次构建、同一个版本号，是 v1.2.2 起
 # 定下的规矩（不再有线上拉取通道）；漏掉它等于发出去一个"没有任何公告"的版本。
-REQUIRED_ASSETS = ("assets/announcement.json", "assets/users_manual.html")
+# 用户手册同理：由 scripts/build_manual.py 从 用户手册.md 生成的 users_manual.json，
+# 漏掉它「我的 → 用户手册」就成了空页。
+REQUIRED_ASSETS = ("assets/announcement.json", "assets/users_manual.json")
 
 GRADLE_TASKS = (
     ":app:assembleDebug",

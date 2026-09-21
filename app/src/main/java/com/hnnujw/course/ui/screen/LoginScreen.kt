@@ -72,7 +72,9 @@ fun LoginScreen(
     onSchoolSelected: (SchoolConfig) -> Unit,
     onLoginClick: (cookie: String) -> Unit,
     onOpenWebView: () -> Unit = {},
-    onDemoMode: () -> Unit = {},
+    // 手机号登录（统一身份认证原生链路）：发送验证码 / 手机号+验证码登录
+    onSendSmsCode: ((phone: String, onResult: (Boolean, String?) -> Unit) -> Unit)? = null,
+    onPhoneCodeLogin: ((phone: String, code: String, onResult: (Boolean, String?) -> Unit) -> Unit)? = null,
     onBack: (() -> Unit)? = null,
     isLoading: Boolean = false,
     errorMessage: String? = null,
@@ -95,6 +97,11 @@ fun LoginScreen(
     var loginTab by remember { mutableStateOf(if (onPasswordLogin != null) 0 else 1) }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    // 手机号登录（统一身份认证）
+    var phone by remember { mutableStateOf("") }
+    var smsCode by remember { mutableStateOf("") }
+    var phoneLoggingIn by remember { mutableStateOf(false) }
+    var phoneError by remember { mutableStateOf<String?>(null) }
     var showCaptchaDialog by remember { mutableStateOf(false) }
     var captchaInput by remember { mutableStateOf("") }
     var captchaSubmitting by remember { mutableStateOf(false) }
@@ -172,21 +179,25 @@ fun LoginScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = if (loginTab == 0 && onPasswordLogin != null) "登录教务系统" else "Cookie 登录",
+                                text = when {
+                                    loginTab == 0 && onPasswordLogin != null -> "登录教务系统"
+                                    loginTab == 2 && onSendSmsCode != null -> "手机号登录"
+                                    else -> "Cookie 登录"
+                                },
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.align(Alignment.Center)
                             )
                         }
-                        
+
                         Spacer(modifier = Modifier.height(8.dp))
-                        
+
                         Text(
-                            text = if (loginTab == 0 && onPasswordLogin != null) {
-                                "使用教务系统的学号与密码登录"
-                            } else {
-                                "请从浏览器复制教务系统登录后的会话 Cookie"
+                            text = when {
+                                loginTab == 0 && onPasswordLogin != null -> "使用教务系统的学号与密码登录"
+                                loginTab == 2 && onSendSmsCode != null -> "使用学校统一身份认证绑定的手机号登录"
+                                else -> "请从浏览器复制教务系统登录后的会话 Cookie"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -257,9 +268,14 @@ fun LoginScreen(
 
                         // 登录方式切换
                         if (onPasswordLogin != null) {
+                            val tabOptions = if (onSendSmsCode != null) {
+                                listOf("密码登录", "Cookie 登录", "手机号登录")
+                            } else {
+                                listOf("密码登录", "Cookie 登录")
+                            }
                             SystemSegmentedControl(
-                                options = listOf("密码登录", "Cookie 登录"),
-                                selectedIndex = loginTab,
+                                options = tabOptions,
+                                selectedIndex = loginTab.coerceAtMost(tabOptions.lastIndex),
                                 onSelect = { loginTab = it },
                                 backdrop = backdrop
                             )
@@ -310,8 +326,81 @@ fun LoginScreen(
                                 },
                                 minHeight = 50.dp
                             )
+                        } else if (loginTab == 2 && onSendSmsCode != null) {
+                            // 手机号登录表单：手机号 + 短信验证码（统一身份认证原生链路）
+                            var smsCountdown by remember { mutableStateOf(0) }
+                            var smsSending by remember { mutableStateOf(false) }
+
+                            LaunchedEffect(smsCountdown) {
+                                if (smsCountdown > 0) {
+                                    kotlinx.coroutines.delay(1000)
+                                    smsCountdown--
+                                }
+                            }
+
+                            GlassTextField(
+                                value = phone,
+                                onValueChange = { phone = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = "手机号",
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                                minHeight = 50.dp
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                GlassTextField(
+                                    value = smsCode,
+                                    onValueChange = { smsCode = it },
+                                    modifier = Modifier.weight(1f),
+                                    placeholder = "验证码",
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    minHeight = 50.dp
+                                )
+                                Button(
+                                    onClick = {
+                                        phoneError = null
+                                        smsSending = true
+                                        onSendSmsCode?.invoke(phone.trim()) { ok, msg ->
+                                            smsSending = false
+                                            if (ok) {
+                                                smsCountdown = 60
+                                            } else {
+                                                phoneError = msg ?: "验证码发送失败"
+                                            }
+                                        }
+                                    },
+                                    enabled = phone.isNotBlank() && !smsSending && smsCountdown <= 0,
+                                    modifier = Modifier.height(50.dp)
+                                ) {
+                                    Text(
+                                        text = when {
+                                            smsSending -> "发送中…"
+                                            smsCountdown > 0 -> "${smsCountdown}s"
+                                            else -> "获取验证码"
+                                        },
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
+                            }
+
+                            AnimatedVisibility(visible = phoneError != null) {
+                                Column {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = phoneError ?: "",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = SemanticDanger
+                                    )
+                                }
+                            }
                         } else {
-                        
+
                         // Cookie Input（玻璃多行输入）
                         GlassTextField(
                             value = cookie,
@@ -439,6 +528,26 @@ fun LoginScreen(
                                     }
                                 }
                             }
+                        } else if (loginTab == 2 && onPhoneCodeLogin != null) {
+                            // 手机号登录按钮
+                            SystemPrimaryButton(
+                                text = if (isLoading) "登录中…" else "登录",
+                                onClick = {
+                                    phoneLoggingIn = true
+                                    onPhoneCodeLogin.invoke(phone.trim(), smsCode.trim()) { ok, msg ->
+                                        if (!ok) {
+                                            phoneError = msg ?: "登录失败"
+                                            phoneLoggingIn = false
+                                        }
+                                        // 成功时页面会被主界面替换，不复位状态
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                enabled = phone.isNotBlank() && smsCode.isNotBlank() &&
+                                    !phoneLoggingIn && !isLoading
+                            )
                         } else {
                             SystemPrimaryButton(
                                 text = if (isLoading) "登录中…" else "Cookie 登录",
@@ -465,7 +574,7 @@ fun LoginScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                        } else {
+                        } else if (loginTab == 1) {
                             SystemSecondaryButton(
                                 text = "内嵌浏览器自动获取",
                                 onClick = onOpenWebView,
@@ -480,21 +589,6 @@ fun LoginScreen(
                                         tint = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
-                            )
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Demo Mode Button
-                        TextButton(
-                            onClick = { onDemoMode() },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "体验只读演示模式",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontWeight = FontWeight.SemiBold
                             )
                         }
                 }

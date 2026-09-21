@@ -25,6 +25,6 @@ class ExamReminderReceiver : BroadcastReceiver() {
         val user = UserManager.getInstance()
         if (user.isDemoMode || !user.isLoggedIn) return
         val cached = GradesCacheManager.load(app, user.currentAccountStorageKey) ?: return
-        ExamReminderScheduler.reconcile(app, cached.exams)
+        ExamReminderScheduler.reconcile(app, cached.exams, user.currentAccountStorageKey)
     }
 }

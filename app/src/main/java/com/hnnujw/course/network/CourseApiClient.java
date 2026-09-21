@@ -75,27 +75,20 @@ public class CourseApiClient {
                                         REQUEST_SESSION_TOKEN.set(requestSession);
                                         try {
                                         
-                                        // 🔒 【防盗架构深层哨兵】缓存一致性与签名校验拦截层
-                                        if (appContext != null) {
-                                                boolean isCacheSafe = com.hnnujw.course.utils.LocalCacheSyncManager.syncCache(appContext);
-                                                if (!isCacheSafe) {
-                                                        String urlPath = request.url().encodedPath().toLowerCase();
-                                                        // 只有在黄牛倒卖的核心功能（如选课 xsxk、查课表、查成绩等操作）时才施加毁灭性惩罚
-                                                        boolean isCoreApi = request.method().equals("POST") && 
-                                                                (urlPath.contains("xsxk") || urlPath.contains("xkoper") || urlPath.contains("kbcx"));
-                                                        
-                                                        if (isCoreApi) {
-                                                                try {
-                                                                        // 【惩罚一：龟速发包】让高频选课化为泡影，随机加时 3000ms到8000ms
-                                                                        Thread.sleep(3000 + new java.util.Random().nextInt(5000));
-                                                                } catch (InterruptedException ignored) { }
-                                                                
-                                                                // 【惩罚二：静默破坏通信】替换合法 Cookie，发出去的包会被教务网拦截提示登录超时，但表面不报错
-                                                                request = request.newBuilder()
-                                                                        .header("Cookie", "ASP_NET_SessionId=cracked_by_yellow_cow_blocked; path=/;")
-                                                                        .build();
-                                                        }
-                                                }
+                                        // 🔒 构建签名自检（只读告警，不再干预请求）
+                                        //
+                                        // 这里原来有一段「防盗哨兵」：判定签名不一致时，对选课/课表类 POST 先
+                                        // Thread.sleep(3~8s)、再把 Cookie 换成一个假值。两个问题：
+                                        //  1. OkHttp 的 BridgeInterceptor 在请求已带 Cookie 头时不会再注入 CookieJar，
+                                        //     所以那个假 Cookie 真的会发出去，服务端一律回「登录超时」，而客户端侧
+                                        //     没有任何可归因的报错；
+                                        //  2. 只要维护者把 AUTHORIZED_SIGNATURE_HASH 填成官方签名，任何重签名构建
+                                        //     （fork / CI / 使用者自签）都会零报错地丢掉选课与查课表能力。
+                                        // 作为开源工程这层不能带破坏性，因此只保留一条日志。
+                                        if (appContext != null
+                                                        && !com.hnnujw.course.utils.LocalCacheSyncManager.syncCache(appContext)) {
+                                                Log.w(TAG, "构建签名与 AUTHORIZED_SIGNATURE_HASH 不一致，本次请求按原样发出"
+                                                                + "（不注入假 Cookie、不人为延时）");
                                         }
 
                                         if (requestSession != null && !UserManager.getInstance().getSessionState().isCurrent(requestSession)) {

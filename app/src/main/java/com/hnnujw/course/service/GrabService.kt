@@ -230,21 +230,25 @@ class GrabService : Service() {
         serviceQueue.forEach { course ->
             jsonArray.put(courseToSmartSelectorJson(course))
         }
-        prefs.edit()
-            .putString(scopedPrefKey("course_queue_json"), jsonArray.toString())
-            .remove("course_queue_json")
-            .apply()
+        val scopedKey = scopedPrefKey("course_queue_json")
+        val editor = prefs.edit().putString(scopedKey, jsonArray.toString())
+        // 顺手清掉历史遗留的"无账号后缀"旧键。账号为空时两个键同名，
+        // 此时绝不能 remove —— 刚写进去的快照会被立刻抹掉。
+        if (scopedKey != "course_queue_json") editor.remove("course_queue_json")
+        editor.apply()
     }
 
     private fun saveServiceTargetCourseSnapshot(course: Course?) {
         val prefs = getSharedPreferences("smart_selector_prefs", Context.MODE_PRIVATE)
+        val scopedKey = scopedPrefKey("target_course_json")
         val editor = prefs.edit()
         if (course == null) {
-            editor.remove(scopedPrefKey("target_course_json"))
+            editor.remove(scopedKey)
         } else {
-            editor.putString(scopedPrefKey("target_course_json"), courseToSmartSelectorJson(course).toString())
+            editor.putString(scopedKey, courseToSmartSelectorJson(course).toString())
         }
-        editor.remove("target_course_json").apply()
+        if (scopedKey != "target_course_json") editor.remove("target_course_json")
+        editor.apply()
     }
 
     private fun removeCourseFromServiceQueue(course: Course): Boolean {

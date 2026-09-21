@@ -28,14 +28,30 @@ class PageDataViewModel : ViewModel() {
     private val accounts = mutableMapOf<String, PageDataState>()
     private var activeAccount: String? = null
 
-    fun forAccount(key: String): PageDataState {
+    fun forAccount(key: String, reset: Boolean = false): PageDataState {
         // A page result is scoped to the currently active account. Retire the
         // previous account's in-memory store so late callbacks cannot mutate
         // a state object that can be reused after an account switch.
         val previous = activeAccount
         if (previous != null && previous != key) accounts.remove(previous)
+        // 「清除缓存」要求内存里的页面结果也一起作废，否则磁盘清了、界面还是旧数据
+        if (reset) accounts.remove(key)
         activeAccount = key
         return accounts.getOrPut(key) { PageDataState() }
+    }
+}
+
+/**
+ * 全局「页面数据作废」信号。
+ *
+ * 设置页清空本地缓存后自增，[com.hnnujw.course.MainActivity] 监听到变化就为当前账号
+ * 换一个空的 [PageDataState]，让各页重新从（已经清空的）磁盘缓存 / 网络取数。
+ */
+object PageDataClearSignal {
+    val revision = androidx.compose.runtime.mutableIntStateOf(0)
+
+    fun bump() {
+        revision.intValue++
     }
 }
 

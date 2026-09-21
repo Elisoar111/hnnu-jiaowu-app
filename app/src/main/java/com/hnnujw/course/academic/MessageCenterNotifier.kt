@@ -153,10 +153,22 @@ object MessageCenterNotifier {
         return MessageCenterManager.unread
     }
 
-    /** 退出登录 / 切换账号时清掉基线。键已按账号隔离，这里只是把红点立刻归零。 */
-    fun reset(context: Context) {
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().clear().apply()
+    /**
+     * 退出登录 / 切换账号时清掉基线，并把红点立刻归零。
+     *
+     * 键（`notified_unread_ids::<accountKey>` / `last_check_ms::<accountKey>`）本来就是
+     * 按账号隔离的，所以这里**只能**动传入账号的那两个键。
+     * 之前这里是 `.clear()` 把整个 prefs 清空 —— 那会把**其它账号**的消息基线和巡检
+     * 节流时间一起删掉，那些账号下次巡检会因为"没有基线"而漏掉已有的未读播报。
+     */
+    fun reset(context: Context, accountKey: String) {
+        if (accountKey.isNotBlank()) {
+            context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .remove(notifiedKey(accountKey))
+                .remove(lastCheckKey(accountKey))
+                .apply()
+        }
         MessageCenterManager.clearUnread()
     }
 

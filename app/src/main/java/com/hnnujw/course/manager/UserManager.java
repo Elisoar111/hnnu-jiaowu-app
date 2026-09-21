@@ -363,6 +363,8 @@ public class UserManager {
 
         if (appContext != null) {
             com.hnnujw.course.schedule.ScheduleReminderScheduler.get(appContext).clearAccount(storageKey);
+            // 考试提醒的计划表按 account 字段区分账号，删号时清掉属于它的一份
+            com.hnnujw.course.schedule.ExamReminderScheduler.clearAll(appContext, storageKey);
         }
 
         List<AccountRecord> records = loadAccountRecords();

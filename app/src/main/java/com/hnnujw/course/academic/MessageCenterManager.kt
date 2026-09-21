@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import com.hnnujw.course.model.SchoolConfig
+import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -100,6 +101,30 @@ object MessageCenterManager {
         publishUnread(updated)
     }
 
+    /**
+     * 一键已读：把给定列表（缺省取缓存）里的所有消息标为已读。
+     * 与 [markRead] 一样只作用于本地——服务端的已阅状态以正方为准。
+     */
+    fun markAllRead(context: Context, accountKey: String, messages: List<AcademicMessage>? = null) {
+        if (accountKey.isBlank()) return
+        val source = messages ?: readCache(context, accountKey).orEmpty()
+        if (source.isEmpty()) return
+        if (source.none { !it.read }) {
+            publishUnread(source)
+            return
+        }
+        val updated = source.map { if (it.read) it else it.copy(read = true) }
+        writeCache(context, accountKey, updated)
+        publishUnread(updated)
+    }
+
+    /**
+     * 本地已读消息的主键集合。服务端抓回的列表会用它做合并：
+     * 用户在应用里点过（或一键已读过的）消息，刷新后不会被服务端的"待阅"状态打回未读。
+     */
+    fun locallyReadIds(context: Context, accountKey: String): Set<String> =
+        readCache(context, accountKey).orEmpty().filter { it.read }.map { it.id }.toHashSet()
+
     /** 抓取并刷新列表；成功时落缓存并刷新未读计数。 */
     suspend fun load(context: Context, school: SchoolConfig?, accountKey: String): MessageCenterResult {
         if (school == null || accountKey.isBlank()) {
@@ -109,10 +134,20 @@ object MessageCenterManager {
             val transport = AcademicGatewayFactory.transportFor(school, accountKey)
             val result = ZfMessageCenter.fetchMessages(transport, school)
             if (result is MessageCenterResult.Success) {
-                writeCache(context, accountKey, result.messages)
-                publishUnread(result.messages)
+                // 合并本地已读状态：应用里标过已读（含一键已读）的消息，
+                // 刷新后不会被服务端的"待阅"桶打回未读。
+                val locallyRead = locallyReadIds(context, accountKey)
+                val merged = if (locallyRead.isEmpty()) {
+                    result.messages
+                } else {
+                    result.messages.map { if (it.id in locallyRead) it.copy(read = true) else it }
+                }
+                writeCache(context, accountKey, merged)
+                publishUnread(merged)
             }
             result
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             // 抓取失败时红点不该跟着消失：退回上一次缓存的未读数
             refreshUnreadFromCache(context, accountKey)
@@ -126,6 +161,9 @@ object MessageCenterManager {
         return try {
             val transport = AcademicGatewayFactory.transportFor(school, accountKey)
             ZfMessageCenter.fetchMessageDetail(transport, detailUrl)
+        } catch (e: CancellationException) {
+            // 协程取消必须原样抛出：吞掉后调用方会拿上一个账号的结果去刷全局红点
+            throw e
         } catch (_: Exception) {
             null
         }

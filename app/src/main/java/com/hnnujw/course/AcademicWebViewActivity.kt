@@ -55,6 +55,8 @@ class AcademicWebViewActivity : ComponentActivity() {
         const val EXTRA_ALLOWED_HOSTS = "academic_webview_allowed_hosts"
         const val EXTRA_COOKIE_RESULT = "cookie_result"
         const val EXTRA_COOKIE_URL = "academic_cookie_url"
+        /** 额外参与 Cookie 导出的 URL（如 CAS 登录后落在另一域名的教务站），主 URL 的同名 Cookie 优先。 */
+        const val EXTRA_EXTRA_COOKIE_URLS = "academic_extra_cookie_urls"
         const val EXTRA_PAGE_URL = "academic_page_url"
         const val EXTRA_SEARCH_KEYWORD = "academic_search_keyword"
         private var suffixConfigured = false
@@ -63,6 +65,7 @@ class AcademicWebViewActivity : ComponentActivity() {
     private var webView: WebView? = null
     private var startUrl = ""
     private var cookieUrl = ""
+    private var extraCookieUrls: List<String> = emptyList()
     private var searchUrl = ""
     private var currentUrl by mutableStateOf("")
     private var allowedHosts: Set<String> = emptySet()
@@ -73,6 +76,9 @@ class AcademicWebViewActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         startUrl = intent.getStringExtra(EXTRA_START_URL).orEmpty()
         cookieUrl = intent.getStringExtra(EXTRA_COOKIE_URL).orEmpty().ifBlank { startUrl }
+        extraCookieUrls = intent.getStringArrayListExtra(EXTRA_EXTRA_COOKIE_URLS).orEmpty()
+            .map { it.trim() }
+            .filter { WebLoginNavigation.isWebUrl(it) }
         val keyword = intent.getStringExtra(EXTRA_SEARCH_KEYWORD).orEmpty()
         searchUrl = WebLoginNavigation.searchUrl(keyword.ifBlank { "教务系统 登录" })
         // 入口策略：直接打开当前选中学校配置的登录 URL（备用站选择后就是 IP 直连），
@@ -207,7 +213,19 @@ class AcademicWebViewActivity : ComponentActivity() {
 
     private fun finishWithCookie() {
         if (!isCookieUrlAllowed()) return
-        val cookie = CookieManager.getInstance().getCookie(cookieUrl).orEmpty().trim()
+        // 主 URL 的 Cookie 优先，额外 URL（如 CAS SSO 落在另一域名的教务站）只补缺；
+        // 同名 Cookie 不覆盖，保证教务主站已有会话时不被干扰。
+        val merged = linkedMapOf<String, String>()
+        for (url in listOf(cookieUrl) + extraCookieUrls) {
+            CookieManager.getInstance().getCookie(url).orEmpty().split(';').forEach { part ->
+                val name = part.substringBefore('=').trim()
+                val value = part.substringAfter('=', "").trim()
+                if (name.isNotEmpty() && value.isNotEmpty() && !merged.containsKey(name)) {
+                    merged[name] = "$name=$value"
+                }
+            }
+        }
+        val cookie = merged.values.joinToString("; ").trim()
         if (cookie.isBlank()) {
             Toast.makeText(this, "请先登录并进入 ${Uri.parse(cookieUrl).host} 的教务主页", Toast.LENGTH_LONG).show()
             return

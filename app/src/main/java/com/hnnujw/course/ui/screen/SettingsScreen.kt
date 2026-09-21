@@ -35,7 +35,7 @@ import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.EmojiEvents
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.ManageAccounts
@@ -84,6 +84,10 @@ fun SettingsScreen(
     studentName: String,
     studentId: String,
     schoolName: String,
+    /** 本人所在院系（二课成绩单接口给出）；拿不到时为空串。 */
+    collegeName: String = "",
+    /** 本人所学专业；拿不到时为空串。 */
+    majorName: String = "",
     currentVersion: String = "1.0.0",
     onSchoolSelect: () -> Unit,
     onAccountManage: () -> Unit = {},
@@ -103,9 +107,6 @@ fun SettingsScreen(
     onStartupPageSelect: () -> Unit = {},
     glassEffectEnabled: Boolean = true,
     onGlassEffectChange: (Boolean) -> Unit = {},
-    /** 是否展示第二课堂里班级同学的完整排名。 */
-    showClassRank: Boolean = true,
-    onShowClassRankChange: (Boolean) -> Unit = {},
     /** 消息中心未读数；> 0 时入口显示红点。 */
     messageUnread: Int = 0,
     isSuper: Boolean = false,
@@ -117,9 +118,10 @@ fun SettingsScreen(
     avatarRefreshKey: Int = 0,
     onAvatarClick: () -> Unit = {},
     academicSystemName: String = "",
-    /** 第二课堂登录状态摘要；留空时显示默认引导文案。 */
-    secondClassSubtitle: String = "",
-    onSecondClassLogin: () -> Unit = {},
+    /** 通知权限是否已授予（Android 13+）；false 时提示去系统设置开启。 */
+    notificationsAllowed: Boolean = true,
+    /** 打开系统通知设置页。 */
+    onNotificationSettings: () -> Unit = {},
     onMessageCenter: () -> Unit = {},
     /** 公告中心未读数；> 0 时入口显示红点。 */
     announcementUnread: Int = 0,
@@ -138,10 +140,18 @@ fun SettingsScreen(
     onStarUpstream: () -> Unit = {},
     /** 联系开发者（GitHub Issue / 邮箱）。 */
     onContactDeveloper: () -> Unit = {},
+    /** 加入 QQ 频道（复制频道号并尝试拉起 QQ）。 */
+    onJoinQqChannel: () -> Unit = {},
     /** 关于项目。 */
     onAbout: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
+    // 表头第二行：优先显示「院系 · 专业」（用户更关心这个），
+    // 院系/专业都拿不到时（没绑二课）回退成校名，宁可少一点信息也不要空一行。
+    val affiliation = listOf(collegeName, majorName)
+        .filter { it.isNotBlank() }
+        .joinToString(" · ")
+        .ifBlank { schoolName }
     // 折叠进度随滚动偏移连续变化（约 96px 行程），全程跟手
     val headerCollapse by remember {
         derivedStateOf { (scrollState.value / 96f).coerceIn(0f, 1f) }
@@ -173,7 +183,7 @@ fun SettingsScreen(
             SettingsHeader(
                 name = studentName,
                 studentId = studentId,
-                school = schoolName,
+                affiliation = affiliation,
                 isSuper = isSuper,
                 canRefreshCookie = canRefreshCookie,
                 isRefreshingCookie = isRefreshingCookie,
@@ -199,29 +209,6 @@ fun SettingsScreen(
                     onClick = onAccountManage
                 )
                 SettingsRow(
-                    icon = Icons.Outlined.EmojiEvents,
-                    iconTint = Color(0xFFFF9F0A),
-                    title = "第二课堂",
-                    subtitle = secondClassSubtitle.ifBlank { "用教务学号登录成绩单系统" },
-                    onClick = onSecondClassLogin
-                )
-                InsetGroupedRow(
-                    icon = Icons.Outlined.AssignmentInd,
-                    iconTint = Color(0xFF30B0C7),
-                    title = "显示班级同学排名",
-                    subtitle = if (showClassRank) {
-                        "第二课堂的「班级」榜单会列出全部同学"
-                    } else {
-                        "已隐藏同学名单，只保留我的排名"
-                    },
-                    trailing = {
-                        LiquidSwitch(
-                            checked = showClassRank,
-                            onCheckedChange = onShowClassRankChange
-                        )
-                    }
-                )
-                SettingsRow(
                     icon = Icons.Outlined.Email,
                     iconTint = Color(0xFF64D2FF),
                     title = "消息中心",
@@ -244,6 +231,18 @@ fun SettingsScreen(
                     },
                     badgeCount = announcementUnread,
                     onClick = onAnnouncements
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.Notifications,
+                    iconTint = Color(0xFF32ADE6),
+                    title = "通知提醒",
+                    subtitle = if (notificationsAllowed) {
+                        "已开启 · 成绩发布、站内消息与考前提醒"
+                    } else {
+                        "已关闭 · 点击前往系统设置开启"
+                    },
+                    showDivider = false,
+                    onClick = onNotificationSettings
                 )
             }
 
@@ -350,6 +349,13 @@ fun SettingsScreen(
                     onClick = onContactDeveloper
                 )
                 SettingsRow(
+                    icon = Icons.Outlined.Campaign,
+                    iconTint = Color(0xFF34C759),
+                    title = "加入 QQ 频道",
+                    subtitle = "频道号 pd32446534 · 点击复制并打开 QQ",
+                    onClick = onJoinQqChannel
+                )
+                SettingsRow(
                     icon = Icons.Outlined.Info,
                     iconTint = Color(0xFF8E8E93),
                     title = "关于项目",
@@ -396,7 +402,8 @@ fun SettingsScreen(
 private fun SettingsHeader(
     name: String,
     studentId: String,
-    school: String,
+    /** 表头第二行：通常是「院系 · 专业」，拿不到时是校名。 */
+    affiliation: String,
     isSuper: Boolean,
     canRefreshCookie: Boolean,
     isRefreshingCookie: Boolean,
@@ -456,7 +463,7 @@ private fun SettingsHeader(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = school.ifBlank { "未选择学校" },
+                    text = affiliation.ifBlank { "未选择学校" },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

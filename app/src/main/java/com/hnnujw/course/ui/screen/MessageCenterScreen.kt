@@ -19,8 +19,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -46,8 +46,10 @@ import com.hnnujw.course.academic.MessageCenterNotifier
 import com.hnnujw.course.academic.MessageCenterResult
 import com.hnnujw.course.model.SchoolConfig
 import com.hnnujw.course.ui.system.GlassPageScaffold
+import com.hnnujw.course.ui.system.GlassToaster
 import com.hnnujw.course.ui.system.PagePadding
 import com.hnnujw.course.ui.system.SystemIconButton
+import com.hnnujw.course.ui.system.SystemLoadingState
 import com.hnnujw.course.ui.system.SystemPrimaryButton
 import com.hnnujw.course.ui.system.SystemSegmentedControl
 import kotlinx.coroutines.Dispatchers
@@ -174,6 +176,18 @@ fun MessageCenterScreen(
         },
         actions = {
             if (detail == null) {
+                // 一键已读：把当前列表里的消息全部标为已读（本地），红点随之消失。
+                // 常显（同二课消息页 / 选课页 DoneAll 图标，仅点击无长按），无未读时点了只提示。
+                SystemIconButton(Icons.Default.DoneAll, "一键已读", {
+                    if (unread > 0) {
+                        MessageCenterManager.markAllRead(context, accountKey, messages)
+                        messages = messages.map { if (it.read) it else it.copy(read = true) }
+                        // 与二课消息页同一句反馈：标完已读必须有回音，否则用户会怀疑没生效
+                        GlassToaster.show("已全部标为已读")
+                    } else {
+                        GlassToaster.show("没有未读消息")
+                    }
+                })
                 SystemIconButton(Icons.Default.Refresh, "刷新", {
                     scope.launch(Dispatchers.IO) { reload() }
                 })
@@ -185,8 +199,9 @@ fun MessageCenterScreen(
         ) {
             when (val d = detail) {
                 is DetailState.Loading -> {
+                    // 全站统一的玻璃加载态（不再是裸 Material 转圈）：带文案，观感一致
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
+                        SystemLoadingState("正在读取消息正文…")
                     }
                 }
                 is DetailState.Content -> DetailView(d.detail)
@@ -194,7 +209,7 @@ fun MessageCenterScreen(
                 null -> when {
                     loading && messages.isEmpty() && error == null -> {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
+                            SystemLoadingState("正在读取消息…")
                         }
                     }
                     error != null -> {

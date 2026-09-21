@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -43,6 +44,8 @@ import com.halilibo.richtext.ui.material3.Material3RichText
 import com.hnnujw.course.announcement.AnnouncementCenter
 import com.hnnujw.course.announcement.AnnouncementManager
 import com.hnnujw.course.ui.system.GlassPageScaffold
+import com.hnnujw.course.ui.system.GlassToaster
+import com.hnnujw.course.ui.system.SystemIconButton
 import com.hnnujw.course.ui.system.PagePadding
 import com.hnnujw.course.ui.system.SystemEmptyState
 import com.hnnujw.course.ui.system.SystemLoadingState
@@ -93,7 +96,20 @@ fun AnnouncementScreen(onBack: () -> Unit) {
     GlassPageScaffold(
         title = if (detail != null) "公告详情" else "公告",
         subtitle = if (detail == null && unread > 0) "未读 $unread" else null,
-        onBack = { if (detail != null) detail = null else onBack() }
+        onBack = { if (detail != null) detail = null else onBack() },
+        actions = {
+            if (detail == null) {
+                // 一键已读：同消息中心/选课页的 DoneAll 图标，常显、仅点击无长按
+                SystemIconButton(Icons.Default.DoneAll, "一键已读", {
+                    if (unread > 0) {
+                        AnnouncementCenter.markAllRead(context)
+                        GlassToaster.show("已全部标为已读")
+                    } else {
+                        GlassToaster.show("没有未读公告")
+                    }
+                })
+            }
+        },
     ) { padding ->
         Column(
             Modifier.fillMaxSize().padding(padding).padding(horizontal = PagePadding, vertical = 12.dp)

@@ -77,6 +77,17 @@ object AnnouncementCenter {
     }
 
     /**
+     * 公告中心「一键已读」：把所有未读且适用于当前版本的公告全部标为已读。
+     * 历史归档（不适用当前版本）本就不算未读，不需要动。
+     */
+    fun markAllRead(context: Context) {
+        val unreadIds = announcements.filter { isUnread(it) }.map { it.id }
+        if (unreadIds.isEmpty()) return
+        unreadIds.forEach { AnnouncementManager.markAsRead(context, it) }
+        recount(context)
+    }
+
+    /**
      * 需要弹启动弹窗的第一条公告。
      * 排序规则同列表（新的在前），所以弹的永远是最新那条该看的公告。
      */

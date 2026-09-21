@@ -17,8 +17,11 @@ object ActivationManager {
     }
     
     /**
-     * 检查激活状态（主入口）
-     * 开源版：永远返回 true
+     * 检查激活状态（历史遗留入口）。
+     *
+     * 开源版**永远返回 true**：本应用永久免费、不设任何设备白名单或授权门槛。
+     * 现在调用它只是为了那个副作用 —— 把设备 ID 落盘，供「我的」页展示。
+     * 曾经存在的「未授权就整页显示激活页」分支已删除（见 MainActivity）。
      */
     suspend fun checkActivation(context: Context): Boolean {
         // 保存设备 ID 供界面显示（虽然已不再用于白名单校验，但界面可能仍需展示）

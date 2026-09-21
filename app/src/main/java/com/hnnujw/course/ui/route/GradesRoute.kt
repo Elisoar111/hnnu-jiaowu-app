@@ -3,6 +3,7 @@ package com.hnnujw.course.ui.route
 import com.hnnujw.course.ui.system.GlassToaster
 import android.content.Intent
 import android.util.Log
+import com.hnnujw.course.document.SpreadsheetWriter
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.hnnujw.course.ui.system.rememberPageData
@@ -47,6 +48,17 @@ fun GradesRoute() {
     // State
     var currentTab by rememberSaveable { mutableIntStateOf(0) }
     var currentSemester by rememberSaveable { mutableStateOf("") }
+
+    // 通知带子页直达（考前提醒 → 「考试」子页）。用观察请求而不是给 rememberSaveable
+    // 设初值：本页在底栏分页容器里是一直"已组合"的，App 从后台被通知唤起时，
+    // 初始化早就跑完了，只有观察才能跳过去。
+    val requestedGradesTab = com.hnnujw.course.AppTabNavigation.requestedGradesTab
+    LaunchedEffect(requestedGradesTab) {
+        if (requestedGradesTab != null) {
+            currentTab = requestedGradesTab
+            com.hnnujw.course.AppTabNavigation.consumeGradesTab()
+        }
+    }
     
     var semesterGrades by rememberPageData<List<GradeItemUi>>("grades.semester.$currentSemester") { emptyList() }
     var semesterLoaded by rememberPageData("grades.semester.loaded.$currentSemester") { false }
@@ -344,43 +356,39 @@ fun GradesRoute() {
         },
         onExportGrades = { grades ->
             try {
-                // 生成 CSV 内容（带 BOM，确保 Excel 正确识别 UTF-8）
-                val csv = buildString {
-                    // UTF-8 BOM
-                    append('\uFEFF')
-                    // 表头 - 与用户截图一致
-                    appendLine("学年,学期,课程名称,课程代码,开课学院,学分,成绩,成绩分项")
-                    // 数据行
-                    grades.forEach { item ->
-                        // 学年: xnm "2024" -> "2024-2025"
-                        val yearRaw = item.year.ifEmpty { "--" }
-                        val yearDisplay = yearRaw.toIntOrNull()?.let { "$it-${it + 1}" } ?: yearRaw
-                        // 学期: xqm "3" -> "1", "12" -> "2"
-                        val termDisplay = when (item.term) {
-                            "3" -> "1"
-                            "12" -> "2"
-                            else -> item.term.ifEmpty { "--" }
-                        }
-                        val year = escapeCsv(yearDisplay)
-                        val term = escapeCsv(termDisplay)
-                        val name = escapeCsv(item.courseName)
-                        val code = escapeCsv(item.courseCode.ifEmpty { "--" })
-                        val college = escapeCsv(item.college.ifEmpty { "--" })
-                        val credits = escapeCsv(item.credits)
-                        val grade = escapeCsv(item.grade)
-                        val detail = escapeCsv(item.detail)
-                        appendLine("$year,$term,$name,$code,$college,$credits,$grade,$detail")
+                // 生成真正的 Excel（.xlsx）工作簿，表头加粗，Excel/WPS 直接打开
+                val rows = mutableListOf<List<String>>()
+                rows.add(listOf("学年", "学期", "课程名称", "课程代码", "开课学院", "学分", "成绩", "成绩分项"))
+                grades.forEach { item ->
+                    // 学年: xnm "2024" -> "2024-2025"
+                    val yearRaw = item.year.ifEmpty { "--" }
+                    val yearDisplay = yearRaw.toIntOrNull()?.let { "$it-${it + 1}" } ?: yearRaw
+                    // 学期: xqm "3" -> "1", "12" -> "2"
+                    val termDisplay = when (item.term) {
+                        "3" -> "1"
+                        "12" -> "2"
+                        else -> item.term.ifEmpty { "--" }
                     }
+                    rows.add(listOf(
+                        yearDisplay,
+                        termDisplay,
+                        item.courseName,
+                        item.courseCode.ifEmpty { "--" },
+                        item.college.ifEmpty { "--" },
+                        item.credits,
+                        item.grade,
+                        item.detail,
+                    ))
                 }
 
                 // 写入外部缓存目录
                 val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
                     .format(java.util.Date())
-                val fileName = "成绩单_$timestamp.csv"
+                val fileName = "成绩单_$timestamp.xlsx"
                 val cacheDir = java.io.File(context.externalCacheDir, "exports")
                 cacheDir.mkdirs()
                 val file = java.io.File(cacheDir, fileName)
-                file.writeText(csv, Charsets.UTF_8)
+                file.writeBytes(SpreadsheetWriter.writeTexts(rows, "成绩单"))
 
                 // 通过 FileProvider 分享
                 val uri = androidx.core.content.FileProvider.getUriForFile(
@@ -389,7 +397,7 @@ fun GradesRoute() {
                     file
                 )
                 val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/csv"
+                    type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
@@ -400,15 +408,6 @@ fun GradesRoute() {
             }
         }
     )
-}
-
-// CSV 单元格转义：处理逗号、引号、换行符
-private fun escapeCsv(value: String): String {
-    return if (value.contains(',') || value.contains('"') || value.contains('\n')) {
-        "\"${value.replace("\"", "\"\"")}\""
-    } else {
-        value
-    }
 }
 
 // Logic Object

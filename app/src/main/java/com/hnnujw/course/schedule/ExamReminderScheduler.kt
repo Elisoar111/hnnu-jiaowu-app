@@ -12,7 +12,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.hnnujw.course.MainActivity
 import com.hnnujw.course.R
-import com.hnnujw.course.manager.UserManager
 import com.hnnujw.course.ui.screen.ExamItemUi
 import org.json.JSONArray
 import org.json.JSONObject
@@ -30,6 +29,15 @@ import org.json.JSONObject
  * 考试列表来自 [com.hnnujw.course.manager.GradesCacheManager] 的本地缓存
  * （成绩页/考试 Tab 加载后写入），**reconcile 只读缓存不发网络**。
  * 因此开机、应用更新后可以直接重排，不依赖会话有效。
+ *
+ * ## 账号隔离
+ *
+ * 本机可以绑定多个学生账号，而闹钟是**全局**的（AlarmManager 不分账号），
+ * 所以计划表里必须自己带上 `account`：
+ *  - 计划 id 把账号一起算进摘要，两个账号的同一门考试不会撞 id；
+ *  - [reconcile] 只取消"本账号"不再出现的旧闹钟，其它账号的提醒原样保留；
+ *  - [clearAll] 只清本账号。
+ * 早期版本的计划没有 `account` 字段，按"属于当前账号"处理（一次性迁移）。
  *
  * ## 时间
  *
@@ -58,7 +66,8 @@ object ExamReminderScheduler {
                 courseName = item.optString("course"),
                 examTime = item.optString("time"),
                 location = item.optString("location"),
-                examName = item.optString("examName")
+                examName = item.optString("examName"),
+                account = item.optString("account")
             )
             plan.id to plan
         }.getOrNull() }.toMap()
@@ -73,7 +82,8 @@ object ExamReminderScheduler {
                 .put("course", plan.courseName)
                 .put("time", plan.examTime)
                 .put("location", plan.location)
-                .put("examName", plan.examName))
+                .put("examName", plan.examName)
+                .put("account", plan.account))
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_PLANS, array.toString()).apply()
@@ -85,11 +95,13 @@ object ExamReminderScheduler {
         val courseName: String,
         val examTime: String,
         val location: String,
-        val examName: String
+        val examName: String,
+        val account: String = ""
     )
 
-    private fun examId(exam: ExamItemUi): String = ScheduleIdentity.digest(
-        listOf(exam.courseName, exam.examTime, exam.examName, exam.location).joinToString("\u001f"))
+    private fun examId(exam: ExamItemUi, accountKey: String): String = ScheduleIdentity.digest(
+        listOf(accountKey, exam.courseName, exam.examTime, exam.examName, exam.location)
+            .joinToString("\u001f"))
 
     private fun alarmPending(context: Context, id: String, flags: Int): PendingIntent {
         val intent = Intent(context, ExamReminderReceiver::class.java).apply {
@@ -103,29 +115,27 @@ object ExamReminderScheduler {
     const val EXTRA_ID = "exam_reminder_id"
 
     /**
-     * 对齐"应排的考试提醒"与"已排的闹钟"。幂等：重复调用无副作用。
+     * 对齐"本账号应排的考试提醒"与"已排的闹钟"。幂等：重复调用无副作用。
      * 考试 Tab 每次加载完、开机广播时都会调用。
      */
     @Synchronized
-    fun reconcile(context: Context, exams: List<ExamItemUi>) {
+    fun reconcile(context: Context, exams: List<ExamItemUi>, accountKey: String) {
         val now = System.currentTimeMillis()
         val existing = plans(context)
         val desired = exams.mapNotNull { exam ->
             val start = ExamCountdown.parseStart(exam.examTime) ?: return@mapNotNull null
             val trigger = start - LEAD_MS
             if (trigger <= now) return@mapNotNull null
-            val id = examId(exam)
-            id to Plan(id, trigger, exam.courseName, exam.examTime, exam.location, exam.examName)
+            val id = examId(exam, accountKey)
+            id to Plan(id, trigger, exam.courseName, exam.examTime, exam.location, exam.examName, accountKey)
         }.toMap()
 
-        // 取消不再出现（或内容变化导致 id 变化）的旧闹钟
-        existing.filterKeys { it !in desired }.values.forEach { plan ->
-            runCatching {
-                alarmPending(context, plan.id,
-                    PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)?.let {
-                    context.getSystemService(AlarmManager::class.java)?.cancel(it); it.cancel()
-                }
-            }
+        // 只取消"本账号"里不再出现（或内容变化导致 id 变化）的旧闹钟。
+        // 这里**不能**碰其它账号的计划，否则切一次账号就把上一个账号的考前提醒清空了。
+        existing.filter { (id, plan) ->
+            plan.ownerKey(accountKey) == accountKey && id !in desired
+        }.values.forEach { plan ->
+            cancelAlarm(context, plan.id)
         }
         // 排/更新目标闹钟
         desired.forEach { (id, plan) ->
@@ -142,7 +152,21 @@ object ExamReminderScheduler {
                 runCatching { alarm.set(AlarmManager.RTC_WAKEUP, plan.triggerAt, pending) }
             }
         }
-        if (existing.keys != desired.keys || existing != desired) savePlans(context, desired)
+        // 计划表 = 其它账号保留的计划 + 本账号的最新计划
+        val others = existing.filterValues { it.ownerKey(accountKey) != accountKey }
+        val merged = others + desired
+        if (merged != existing) savePlans(context, merged)
+    }
+
+    /** 没有 account 字段的历史计划，按"属于当前账号"处理。 */
+    private fun Plan.ownerKey(currentAccount: String): String = account.ifEmpty { currentAccount }
+
+    private fun cancelAlarm(context: Context, id: String) {
+        runCatching {
+            alarmPending(context, id, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)?.let {
+                context.getSystemService(AlarmManager::class.java)?.cancel(it); it.cancel()
+            }
+        }
     }
 
     /** 闹钟触发：核对计划仍然有效后发通知，然后摘掉这个一次性计划。 */
@@ -165,6 +189,8 @@ object ExamReminderScheduler {
         val open = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(MainActivity.EXTRA_OPEN_TAB, com.hnnujw.course.manager.StartupPage.Grades.route)
+            // 直接翻到「考试」子页：提醒的意义就是"点开就能看"，不该再让用户自己找
+            putExtra(MainActivity.EXTRA_OPEN_GRADES_TAB, "2")
         }
         val content = PendingIntent.getActivity(context, 0x4558, open,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -188,17 +214,13 @@ object ExamReminderScheduler {
         }
     }
 
-    /** 退出登录时清掉当前账号可见的提醒（考试数据按账号隔离）。 */
+    /** 退出登录 / 删除账号时清掉该账号的提醒；其它账号的计划保持不动。 */
     @Synchronized
-    fun clearAll(context: Context) {
-        plans(context).values.forEach { plan ->
-            runCatching {
-                alarmPending(context, plan.id,
-                    PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)?.let {
-                    context.getSystemService(AlarmManager::class.java)?.cancel(it); it.cancel()
-                }
-            }
-        }
-        savePlans(context, emptyMap())
+    @JvmStatic
+    fun clearAll(context: Context, accountKey: String) {
+        val existing = plans(context)
+        val mine = existing.filterValues { it.ownerKey(accountKey) == accountKey }
+        mine.values.forEach { plan -> cancelAlarm(context, plan.id) }
+        savePlans(context, existing - mine.keys)
     }
 }

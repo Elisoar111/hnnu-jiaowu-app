@@ -7,19 +7,23 @@ import android.util.Log
 import java.security.MessageDigest
 
 /**
- * 缓存同步核心调度器
- * 核心提醒：为了确保此开源项目不被黄牛恶意篡改并二次编译售卖，
- * 本类实为【应用数字签名防御暗桩】。
+ * 构建签名自检：给维护者一个"这个包用的不是我的签名"的信号。
+ *
+ * ⚠️ 它**不再具备任何破坏能力**。原先 `CourseApiClient` 的拦截器会在判定非法时
+ * 对选课/课表类 POST 先 `Thread.sleep(3~8s)`、再把 Cookie 换成假值 —— 那会让任何
+ * 重签名构建（fork / CI / 使用者自签）在毫无报错的情况下丢掉选课与查课表能力，
+ * 已删除。现在签名不一致只会打一条 `Log.w`。
  */
 object LocalCacheSyncManager {
     private const val TAG = "LocalCacheSyncManager"
     
     // ==========================================
-    // ⚠️ TODO [开源防贩卖指引]:
-    // 1. 请使用您的 release-key.jks 正式打包一次 Release 版 APK 并运行。
-    // 2. 连接 Logcat，搜索 "LocalCacheSyncManager"，把打印出的 SHA-256 填到这里的引号内。
-    // 比如："18E2...DA05..." (全大写，无冒号)
-    //填好之后，防贩防线即刻生效。
+    // ⚠️ [可选] 填入你自己的 release-key 签名 SHA-256：
+    // 1. 用你的 release-key.jks 正式打包一次 Release 版 APK 并运行；
+    // 2. 连接 Logcat，搜索 "LocalCacheSyncManager"，把打印出的 SHA-256 填到下面；
+    //    比如："18E2...DA05..."（全大写，无冒号）。
+    // 注意：填了之后，任何**重签名**构建只会在 Logcat 里收到一条告警 —— 仅此而已，
+    // 不影响功能。留空则一律放行。
     // ==========================================
     const val AUTHORIZED_SIGNATURE_HASH = "REPLACE_ME_WITH_REAL_SHA256"
     
@@ -55,7 +59,7 @@ object LocalCacheSyncManager {
                 }
                 
                 if (isCacheValid == false) {
-                    // 暗桩启动 - 检测到非法打包者
+                    // 仅记录一条日志；破坏性的"暗桩"已移除，见类注释
                 }
             } else {
                 isCacheValid = false

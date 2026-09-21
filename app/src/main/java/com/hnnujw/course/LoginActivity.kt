@@ -14,7 +14,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
-import com.hnnujw.course.demo.DemoData
 import com.hnnujw.course.manager.UserManager
 import com.hnnujw.course.model.SchoolConfig
 import com.hnnujw.course.network.CourseApiClient
@@ -43,6 +42,11 @@ class LoginActivity : ComponentActivity() {
     companion object {
         private const val TAG = "LoginActivity"
         const val EXTRA_RETURN_TO_CALLER = "return_to_caller"
+        /** 学校统一身份认证（CAS）入口：支持手机号+短信验证码登录，登录后经 SSO 建立教务会话。 */
+        private const val CAS_PHONE_LOGIN_URL =
+            "https://xxmh.hnnu.edu.cn/cas/login?service=https://jwglxt.hnnu.edu.cn/sso/hsssologin&qq_aio_chat_type=2"
+        private const val CAS_LOGIN_HOST = "xxmh.hnnu.edu.cn"
+        private const val SSO_ACADEMIC_HOST = "jwglxt.hnnu.edu.cn"
     }
 
     private var isLoading by mutableStateOf(false)
@@ -156,8 +160,11 @@ class LoginActivity : ComponentActivity() {
                     onOpenWebView = {
                         openWebView()
                     },
-                    onDemoMode = {
-                        handleDemoMode()
+                    onSendSmsCode = { phone, onResult ->
+                        handleSendSmsCode(phone, onResult)
+                    },
+                    onPhoneCodeLogin = { phone, code, onResult ->
+                        handlePhoneCodeLogin(phone, code, onResult)
                     },
                     onPasswordLogin = { username, password ->
                         handlePasswordLogin(username, password)
@@ -230,6 +237,43 @@ class LoginActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 手机号登录（统一身份认证原生链路）：
+     * 1. 发送短信验证码；2. 手机号+验证码换 CAS 会话；3. 合并 Cookie 走既有验证进主界面。
+     */
+    private fun handleSendSmsCode(phone: String, onResult: (Boolean, String?) -> Unit) {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { com.hnnujw.course.login.CasPhoneLoginClient.sendVerificationCode(phone) }
+                    .getOrElse { com.hnnujw.course.login.CasPhoneLoginClient.CasResult(false, "网络异常，请稍后重试") }
+            }
+            withContext(Dispatchers.Main) { onResult(result.success, result.message.ifBlank { null }) }
+        }
+    }
+
+    private fun handlePhoneCodeLogin(phone: String, code: String, onResult: (Boolean, String?) -> Unit) {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { com.hnnujw.course.login.CasPhoneLoginClient.loginWithPhoneCode(phone, code) }
+                    .getOrElse { com.hnnujw.course.login.CasPhoneLoginClient.CasResult(false, "网络异常，请稍后重试") }
+            }
+            withContext(Dispatchers.Main) {
+                if (result.success) {
+                    val cookie = com.hnnujw.course.login.CasPhoneLoginClient.academicCookieHeader()
+                    if (cookie.isNotBlank()) {
+                        Toast.makeText(this@LoginActivity, "验证通过，正在登录教务系统…", Toast.LENGTH_SHORT).show()
+                        onResult(true, null)
+                        handleLogin(cookie)
+                    } else {
+                        onResult(false, "未取得教务会话，请稍后重试")
+                    }
+                } else {
+                    onResult(false, result.message.ifBlank { "登录失败" })
+                }
+            }
+        }
+    }
+
     private fun openWebView() {
         // 本应用只支持淮南师范学院，登录网页固定打开学校教务的直登页。
         val currentSchool = selectedLoginSchool
@@ -248,14 +292,6 @@ class LoginActivity : ComponentActivity() {
             putStringArrayListExtra(AcademicWebViewActivity.EXTRA_ALLOWED_HOSTS, hosts)
         }
         webViewLauncher.launch(intent)
-    }
-
-    private fun handleDemoMode() {
-        DemoData.resetSession()
-        UserManager.getInstance().startDemoSession(DemoData.school())
-        Toast.makeText(this, "已进入本地演示模式，不会连接教务系统", Toast.LENGTH_SHORT).show()
-        startActivity(Intent(this, MainActivity::class.java))
-        finish()
     }
 
     private fun handleLogin(cookieStr: String) {

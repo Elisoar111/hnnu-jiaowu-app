@@ -31,6 +31,13 @@
     <!-- 应用更新权限 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- 扫码签到：第二课堂的签到码必须现场扫（qutuo:// 明文载荷）。
+         相机是"可选硬件"：没有摄像头的设备照样能装，只是扫码入口会提示不可用。
+         运行时权限由 zxing 的 CaptureActivity 自己申请。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
     <application
         android:name=".CourseApplication"
         android:allowBackup="true"
@@ -63,6 +70,24 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- 系统相机扫到第二课堂签到码（qutuo://sign / qutuo://waitSign）时唤起。
+                 解析见 SecondClassDeepLink，签到仍要走 evaluateSignScan 安全闸门。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="qutuo" />
+            </intent-filter>
+            <!-- 点开 / 扫到二课站点的网页链接：不做 autoVerify（没有域名校验文件），
+                 系统会弹"用哪个应用打开"，选本 App 直接落到对应活动。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="ekta.hnnu.edu.cn"
+                    android:scheme="https" />
+            </intent-filter>
         </activity>
 
         <activity
@@ -86,7 +111,14 @@
             android:screenOrientation="portrait"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
         <activity android:name=".CourseDetailActivity" android:exported="false" android:configChanges="uiMode" />
-        <!-- 用户手册阅读页：WebView 加载 assets 里预排版的 users_manual.html -->
+
+        <!-- 扫码相机页强制竖屏：签到码二维码没有方向性，但取景框/提示文案是按竖屏
+             设计的；zxing 库自己声明的 CaptureActivity 不锁方向，这里覆盖它。 -->
+        <activity
+            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:screenOrientation="portrait"
+            tools:replace="android:screenOrientation" />
+        <!-- 用户手册阅读页：原生 Compose 渲染 assets/users_manual.json（不再用 WebView） -->
         <activity
             android:name=".ManualActivity"
             android:configChanges="uiMode"
@@ -101,6 +133,15 @@
              公告无需登录，页面本身不打教务接口。 -->
         <activity
             android:name=".AnnouncementActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- 第二课堂附件查看器：Word / Excel / PDF / 图片 / 文本内置渲染。
+             附件是直链（不需要登录态），下载落在 cacheDir/attachments，
+             该目录已登记在 file_paths.xml 的 cache-path 下，可被 FileProvider 暴露。 -->
+        <activity
+            android:name=".ui.document.DocumentViewerActivity"
             android:configChanges="uiMode"
             android:exported="false"
             android:screenOrientation="portrait" />

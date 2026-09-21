@@ -1,10 +1,13 @@
 package com.hnnujw.course
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.graphics.Picture
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -96,7 +99,6 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.hnnujw.course.activation.ActivationManager
-import com.hnnujw.course.activation.ActivationScreen
 import com.hnnujw.course.manager.AppearanceSettingsManager
 import com.hnnujw.course.manager.SmartSelector
 import com.hnnujw.course.manager.UserManager
@@ -149,9 +151,44 @@ class MainActivity : FragmentActivity() {
     companion object {
         private const val PREFS_NAME = "app_prefs"
         private const val KEY_HAS_SEEN_ONBOARDING = "has_seen_onboarding"
+        /** 已经自动申请过一次通知权限；用户拒绝后不再打扰，改由「我的」的通知行引导。 */
+        const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"
 
         /** 通知点击时携带：期望落地的 StartupPage route。 */
         const val EXTRA_OPEN_TAB = "com.hnnujw.course.extra.OPEN_TAB"
+
+        /**
+         * 通知点击时携带：落到「成绩」页后再选中哪个子页（0 学期 / 1 总览 / 2 考试）。
+         *
+         * 考前提醒必须能直接翻到「考试」：否则用户点开提醒看到的是学期成绩，
+         * 还得自己再点一下 —— 而这正是提醒最该省掉的那一步。
+         */
+        const val EXTRA_OPEN_GRADES_TAB = "com.hnnujw.course.extra.OPEN_GRADES_TAB"
+
+        /** 当前是否允许发系统通知（Android 13 以下默认允许）。 */
+        fun notificationsAllowed(context: Context): Boolean =
+            Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+
+        /**
+         * 跳到本应用的「通知」设置页。
+         *
+         * Android 8+ 可直达通知频道页；更早的系统没有这个入口，退到应用详情页让用户自己找。
+         * 用 [runCatching] 兜住个别 ROM 找不到 Activity 的情况，不做无谓崩溃。
+         */
+        fun openNotificationSettings(context: Context) {
+            val intent = if (Build.VERSION.SDK_INT >= 26) {
+                Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+            } else {
+                Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    android.net.Uri.parse("package:${context.packageName}")
+                )
+            }
+            runCatching { context.startActivity(intent) }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -162,6 +199,8 @@ class MainActivity : FragmentActivity() {
         if (savedInstanceState == null) {
             com.hnnujw.course.schedule.CourseReminderNavigation.accept(intent)
             AppTabNavigation.accept(intent)
+            // 扫到 qutuo:// 码或点开二课站点链接时由系统发 VIEW intent 进来
+            com.hnnujw.course.secondclass.SecondClassDeepLinkNavigation.accept(intent)
         }
 
         val userManager = UserManager.getInstance()
@@ -184,34 +223,32 @@ class MainActivity : FragmentActivity() {
         setContent {
             CourseSelectorTheme {
                 var showOnboarding by remember { mutableStateOf(!hasSeenOnboarding && !userManager.isDemoMode) }
-                // 开源版授权检查不会拒绝设备，先呈现真实内容，再完成兼容检查。
-                var activationState by remember { mutableIntStateOf(2) }
 
+                // 【开源构建：永久免费、无任何授权门槛】
+                //
+                // 这里曾经是「授权检查 → 未授权就整页显示 ActivationScreen」的闸门。
+                // 开源版把 ActivationManager.checkActivation 定成了硬编码 return true，
+                // 于是那条分支永远进不去 —— ActivationScreen 是死代码，已随之删除。
+                //
+                // 保留这一遍 checkActivation 只为一个副作用：它会把设备 ID 落盘，
+                // 「我的」页要显示它。将来若真要重新引入授权，闸门就该建在这里，
+                // 而不是把删除掉的界面找回来再说。
                 LaunchedEffect(Unit) {
                     if (!userManager.isDemoMode) {
-                        val activated = ActivationManager.checkActivation(this@MainActivity)
-                        if (!activated) activationState = 1
+                        ActivationManager.checkActivation(this@MainActivity)
                     }
                 }
 
-                when {
-                    activationState == 1 -> {
-                        ActivationScreen(onActivated = { activationState = 2 })
+                // 主界面常驻渲染；首次启动的引导以液态玻璃弹框叠加其上，
+                // 点引导条目直接跳到对应页面（见 MainScreen 内 OnboardingDialog 挂载点）。
+                MainScreen(
+                    fragmentActivity = this@MainActivity,
+                    showOnboarding = showOnboarding,
+                    onOnboardingFinish = {
+                        prefs.edit().putBoolean(KEY_HAS_SEEN_ONBOARDING, true).apply()
+                        showOnboarding = false
                     }
-
-                    else -> {
-                        // 主界面常驻渲染；首次启动的引导以液态玻璃弹框叠加其上，
-                        // 点引导条目直接跳到对应页面（见 MainScreen 内 OnboardingDialog 挂载点）。
-                        MainScreen(
-                            fragmentActivity = this@MainActivity,
-                            showOnboarding = showOnboarding,
-                            onOnboardingFinish = {
-                                prefs.edit().putBoolean(KEY_HAS_SEEN_ONBOARDING, true).apply()
-                                showOnboarding = false
-                            }
-                        )
-                    }
-                }
+                )
             }
         }
     }
@@ -220,6 +257,8 @@ class MainActivity : FragmentActivity() {
         setIntent(intent)
         com.hnnujw.course.schedule.CourseReminderNavigation.accept(intent)
         AppTabNavigation.accept(intent)
+        // App 已在运行时再扫一次码 / 再点一次链接走这里（singleTop 语义）
+        com.hnnujw.course.secondclass.SecondClassDeepLinkNavigation.accept(intent)
     }
 }
 
@@ -234,11 +273,19 @@ object AppTabNavigation {
     var requestedPage by androidx.compose.runtime.mutableStateOf<StartupPage?>(null)
         private set
 
+    /** 落到成绩页后要选中的子页（见 [MainActivity.EXTRA_OPEN_GRADES_TAB]）；null = 不改变。 */
+    var requestedGradesTab by androidx.compose.runtime.mutableStateOf<Int?>(null)
+        private set
+
     fun accept(intent: Intent?) {
         intent?.getStringExtra(MainActivity.EXTRA_OPEN_TAB)?.let { requestedPage = StartupPage.decode(it) }
+        intent?.getStringExtra(MainActivity.EXTRA_OPEN_GRADES_TAB)?.toIntOrNull()
+            ?.takeIf { it in 0..2 }?.let { requestedGradesTab = it }
     }
 
     fun consume() { requestedPage = null }
+
+    fun consumeGradesTab() { requestedGradesTab = null }
 }
 
 sealed class BottomNavItem(
@@ -278,7 +325,11 @@ fun MainScreen(
     val currentAccountStorageKey = session.token.accountStorageKey
     val accessibility = rememberGlassAccessibilityMode()
     val pageDataViewModel: PageDataViewModel = viewModel()
-    val pageData = remember(currentAccountStorageKey) { pageDataViewModel.forAccount(currentAccountStorageKey) }
+    // 设置页清过缓存就换一个空的页面数据容器，避免磁盘清了、内存里的旧列表还在
+    val pageDataRevision = com.hnnujw.course.ui.system.PageDataClearSignal.revision.intValue
+    val pageData = remember(currentAccountStorageKey, pageDataRevision) {
+        pageDataViewModel.forAccount(currentAccountStorageKey, reset = pageDataRevision > 0)
+    }
     // Resolve before creating the motion state so the first frame is already on the chosen page.
     var selectedTab by remember(pageData) {
         pageData.state("navigation.tab") {
@@ -363,12 +414,39 @@ fun MainScreen(
         noticeModel.notices.update(session, isTokenExpired, foreground && !dialogHostState.hasBlockingSurface)
     }
 
+    // ── 通知权限 ────────────────────────────────────────────────────────────
+    // Android 13+ 上 POST_NOTIFICATIONS 默认拒绝，而成绩推送与教务消息推送全靠它。
+    // 此前全项目只有「设置课表提醒」的流程里才申请（AcademicRoutes / ScheduleCourseSheet），
+    // 于是从不开课表提醒的用户，这两类推送是彻底静默失效的：红点亮，通知一条不发。
+    // 这里登录后统一申请一次；被拒绝就不再打扰，改由「我的 → 通知提醒」引导。
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* 结果由「我的」里的通知状态行反映 */ }
+    var permissionHintShown by remember { mutableStateOf(false) }
+    LaunchedEffect(currentAccountStorageKey, foreground, showOnboarding, isDemoMode) {
+        if (isDemoMode || showOnboarding || !foreground) return@LaunchedEffect
+        if (currentAccountStorageKey.isBlank()) return@LaunchedEffect
+        if (MainActivity.notificationsAllowed(context)) return@LaunchedEffect
+        val permissionPrefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        if (permissionPrefs.getBoolean(MainActivity.KEY_NOTIFICATION_ASKED, false)) return@LaunchedEffect
+        permissionPrefs.edit().putBoolean(MainActivity.KEY_NOTIFICATION_ASKED, true).apply()
+        kotlinx.coroutines.delay(1200)   // 让首帧与「欢迎回来」先出来，别抢在同一瞬间
+        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     // 消息中心巡检：回到前台时按节流（30 分钟）检查一次，有新消息发系统通知，
     // 并把未读数推到全局 state（「我的」页入口红点 + 底栏「我的」图标红点都读它）。
     val messageUnread = com.hnnujw.course.academic.MessageCenterManager.unread
     LaunchedEffect(currentAccountStorageKey, foreground, isDemoMode) {
         if (isDemoMode || !foreground || currentAccountStorageKey.isBlank()) return@LaunchedEffect
         com.hnnujw.course.academic.MessageCenterManager.refreshUnreadFromCache(context, currentAccountStorageKey)
+        // 权限没开时，下面的巡检只会更新红点：系统通知一条都发不出去。
+        // 明确说一次，免得用户以为「没消息」。
+        if (!permissionHintShown && !MainActivity.notificationsAllowed(context) &&
+            com.hnnujw.course.academic.MessageCenterManager.unread > 0) {
+            permissionHintShown = true
+            com.hnnujw.course.ui.system.GlassToaster.show("有未读消息，但通知权限未开启，无法提醒你")
+        }
         val user = UserManager.getInstance()
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             com.hnnujw.course.academic.MessageCenterNotifier.check(

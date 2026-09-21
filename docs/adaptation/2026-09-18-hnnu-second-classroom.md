@@ -245,3 +245,52 @@ App 只调用上表里的查询接口，**没有任何写接口**。第二课堂
 2. 用 `POST /token` 试出该平台的 `schoolCode`（编号错会回 `10007`，能快速二分）。
 3. 在 `UserManager` 里给对应学校补 `secondClassroomBaseUrl` / `secondClassroomSchoolCode`。
 4. 若该校 `level` 取值或字段名与本文不同，改 `SecondClassRankLevel` 与客户端解析即可。
+
+---
+
+## 7. 活动模块（2026-09-21 补充评估）
+
+完整可行性评估见 `docs/design/2026-09-21-second-classroom-activity-module-feasibility.md`。
+要点：
+
+- 活动模块**确实存在且可用**，与现有只读集成同源（同 baseUrl / token / `params` 一层编码）。
+- 实测通过：`POST /token`、`GET /dict/activity/classify/list`（7 分类）、
+  `GET /activity/list`（`total=34`）、`GET /activity/detail/participant?id=`、
+  `GET /activity/material/list`、`POST /activity/sign/one/list`。
+- 报名契约：`POST /activity/enroll/person {id, personMaterial:[{key,filedValue,filedValueTitle}]}`，
+  字段定义来自 `/activity/material/list`（返回空数组时传 `[]`）。
+- **签到不可全做**：学生侧只有 `/activity/sign/one/list`（查记录）与 `/activity/sign/repair`（补签申请）；
+  带 `userId` 的 `/activity/sign/in-out` 是**组织者侧**接口。前端活动码为
+  `/?sourceName=<enc>&activityid=<enc>`（学生扫组织者码），详情含 `mapClockForceAddressFlag` /
+  `latitude` / `longitude` → 存在定位打卡形态。
+
+### 7.1 反解 chunk 的注意点
+
+chunk 的 URL 是 `static/js/<chunkId>.<hash>.<buildTimestamp>.js`：
+- `<hash>` 从 `manifest.<hash>.js` 的映射表读；
+- `<buildTimestamp>` **必须带上**（本文 §1 已记），少一段会拿到站点的"无法访问"页，
+  看起来像被 WAF 拦了，其实是路径不对；
+- 活动相关 chunk（本校 2026-09-21 的构建）：`133`=活动列表、`43`=活动详情/报名、
+  `28`=参与者视角详情、`67`/`86`=团队、`146`=取消报名审核。
+
+---
+
+## 8. 已知坑：间歇性 302 会让 POST 降级成 GET（**待修**）
+
+不带端口请求 API 时，网关有时会回：
+
+```
+302 Location: https://ekta.hnnu.edu.cn:443/api/app/client/v1/token
+```
+
+实测同一 URL 连打三次得 `302 / 302 / 200` —— **不是必现，是多节点 / 网关行为**。
+
+**为什么伤人**：`SecondClassroomClient.defaultClient()` 没有设 `followRedirects(false)`，
+OkHttp 默认跟随重定向，而对 301 / 302 / 303 会**把 POST 降级为 GET 并丢掉 body**；
+服务端收到 GET `/token` 回 `405 Request method 'GET' not supported`，
+用户看到的就是一句"第二课堂登录失败"，且几乎无法复现。
+
+修法（任选或叠加）：
+1. `defaultClient()` 显式 `followRedirects(false)`，自己处理 3xx（把 302 当"换地址重发"，不让 OkHttp 改写方法）；
+2. baseUrl 直接写显式端口 `https://ekta.hnnu.edu.cn:443/api/app/client/v1`；
+3. `/token` 增加"遇到 302 / 405 就重发一次"的兜底。
