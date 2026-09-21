@@ -4,6 +4,72 @@
 > 自 1.0.68 起，每个版本的更新日志以 `release-notes/vX.Y.Z.md` 为唯一数据源，由 CI 扇出到本文件、GitHub Release 与应用内更新提示。
 > 1.0.67 未发布：该 tag 的流水线在版本号校验步骤失败，未产出任何 Release，内容顺延至 1.0.68。
 
+## [1.2.3] - 2026-09-22
+
+### 新增
+
+- 第二课堂活动中心（活动列表 / 详情 / 报名 / 取消 / 我的活动 / 活动通知）：搜索、分类筛选、排序、分页加载；报名支持自定义字段表单，取消需确认；详情页带名额进度与附件区。
+- 第二课堂「已报」顶部学时汇总卡：已获得学时（`grantHours` 优先、缺省回退活动标称学时）与已报名数量，直接在已加载的活动清单上求和，不额外请求接口；还有下一页时附一行说明，避免把"已加载部分"当成终值。
+- 「我的」页新增「通知提醒」状态行：显示系统通知权限是否开启，关闭时点一下直达系统通知设置页（Android 13+）。
+- 扫码签到与「我的签到码」：zxing 扫码 + 签到安全闸门（未报名、代他人、扫自己的等待码均拦截并说明原因），签到码二维码本地生成。
+- 内置附件查看器（DocumentViewerActivity）：Word（docx 标题/段落/列表/表格/图片/分页）、Excel（多工作表、冻结表头、点击单元格看全文）、PDF（PdfRenderer + 双击缩放）、图片（捏合缩放 + EXIF 方向）、文本（BOM/UTF-8/GBK 自动识别）；魔数嗅探 + 扩展名兜底，独立下载器限 25MB，支持系统分享与外部打开。
+- 课表 Excel 导出：与既有日历导出并列的格式选择弹窗；`SpreadsheetWriter` 纯 JDK 手拼最小 OOXML 包（inlineStr + 加粗表头），导出列：课程名称 / 教师 / 地点 / 星期 / 开始节次 / 结束节次 / 周次。
+- 课表 Excel 导入：SAF 选文件 → 按表头名识别列（顺序无关，支持「星期一」「周1」「Sunday」等写法与「1-16周」「1,3,5」「2-8双」等周次格式），无表头时按导出格式按位置取列；导入落自定义课程并登记提醒记录，重复课程跳过，成功后自动关闭设置页展示结果。
+- 成绩 Excel 导出：原 CSV 导出升级为 xlsx（SpreadsheetWriter），表头加粗，Excel/WPS 直接打开。
+- 第二课堂初始密码自动登录：无凭据时先用默认密码（学号 + &Zhtx）静默登录并落库；被拒（改过密码）时自动拉起登录框，输入框预填初始密码。
+- 扫码 / 剪贴板深链：`qutuo://` 码与 `ekta.hnnu.edu.cn` 活动链接（含 hash 路由）在 Activity intent 与剪贴板两个入口统一解析，确认后直达活动详情或签到；扫到活动码直接打开对应活动详情页，不再被签到闸门拦下。
+- 消息中心一键已读：顶栏在有未读时显示「一键已读」按钮，全部标为已读并即时清除红点；本地已读状态在刷新后与服务端结果合并保留（单条已读同样受益）。
+- 手机号短信登录：登录页新增入口，内嵌浏览器打开学校统一身份认证（xxmh CAS，手机号+短信验证码/账号密码），登录成功后自动合并 CAS 域与教务 SSO 域名的 Cookie 并验证进主界面，无需手动复制。
+- 名额报满与截止提示：列表卡片名额满时显示「已满」标记；详情页按状态显示禁用态的「报名人数已满」「报名已截止」「报名未开始」，代替直接报错。
+- 活动封面：活动卡片与详情页用 Coil 加载活动 `logo` 封面（相对路径自动拼到二课站点源站）。
+- 相册识别二维码：活动中心顶栏新增「从相册识别」入口，选图后本地解码（大图采样防 OOM、EXIF 摆正、四个方向各试一次），与相机扫码走同一条签到/深链处理链路。
+- 首次进入主界面统一申请通知权限（Android 13+）：此前只有课表提醒、抢课两处流程会申请，从不开这些流程的用户，成绩发布 / 站内消息 / 考前提醒三类推送会静默失效。拒绝后不再打扰，改由「我的 → 通知提醒」引导。
+
+### 变更
+
+- 第二课堂成绩单（表头 / 综测附加分 / 模块情况）与排行榜成为二课页的第 4 个 Tab，位于「消息」右边；「我的」页原「第二课堂成绩单」入口与 `secondClassSubtitle` 一并删除（二课 Tab 保留活动中心）。成绩单按需加载：不点开该 Tab 就不拉概览与榜单，宿主的会话/快照通过 `transcriptContent` 注入，活动中心不必认识二课的成绩单链路。
+- 活动中心列表层的「空」不再吞掉失败：新增 `needBind` 状态与 `ListFailureState`，凭据缺失/失效显示「去绑定」（通达宿主登录弹窗），请求失败显示「重试」；带 `hostRevision` 参数，宿主登录成功后自动重新拉取，不会停在「尚未绑定第二课堂」上。
+- 活动中心第 2 个 Tab 由「我的」更名为「已报」（`TABS` 字面量），与页内实际内容一致：那一栏装的就是自己报名的活动；改名只动标签文案，Tab 下标与分段逻辑不变。
+- 活动列表剔除「报名已截止」的活动：`SecondClassActivity` 新增 `enrollmentEndedOf(now)`（只认 `enrollEndTime`，缺省 0 视为不限期；**还没开始报名**的活动仍保留，详情页会显示禁用的「报名未开始」），`ActivityTab` 在本地筛选之前先 partition 掉已截止项，并在列表状态行与空态文案里说明隐藏条数。全部被过滤干净但 `hasMore` 为真时，空态额外给出「继续加载」按钮 —— 否则用户会卡在一张既没有内容、又没有触发下一页入口的空页上。
+- 活动中心「已报」Tab 在「成绩单」迁出后补上学时汇总卡；列表为空且存在错误时优先展示失败态。
+- 「本院系可报」筛选改按活动的**院系列表**判定：`SecondClassActivity` 新增 `collegeLimit`（`"0"`/空 = 不限院系，否则逗号分隔的院系 id）与纯函数 `enrollableForCollege(myCollegeId)`，`ActivityTab` 的判据由 `isAbleEnroll` 换成它。原先用的 `isAbleEnroll` 是服务端的**复合**判定（院系 ∧ 年级 ∧ 诚信分 ∧ 名额 ∧ 时间），2026-09-21 用真实账号只读对照发现：`collegeLimit="0"` 的活动里既有 `isAbleEnroll=1` 也有 `0`，用它当院系筛选会把「对全校开放、只是名额已满或年级不符」的活动整片误杀。本人院系 id 来自二课 `/student/achievement/detail` 的 `user.collegeId`（`SecondClassProfile` 新增 `collegeId`），**只在用户打开这枚开关时才拉一次**（`ensureCollegeInfo`，不常驻请求）；取不到时 `myCollegeId = 0` 一律放行，宁可多显示也不把列表筛空。筛选弹窗副标题会带上院系名，取不到时明确写出来，避免用户以为开关坏了。
+- 「我的」页页头第二行由校名改为「院系 · 专业」：`SettingsScreen` / `SettingsHeader` 的参数 `school` 更名 `affiliation`，新增 `collegeName` / `majorName` 两个入参，`SettingsRoute` 在**已绑定二课时**拉一次 `profile` 填充（切账号跟随 `session.token` 重拉并先清空，避免上一个账号的院系留在表头）；两处都为空时回退显示校名。
+- 登录页删除「体验只读演示模式」入口：`LoginScreen` 去掉 `onDemoMode` 参数与那个 `TextButton`，`LoginActivity` 同步删掉 `onDemoMode` 接线与 `handleDemoMode()` 方法。`BuildConfig.UI_PREVIEW` 的设计预览分支与 `UserManager` 的演示态防御性判定保留（前者是排版预览用，后者是运行时兜底）。
+- 活动中心链路补日志（TAG `SecondClassActivity`）：第 1 页拉取条数 / `hasMore` / 关键词有无 / 分类，拉取失败；本地筛选的「原始 → 剔除已截止 → 显示」三段计数与两个开关状态、`collegeId`；本人院系的取到 / 跳过（未绑定）/ 失败。全部只记条数、布尔与 id，不落密码与 Set-Cookie。
+- 用户手册从 WebView + HTML 改为原生 Compose 渲染：`scripts/build_manual.py` 现在把 `用户手册.md` 解析成结构化 JSON（`assets/users_manual.json`：章节 / 段落 / 有序无序列表含子项 / 表格 / 引用块 / 行内粗体斜体代码链接），由 `ui/screen/UserManualScreen.kt` 渲染，自带全文搜索与可跳转目录，排版跟随应用主题。随之删除 `assets/users_manual.html`、`ManualActivity` 的 WebView 与 `settings.javaScriptEnabled`，`scripts/publish.py` 的 `REQUIRED_ASSETS` 改为校验 `users_manual.json`。
+- 移除开源版永久不可达的激活页死路径：`ActivationManager.checkActivation` 是硬编码 `return true`，`MainActivity` 里 `activationState == 1 → ActivationScreen` 分支永远不会进入，删除 `ActivationScreen.kt`（233 行）与 `MainActivity` 的 `activationState` 状态机；`checkActivation` 保留一次调用只为落盘设备 ID（「我的」页要显示）。手册同步去掉「设备授权页」一节，并写明永久免费、无需激活。
+- 移除活动中心「签到记录」标签页与相关数据加载，只保留扫码签到；活动详情签到区不再展示历史记录列表。
+- 成绩页三个 Tab 的失败态补上「重试」按钮（原本文案只说"点击刷新获取最新成绩"，得让用户自己意识到要去点右上角）。
+- 消息中心的加载态收敛为 `SystemLoadingState`（带文案的玻璃转圈），替掉两处裸 `CircularProgressIndicator`；「一键已读」补上完成提示，与二课消息页同一句反馈。
+- 附件 MIME 映射改为纯映射表（MimeTypeMap 在 JVM 单测不可用）。
+
+### 修复
+
+- 教务签名防盗校验（`network/CourseApiClient.java`）不再破坏请求：原先哨兵判定签名非法时会往 `xsxk` / `xkoper` / `kbcx` 的 POST 里塞假 Cookie（`cracked_by_yellow_cow_blocked`）并 `sleep` 3–8 秒，等于让任何重签名构建零报错地丢掉选课与课表。改为只写一行告警日志，请求按原样发出且不再人为延时（该分支当前恒为放行：`AUTHORIZED_SIGNATURE_HASH` 未填）。
+- 清除缓存此前是空实现：`SettingsRoute` 的确认弹窗只关掉自己，课表 / 成绩 / 消息缓存与 `schedule_cache` 分毫未动。现在依次调用 `CourseCacheManager.clearCache`、`GradesCacheManager.clearAccount`、`MessageCenterManager.clearCache`、清 `schedule_cache` prefs，并 `PageDataClearSignal.bump()` 让内存中的页面数据一起作废。
+- 删除账号未清干净：补上成绩缓存、消息缓存与二课 token / 密码（`SecondClassroomStore.clearAccount`）。
+- 考试提醒的闹钟会跨账号误删：`ExamReminderScheduler` 的计划表按 `examId` 摘要去重、`reconcile` / `clearAll` 无视账号，切换账号会把上一个账号的考前提醒一起 `cancel`。现在 `Plan` 自带 `account` 字段、`examId` 把账号算进摘要，`reconcile` / `clearAll` 只动本账号；无 `account` 的历史计划按当前账号归属。
+- 消息播报基线跨账号互相覆盖：`MessageCenterNotifier.reset` 原先 `.clear()` 整个 prefs 文件，改为只删本账号的 `notifiedKey` / `lastCheckKey`。
+- 短信登录（CAS）第二步会带上一个账号的会话：`CasPhoneLoginClient` 是 object 单例，CAS 的 `execution` 是一次性的，提交回 `/cas/login` 之后没有再置位，换账号时旧会话被复用。新增 `sessionConsumed` 旗标与 `reset()`，提交后置位、下次 `ensureSession()` 清 Cookie 重开；同一轮"发短信 → 提交验证码"仍复用同一 SESSION。
+- 成绩页缓存命中时学期 Tab 恒空：缓存分支（`revision == 0 && reportLoaded`）没有选中默认学期，`semester` 为空串时选栏空白。现在会在缓存学期列表里补选第一个可用项。
+- 账号/密码里含 `-` 时短信登录会把消息切错：`message.split("-")` 未限长，改为 `split("-", limit = 3)`。
+- 协程取消被当成业务失败：`MessageCenterManager` 的 `load` / `loadDetail`、`CasPhoneLoginClient` 的请求与 `SecondClassroomRoute` 的加载在 `catch (Exception)` 前补 `catch (e: CancellationException) { throw e }`，页面切走时不再把取消当"加载失败"写进状态、也不再弹登录框。
+- 抢课服务的队列快照在账号 key 为空时刚写就被抹掉：`saveServiceQueueSnapshot` / `saveServiceTargetCourseSnapshot` 改为仅在 `scopedKey` 非空时删除裸 key 分支。
+- 活动详情「已驳回」误显示：未报名的活动此前会被服务端回成驳回态（无驳回原因），现在只有驳回原因非空时才采信驳回状态；报名状态改为 participant / non-member 双端点合并判定。
+- 报名按钮条件放宽：报名时间不限（endTime 为 0）时也显示报名按钮；报名未开始时显示禁用的「报名未开始」。
+- zxing 相机扫码页锁定竖屏（Manifest 覆盖库声明的方向）。
+- 列表页顶栏扫码签到成功无反馈的问题。
+- 相册识别二维码此前**任何图都识别不出来**：`decodeQrFromImage` 量尺寸那一步写成 `openInputStream(uri)?.use { decodeStream(...) } ?: return null`，而 `inJustDecodeBounds = true` 时 `decodeStream` 按契约【必然返回 null】，elvis 命中的是它的 null 而不是"流没打开"，于是每张图都在真正解码前直接返回 null，用户只会看到"图片里没有识别到二维码，换一张试试"。改为先判流是否打开、再用 `use` 跑量尺寸，与 `WallpaperCropStore` / `WallpaperImageStore` 的正确写法对齐（同一个坑本仓库第三次踩，前两处都留了注释）。
+- 相册识别二维码的解码循环顺带做了防御性收口（**不是修某个已知现象**）：`MultiFormatReader.decodeInternal` 内部已经把 `ReaderException`（含 `ChecksumException` / `FormatException`）吞掉并统一抛 `NotFoundException`，所以原来的 `catch (NotFoundException)` 行为上是对的；改为 `catch (ReaderException)` 只是少依赖一层库内部实现。真正顺手治掉的是 `decodeWithState`（平台类型）返回 null 时 `.text` 会 NPE 并打断整轮"4 方向 × 3 种二值化"穷举 —— 现在按失败处理、继续试下一种。
+- WordDocument 解析 docx 时忽略标签命名空间前缀（`w:body` 之前按全名匹配导致正文判空）；分页符段落（仅含 w:br）不再被误判为普通段落。
+- 附件查看器改用 File.readBytes() 替代 java.nio.file.Files（API 26+，minSdk 24 会 NoClassDefFoundError）。
+- 课表 Excel 无表头导入的列映射键错误（导出用例回归覆盖）。
+
+### 测试
+
+- 新增 `UserManualTest`（12 例）：校验 `assets/users_manual.json` 可解析、章节数与 `用户手册.md` 的 h2 对账、块类型齐全（段落 / 小节 / 有序无序列表 / 表格 / 引用）、列表子项保留、行内记号被消费干净、无空块、搜索命中摘要含关键词且大小写不敏感、坏 JSON 与缺字段不崩。手册改成原生渲染后解析层是新增的失败面，且失败时"页面照常渲染、只是内容缺一块"，必须有测试盯住。
+- 新增 `ImageDecodeElvisGuardTest`（2 例，源码级护栏）：`inJustDecodeBounds` 那个变量参与的解码调用不得进 elvis（判据取变量名，不误伤传 `options` 的真解码），外加一条断言 `QrImageDecoder.kt` 仍同时具备量尺寸与带 `inSampleSize` 的真解码两步。之所以守住"写法"而非行为：`decodeStream` 需要 Android `Bitmap`，纯 JVM 单测跑不起来，而这个坑在本仓库已经踩了三次。
+
 ## [1.2.2] - 2026-09-20
 
 ### 新增
