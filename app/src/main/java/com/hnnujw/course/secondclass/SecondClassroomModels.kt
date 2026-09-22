@@ -146,3 +146,101 @@ class SecondClassException(
     message: String,
     val sessionExpired: Boolean = false,
 ) : Exception(message)
+
+// ── 奖励申报（/service/declare，1.2.5）──────────────────────────────────
+
+/**
+ * 申报项目（未申报列表项，`/project/home/page/list`）。
+ *
+ * 站点每行展示：项目名 + 所属模块（classifyName）+ 「共 N 个奖项」，
+ * 点「立即申请」进入填报页。
+ */
+data class SecondClassDeclareProject(
+    val id: Int,
+    val name: String,
+    val classifyId: String = "",
+    val classifyName: String = "",
+    /** 该项目下可选的奖项（档位）数量。 */
+    val optionsCount: Int = 0,
+    /** 申报限制类型（`projectLimitType.name`：必修 / 选修…）。 */
+    val limitTypeName: String = "",
+    /** 状态：站点行内按钮据此显示「立即申请」或「已截止」。 */
+    val status: Int = 0,
+    /** 截止时的说明（站点 confirm 弹窗里给用户看的那句）。 */
+    val closeApplyRemark: String = "",
+) {
+    /** 稳定的列表 key。 */
+    val identity: String get() = id.toString()
+
+    /** true = 站点标了「已截止」（status == 2，与 chunk26 的判定一致）。 */
+    val closed: Boolean get() = status == 2
+}
+
+/** 申报项目下的一个奖项（档位），`/project/detail/info` 的 `optionList` 项。 */
+data class SecondClassDeclareOption(
+    val id: Int,
+    val name: String,
+    /** 认定学时。 */
+    val hours: Double = 0.0,
+    /**
+     * 申请次数限制标识：0 = 不限；1 = 本学期已满；2 = 本学年已满。
+     * 站点选中该项时直接 toast「本学期申请已达最大次数」—— 这里照搬该判定。
+     */
+    val awardsValid: Int = 0,
+) {
+    val label: String get() = buildString {
+        append(name)
+        if (hours > 0) append("（").append(hours).append("学时）")
+    }
+}
+
+/** 申报项目详情（`/project/detail/info`）。 */
+data class SecondClassDeclareProjectDetail(
+    val id: Int,
+    val name: String,
+    /** 填写说明（站点「填写说明」弹窗的内容）。 */
+    val explains: String = "",
+    val options: List<SecondClassDeclareOption> = emptyList(),
+) {
+    val optionLabel: String get() = if (options.isEmpty()) "无" else options.size.toString()
+}
+
+/** 已上传的证明材料（提交载荷 `subData.urls[]` 的一项，字段与站点完全一致）。 */
+data class SecondClassDeclareMaterial(
+    val url: String,
+    val name: String,
+    val size: Long = 0,
+    /** 站点的类型码：1 图片 / 3 文档 / 4 表格 / 5 PDF / 6 其它。 */
+    val type: Int = 1,
+) {
+    fun toJson(): org.json.JSONObject = org.json.JSONObject()
+        .put("id", 0)
+        .put("url", url)
+        .put("name", name)
+        .put("size", size)
+        .put("type", type)
+}
+
+/** 申报项目列表的一页（`/project/home/page/list` 的 `data`）。 */
+data class SecondClassDeclarePage(
+    val items: List<SecondClassDeclareProject> = emptyList(),
+    val hasMore: Boolean = false,
+)
+
+/** 一次申报提交的载荷（`POST /project/apply/add_3_0_1` 的 `subData`）。 */
+data class SecondClassDeclareSubmission(
+    val projectId: Int,
+    /** 选中的奖项（档位）id。 */
+    val optionId: Int,
+    /** 项目开始日期（epoch 毫秒，站点传 `new Date(...).getTime()`）。 */
+    val startTime: Long,
+    /** 项目结束日期（epoch 毫秒）。 */
+    val endTime: Long,
+    /** 总结报告。 */
+    val report: String,
+    /** 关联活动（可选；站点默认 null）。 */
+    val relateActivityId: Int? = null,
+    val relateActivityName: String = "",
+    /** 证明材料（站点校验：必须至少 1 份）。 */
+    val materials: List<SecondClassDeclareMaterial> = emptyList(),
+)

@@ -7,6 +7,7 @@ import okhttp3.Callback
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
@@ -34,10 +35,22 @@ import kotlin.coroutines.resumeWithException
  *   但 `data` 完全正常。所以这里只按 HTTP 状态判成败，**绝不拿 errcode 判失败**
  *   （否则用户会看到"加载失败"，其实数据就在响应里）。
  *
- * ## 只读边界
+ * ## 提交边界（1.2.5 起）
  *
- * 本客户端**只有查询方法**，没有任何提交/删除入口：请假与去向登记一律回到
- * 学工系统官方页面操作（用户明确要求不代填、不代提交）。
+ * 提供两条**与官方 H5 完全同形**的提交链路：日常请假（`/DailyLeave/SaveForm`）
+ * 与节假日去向登记（`/HolidayWhereabouts/SaveForm`）。实现照抄 H5 表单页
+ * （`chunk-808c1020` / `chunk-3ab3b4f5`）的序列化：
+ *
+ * - 表单骨架先从 `GET /DailyLeave/Get?isExam=false&id=` /
+ *   `GET /HolidayWhereabouts/Get?configId=&id=` 拿（字典、默认值、附件上传地址都在里面），
+ *   提交时把用户改过的 `ApplyInfo` **原样回传**（qs 嵌套形式 `ApplyInfo[Key]=value`）——
+ *   不猜字段名、不臆造默认值，服务端给的键原样送回去。
+ * - 请假附件走 `POST {UpFilePath}`（multipart，字段名 `bytes`），
+ *   成功判据 `et == "1"`，url 取 `data.split("|")[0]`。
+ * - 成败判定：SaveForm 的 `errcode`（H5 就这么判的）；上传的 `et`。
+ *   查询接口仍然只按 HTTP 状态判（见上）。
+ *
+ * **其余写入口一律没有**：销假、审批、撤销等操作不在本客户端里出现。
  */
 class XuegongClient(
     baseUrl: String = BASE_URL,
@@ -117,6 +130,141 @@ class XuegongClient(
             batches = json.optJSONArray("Config").mapObjects { it.toHolidayBatch() },
             collegeLabel = json.pick("CollegeAsName").ifBlank { "院系" },
         )
+    }
+
+    // ── 表单（请假 / 去向登记的提交链路）──────────────────────────────────
+
+    /**
+     * 拉取「日常请假」表单骨架。
+     *
+     * 响应即 H5 表单页的整份状态：`ApplyInfo`（默认值，含 IsEdit / IsOut 等）、
+     * `LeaveReason` / `OutGoVehicle` / `OutBackVehicle`（`{values:[{text,value}], defaultIndex}` 形态的字典）、
+     * `FileList`、`SetInfo`、`Term`、`UpFilePath`（附件上传地址）等。
+     *
+     * @param id 空 = 新建请假；非空 = 修改已有请假（H5 的编辑入口带 Id）。
+     */
+    suspend fun dailyLeaveForm(token: String, id: String = ""): JSONObject =
+        request(base + "/DailyLeave/Get?isExam=false&id=" + id, null, token)
+
+    /**
+     * 拉取「节假日去向登记」表单骨架。
+     *
+     * 响应形状与请假同构：`Config`（批次时间）、`ApplyInfo`（默认值）、
+     * `OutGoVehicle`（交通字典）等。
+     */
+    suspend fun whereaboutsForm(token: String, configId: String, id: String = ""): JSONObject =
+        request(base + "/HolidayWhereabouts/Get?configId=" + configId + "&id=" + id, null, token)
+
+    /**
+     * 上传请假附件。H5 的实现（`ve` 函数）：multipart，字段名**就是 `bytes`**，
+     * 成功判据 `et === "1"`，url 取 `data.split("|")[0]`。
+     *
+     * @param upFilePath 表单骨架里的 `UpFilePath`（相对路径或完整 URL，两种都接）。
+     * @return 图片 url（可直接填进 `FileList.Imgs[].url`）。
+     */
+    suspend fun uploadLeaveAttachment(
+        token: String,
+        upFilePath: String,
+        bytes: ByteArray,
+        fileName: String,
+    ): String {
+        val trimmed = upFilePath.trim()
+        if (trimmed.isBlank()) throw XuegongException("学工系统没有给出附件上传地址，请稍后重试")
+        val url = when {
+            trimmed.startsWith("http") -> trimmed
+            else -> "$base/" + trimmed.trimStart('/')
+        }
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("bytes", fileName, bytes.toRequestBody(null))
+            .build()
+        val json = request(url, body, token)
+        // 成功判据照 H5：et == "1"。et 不是 1 时 msg 里带原因（如文件类型不允许）。
+        if (json.pick("et") != "1") {
+            throw XuegongException(json.pick("msg").ifBlank { "附件上传失败，请重试" })
+        }
+        // data 形如 "url|其它信息"，与 H5 一致只取竖线前的 url
+        return json.pick("data").substringBefore("|").trim()
+    }
+
+    /**
+     * 提交日常请假。`applyInfo` 与 `fileList` 都来自 [dailyLeaveForm] 的响应
+     * （`fileList` 传 null 时按空对象处理），用户改过若干字段后**原样回传** ——
+     * 不要自己 new 一个空的：服务端默认值只在 GET 里下发。
+     *
+     * `imgs` 是已上传的附件（url → 备注名），与 H5 一致写进 `FileList.Imgs`。
+     * 成败照 H5 判 `errcode`：0 = 成功，否则把 `errmsg` 原样抛给用户。
+     */
+    suspend fun saveDailyLeave(
+        token: String,
+        applyInfo: JSONObject,
+        fileList: JSONObject? = null,
+        imgs: List<Pair<String, String>> = emptyList(),
+    ) {
+        val list = (fileList ?: JSONObject()).let { JSONObject(it.toString()) }
+        val imgArray = list.optJSONArray("Imgs") ?: JSONArray()
+        imgs.forEach { (url, name) ->
+            imgArray.put(JSONObject().put("url", url).put("AddressName", name))
+        }
+        list.put("Imgs", imgArray)
+
+        val payload = JSONObject()
+            .put("ApplyInfo", applyInfo)
+            .put("FileList", list)
+        val body = qsFormBody(payload)
+        val json = request(base + "/DailyLeave/SaveForm", body, token)
+        if (json.optInt("errcode", -1) != 0) {
+            throw XuegongException(json.pick("errmsg").ifBlank { "提交失败，请稍后重试" })
+        }
+    }
+
+    /**
+     * 提交节假日去向登记。与请假同一条回传策略：`applyInfo` 来自
+     * [whereaboutsForm] 的响应，用户改完字段后原样回传（qs 形式 `model[Key]=value`）。
+     */
+    suspend fun saveWhereabouts(token: String, applyInfo: JSONObject) {
+        val body = qsFormBody(JSONObject().put("model", applyInfo))
+        val json = request(base + "/HolidayWhereabouts/SaveForm", body, token)
+        if (json.optInt("errcode", -1) != 0) {
+            throw XuegongException(json.pick("errmsg").ifBlank { "提交失败，请稍后重试" })
+        }
+    }
+
+    /**
+     * 把嵌套 JSON 拍平成 H5 `$qs.stringify` 的形态：
+     * `{ApplyInfo:{A:1}}` → `ApplyInfo[A]=1`；数组带下标 `FileList[Imgs][0][url]=…`。
+     *
+     * 站点后端（ASP.NET）对 `Parent[Key]` 与 `Parent.Key` 两种绑定都认，但这里必须与
+     * H5 完全一致 —— 服务端除了模型绑定还会按原样的键做校验。
+     */
+    private fun qsFormBody(payload: JSONObject): RequestBody {
+        val builder = FormBody.Builder()
+        flattenQs(payload, null, builder)
+        return builder.build()
+    }
+
+    private fun flattenQs(node: Any?, prefix: String?, builder: FormBody.Builder) {
+        when (node) {
+            is JSONObject -> {
+                val keys = node.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    flattenQs(node.opt(key), prefix?.let { "$it[$key]" } ?: key, builder)
+                }
+            }
+            is JSONArray -> {
+                for (index in 0 until node.length()) {
+                    flattenQs(node.opt(index), "${prefix}[$index]", builder)
+                }
+            }
+            else -> {
+                val key = prefix ?: return
+                builder.add(key, when (node) {
+                    null, JSONObject.NULL -> ""
+                    else -> node.toString()
+                })
+            }
+        }
     }
 
     // ── 解析 ──────────────────────────────────────────────────────────────

@@ -87,6 +87,8 @@ fun SecondClassActivityCenterRoute(
     var feedPage by remember { mutableIntStateOf(1) }
     var myPage by remember { mutableIntStateOf(1) }
     var msgPage by remember { mutableIntStateOf(1) }
+    /** 申报项目列表翻页游标。 */
+    var declarePage by remember { mutableIntStateOf(1) }
     /** 关键词防抖后的真实查询词（输入框每敲一个字就打接口太吵）。 */
     var feedKeyword by remember { mutableStateOf("") }
     /** 已通过安全闸门、等待用户确认的扫码结果。 */
@@ -108,6 +110,10 @@ fun SecondClassActivityCenterRoute(
     val client: SecondClassroomClient? = remember(accountKey) {
         if (isDemo) null else SecondClassroomStore.clientFor(school)
     }
+
+    // ── 申报（/service/declare，1.2.5）────────────────────────────────────
+    /** 「申报 · 填报页」状态；null = 没开。必须先于下面的选图 launcher 声明（局部值不能前向引用）。 */
+    var declareForm by remember { mutableStateOf<com.hnnujw.course.ui.screen.SecondClassDeclareFormUi?>(null) }
 
     /**
      * 列表类请求失败。**不能按「详情是否打开」来分流**：那样详情开着时列表请求失败会把错误
@@ -204,6 +210,60 @@ fun SecondClassActivityCenterRoute(
 
     fun scanFromGallery() {
         galleryScanLauncher.launch("image/*")
+    }
+
+    // ── 申报证明材料选图（/import/upload/image 直传）──────────────────────
+    val declareMaterialLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val c = client ?: return@rememberLauncherForActivityResult
+        if (uri == null) return@rememberLauncherForActivityResult
+        val form = declareForm ?: return@rememberLauncherForActivityResult
+        if (form.uploading || form.submitting) return@rememberLauncherForActivityResult
+        scope.launch(Dispatchers.Main) {
+            declareForm = form.copy(uploading = true, error = "")
+            val token = SecondClassroomStore.token(context, accountKey)
+            if (token.isBlank()) {
+                declareForm = declareForm?.copy(uploading = false, error = "请先绑定第二课堂")
+                return@launch
+            }
+            try {
+                val pair = withContext(Dispatchers.IO) {
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    val name = runCatching {
+                        context.contentResolver.query(
+                            uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null,
+                        )?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                    }.getOrNull() ?: "declare-${System.currentTimeMillis()}.jpg"
+                    val mime = context.contentResolver.getType(uri)
+                    bytes to (name to mime)
+                }
+                val bytes = pair?.first
+                if (bytes == null || bytes.isEmpty()) {
+                    declareForm = declareForm?.copy(uploading = false, error = "读取图片失败，请重试")
+                    return@launch
+                }
+                val (name, mime) = pair.second
+                if (bytes.size > 8 * 1024 * 1024) {
+                    declareForm = declareForm?.copy(uploading = false, error = "图片超过 8M，请压缩后再上传")
+                    return@launch
+                }
+                val url = withContext(Dispatchers.IO) { c.uploadDeclareMaterial(token, bytes, name, mime) }
+                val material = com.hnnujw.course.secondclass.SecondClassDeclareMaterial(
+                    url = url,
+                    name = name,
+                    size = bytes.size.toLong(),
+                    type = 1,
+                )
+                declareForm = declareForm?.copy(
+                    uploading = false,
+                    materials = (declareForm?.materials.orEmpty()) + material,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val message = SecondClassroomStore.handleFailure(context, accountKey, e)
+                declareForm = declareForm?.copy(uploading = false, error = message)
+            }
+        }
     }
 
     // 扫到码（或深链/剪贴板给了一个码）→ 拉详情判权限 → 过安全闸门
@@ -370,11 +430,11 @@ fun SecondClassActivityCenterRoute(
                     ui = ui.copy(myActivities = page.items, myHasMore = page.hasMore, loading = false)
                 }
                 2 -> {
-                    // 「申报」：我的申报记录（只读）。一次拉全，没有翻页
+                    // 「申报」：我的申报记录（已申报页签）。一次拉全，没有翻页
                     ui = ui.copy(loading = ui.applications.isEmpty(), loadMoreError = false)
                     val applications = withContext(Dispatchers.IO) { c.myApplications(token) }
                     ui = ui.copy(applications = applications, loading = false)
-                    // 申报分类只用来渲染顶部说明卡：拉不到不算失败，静默即可
+                    // 分类 + 类型字典：拉不到不算失败，静默即可
                     if (ui.appCategories.isEmpty()) {
                         val categories = try {
                             withContext(Dispatchers.IO) { c.applicationCategories(token) }
@@ -384,6 +444,16 @@ fun SecondClassActivityCenterRoute(
                             emptyList()
                         }
                         if (categories.isNotEmpty()) ui = ui.copy(appCategories = categories)
+                    }
+                    if (ui.declareTypes.isEmpty()) {
+                        val types = try {
+                            withContext(Dispatchers.IO) { c.declareTypes(token) }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                        if (types.isNotEmpty()) ui = ui.copy(declareTypes = types)
                     }
                 }
                 3 -> {
@@ -405,6 +475,40 @@ fun SecondClassActivityCenterRoute(
             throw e
         } catch (e: Exception) {
             failList(e)
+        }
+    }
+
+    // ── 申报项目列表（未申报页签）─────────────────────────────────────────
+    // 关键词作为 key 重启 effect 自带 400ms 防抖：先 delay 再发请求，
+    // 连续按键时旧 effect 直接被取消，不会打请求风暴。
+    LaunchedEffect(
+        accountKey, client, revision, ui.tab, ui.declareSegment,
+        ui.declareCategory, ui.declareClassify, ui.declareSort, ui.keyword,
+    ) {
+        if (isDemo || ui.tab != 2 || ui.declareSegment != 0) return@LaunchedEffect
+        val c = client ?: return@LaunchedEffect
+        val token = SecondClassroomStore.token(context, accountKey)
+        if (token.isBlank()) return@LaunchedEffect
+        delay(400)
+        try {
+            ui = ui.copy(loading = ui.declareProjects.isEmpty(), error = "")
+            val page = withContext(Dispatchers.IO) {
+                c.declareProjects(
+                    token = token,
+                    pageNum = 1,
+                    search = ui.keyword,
+                    sortType = ui.declareSort,
+                    classifyId = ui.declareClassify,
+                    category = ui.declareCategory,
+                )
+            }
+            declarePage = 1
+            ui = ui.copy(declareProjects = page.items, declareHasMore = page.hasMore, loading = false)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "申报项目列表拉取失败：${e.javaClass.simpleName}")
+            ui = ui.copy(loading = false, error = SecondClassroomStore.handleFailure(context, accountKey, e))
         }
     }
 
@@ -506,7 +610,29 @@ fun SecondClassActivityCenterRoute(
                                     loadingMore = false,
                                 )
                             }
-                            // 3 = 消息（2 = 申报，一次拉全，没有翻页）
+                            2 -> {
+                                if (ui.declareSegment == 0) {
+                                    ui = ui.copy(loadingMore = true)
+                                    val nextPage = declarePage + 1
+                                    val page = withContext(Dispatchers.IO) {
+                                        c.declareProjects(
+                                            token = token,
+                                            pageNum = nextPage,
+                                            search = ui.keyword,
+                                            sortType = ui.declareSort,
+                                            classifyId = ui.declareClassify,
+                                            category = ui.declareCategory,
+                                        )
+                                    }
+                                    declarePage = nextPage
+                                    ui = ui.copy(
+                                        declareProjects = (ui.declareProjects + page.items).distinctBy { it.id },
+                                        declareHasMore = page.hasMore,
+                                        loadingMore = false,
+                                    )
+                                }
+                            }
+                            // 3 = 消息
                             3 -> {
                                 ui = ui.copy(loadingMore = true)
                                 val nextPage = msgPage + 1
@@ -529,6 +655,99 @@ fun SecondClassActivityCenterRoute(
         },
         onOpenDetail = { openActivityId.value = it },
         onCloseDetail = { openActivityId.value = null; detail = null },
+        onDeclareFilters = { segment, category, classify, sort ->
+            ui = ui.copy(
+                declareSegment = segment,
+                declareCategory = category,
+                declareClassify = classify,
+                declareSort = sort,
+            )
+        },
+        onDeclareKeyword = { ui = ui.copy(keyword = it) },
+        onOpenDeclareProject = { project ->
+            val c = client ?: return@SecondClassActivityCenterScreen
+            if (project.closed) {
+                GlassToaster.show(project.closeApplyRemark.ifBlank { "该项目申报已截止" })
+                return@SecondClassActivityCenterScreen
+            }
+            declareForm = com.hnnujw.course.ui.screen.SecondClassDeclareFormUi(
+                project = project,
+                loadingDetail = true,
+            )
+            scope.launch {
+                try {
+                    val token = SecondClassroomStore.token(context, accountKey)
+                    val detail = withContext(Dispatchers.IO) { c.declareProjectDetail(token, project.id) }
+                    declareForm = declareForm?.copy(loadingDetail = false, detail = detail)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val message = SecondClassroomStore.handleFailure(context, accountKey, e)
+                    declareForm = declareForm?.copy(loadingDetail = false, error = message)
+                }
+            }
+        },
+        onPickDeclareMaterial = { declareMaterialLauncher.launch("image/*") },
+        onRemoveDeclareMaterial = { url ->
+            declareForm = declareForm?.copy(
+                materials = declareForm?.materials.orEmpty().filterNot { it.url == url },
+            )
+        },
+        onSearchRelateActivity = { keyword ->
+            val c = client ?: return@SecondClassActivityCenterScreen
+            scope.launch {
+                declareForm = declareForm?.copy(relateSearching = true)
+                try {
+                    val token = SecondClassroomStore.token(context, accountKey)
+                    val list = withContext(Dispatchers.IO) { c.searchRelateActivities(token, keyword) }
+                    declareForm = declareForm?.copy(relateSearching = false, relateOptions = list)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val message = SecondClassroomStore.handleFailure(context, accountKey, e)
+                    declareForm = declareForm?.copy(relateSearching = false, relateOptions = emptyList(), error = message)
+                }
+            }
+        },
+        onSubmitDeclare = {
+            val state = declareForm ?: return@SecondClassActivityCenterScreen
+            val c = client ?: return@SecondClassActivityCenterScreen
+            val problem = com.hnnujw.course.ui.screen.declareFormProblem(state)
+            if (problem != null) {
+                declareForm = state.copy(error = problem)
+                return@SecondClassActivityCenterScreen
+            }
+            scope.launch {
+                declareForm = state.copy(submitting = true, error = "")
+                try {
+                    val token = SecondClassroomStore.token(context, accountKey)
+                    withContext(Dispatchers.IO) {
+                        c.submitDeclareApplication(
+                            token,
+                            com.hnnujw.course.secondclass.SecondClassDeclareSubmission(
+                                projectId = state.project.id,
+                                optionId = state.optionId,
+                                startTime = state.startTime,
+                                endTime = state.endTime,
+                                report = state.report,
+                                relateActivityId = state.relateActivity?.id,
+                                relateActivityName = state.relateActivity?.name.orEmpty(),
+                                materials = state.materials,
+                            ),
+                        )
+                    }
+                    declareForm = null
+                    GlassToaster.show("申报已提交，等待审核")
+                    // 刷新「已申报」记录
+                    revision++
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val message = SecondClassroomStore.handleFailure(context, accountKey, e)
+                    declareForm = declareForm?.copy(submitting = false, error = message)
+                }
+            }
+        },
         onEnroll = { answers ->
             val c = client ?: return@SecondClassActivityCenterScreen
             val activityId = openActivityId.value ?: return@SecondClassActivityCenterScreen

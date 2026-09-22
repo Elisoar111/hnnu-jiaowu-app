@@ -2,6 +2,7 @@ package com.hnnujw.course.ui.screen
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,16 +56,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hnnujw.course.manager.UserManager
+import com.hnnujw.course.ui.system.GlassDatePickerDialog
+import com.hnnujw.course.ui.system.GlassDateTimePickerDialog
+import com.hnnujw.course.ui.system.GlassOptionWheelDialog
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassTextField
 import com.hnnujw.course.ui.system.GlassToaster
 import com.hnnujw.course.ui.system.InsetGroupedSection
 import com.hnnujw.course.ui.system.PagePadding
 import com.hnnujw.course.ui.system.SystemCard
+import com.hnnujw.course.ui.system.SystemConfirmDialog
 import com.hnnujw.course.ui.system.SystemEmptyState
 import com.hnnujw.course.ui.system.SystemIconButton
 import com.hnnujw.course.ui.system.SystemLoadingState
 import com.hnnujw.course.ui.system.SystemPrimaryButton
+import com.hnnujw.course.ui.system.SystemSecondaryButton
 import com.hnnujw.course.ui.system.SystemSegmentedControl
 import com.hnnujw.course.ui.system.SystemStatusBadge
 import com.hnnujw.course.ui.system.SystemTone
@@ -75,13 +81,17 @@ import com.hnnujw.course.ui.theme.SemanticDanger
 import com.hnnujw.course.ui.theme.SemanticSuccess
 import com.hnnujw.course.ui.theme.SemanticWarning
 import com.hnnujw.course.ui.theme.moduleEntrance
+import com.hnnujw.course.xuegong.XuegongDictOption
 import com.hnnujw.course.xuegong.XuegongException
 import com.hnnujw.course.xuegong.XuegongHolidayBatch
+import com.hnnujw.course.xuegong.XuegongLeaveDraft
 import com.hnnujw.course.xuegong.XuegongLeavePage
 import com.hnnujw.course.xuegong.XuegongLeaveRecord
 import com.hnnujw.course.xuegong.XuegongStore
+import com.hnnujw.course.xuegong.XuegongWhereaboutsDraft
 import com.hnnujw.course.xuegong.XuegongWhereaboutsPage
 import com.hnnujw.course.xuegong.XuegongWhereaboutsRecord
+import com.hnnujw.course.xuegong.parseSiteTime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -89,10 +99,14 @@ import kotlinx.coroutines.withContext
 /**
  * 学工系统（xg.hnnu.edu.cn）页：日常请假 + 节假日去向登记。
  *
- * ## 只读
+ * ## 查看 + 提交（1.2.5）
  *
- * 本页**只展示**学工系统里已有的记录，不提供任何提交入口 —— 请假与去向登记仍然
- * 回到学工系统官方页面完成。用户明确要求"不代填、不代提交"，所以这里连表单都不做。
+ * 记录照旧**只读展示**；提交链路照官方 H5 表单页同形实现：
+ * 请假（`/DailyLeave/SaveForm`）与去向登记（`/HolidayWhereabouts/SaveForm`）。
+ * 表单骨架从站点 GET 拿（字典 / 默认值 / 附件上传地址都在里面），用户只改
+ * 编辑字段，提交时原样回传 —— 不猜字段名、不臆造默认值。
+ *
+ * **没有**的入口：销假、审批、撤销、删除。这些仍然要去官方页面。
  *
  * ## 登录
  *
@@ -127,7 +141,14 @@ fun XuegongScreen(onBack: () -> Unit) {
     var leaveDetail by remember { mutableStateOf<XuegongLeaveRecord?>(null) }
     var whereaboutsDetail by remember { mutableStateOf<XuegongWhereaboutsRecord?>(null) }
 
-    val detailOpen = leaveDetail != null || whereaboutsDetail != null
+    // ── 提交表单（1.2.5）─────────────────────────────────────────────────
+    /** 正在拉取表单骨架（点「写请假」/ 点开放批次后的一瞬间）。 */
+    var formLoading by remember { mutableStateOf(false) }
+    var leaveForm by remember { mutableStateOf<XuegongLeaveFormUi?>(null) }
+    var whereaboutsForm by remember { mutableStateOf<XuegongWhereaboutsFormUi?>(null) }
+
+    val detailOpen = leaveDetail != null || whereaboutsDetail != null ||
+        leaveForm != null || whereaboutsForm != null
 
     // Kotlin 局部函数不能前向引用：load 必须先于下面所有引用它的地方声明。
     fun load(activeToken: String) {
@@ -151,8 +172,151 @@ fun XuegongScreen(onBack: () -> Unit) {
         }
     }
 
-    fun submitLogin(inputPassword: String, silent: Boolean) {
-        if (studentId.isBlank()) {
+    // ── 表单：打开 / 上传 / 提交 ─────────────────────────────────────────
+    //
+    // 红线：表单骨架、字典、默认值全部来自站点 GET；提交时原样回传。
+    // 这里没有任何"替用户做决定"的字段，也没有任何自动提交 ——
+    // 只有用户点「提交」按钮才会发请求。
+
+    /** 打开「写请假」表单：先拉骨架，再进编辑页。 */
+    fun openLeaveForm() {
+        if (formLoading || token.isBlank()) return
+        formLoading = true
+        scope.launch {
+            try {
+                val client = XuegongStore.client()
+                val form = withContext(Dispatchers.IO) { client.dailyLeaveForm(token) }
+                leaveForm = XuegongLeaveFormUi(draft = XuegongLeaveDraft.of(form), fileList = form.optJSONObject("FileList"))
+            } catch (e: Exception) {
+                loadError = XuegongStore.handleFailure(context, accountKey, e)
+                GlassToaster.show("请假表单加载失败")
+            } finally {
+                formLoading = false
+            }
+        }
+    }
+
+    /** 点开一个去向登记批次：未登记且开放 → 表单；已登记 → 详情；其余由调用方判定。 */
+    fun openWhereaboutsForm(batch: XuegongHolidayBatch) {
+        if (formLoading || token.isBlank()) return
+        formLoading = true
+        scope.launch {
+            try {
+                val client = XuegongStore.client()
+                val form = withContext(Dispatchers.IO) {
+                    client.whereaboutsForm(token, configId = batch.id)
+                }
+                whereaboutsForm = XuegongWhereaboutsFormUi(draft = XuegongWhereaboutsDraft.of(form), batch = batch)
+            } catch (e: Exception) {
+                loadError = XuegongStore.handleFailure(context, accountKey, e)
+                GlassToaster.show("登记表单加载失败")
+            } finally {
+                formLoading = false
+            }
+        }
+    }
+
+    /** 上传请假附件（用户从相册/文件选图后走这里）。 */
+    fun uploadLeaveImage(uri: android.net.Uri) {
+        val state = leaveForm ?: return
+        if (state.uploading || state.submitting) return
+        scope.launch {
+            leaveForm = state.copy(uploading = true, error = "")
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                }
+                if (bytes == null || bytes.isEmpty()) {
+                    leaveForm = state.copy(uploading = false, error = "读取图片失败，请重试")
+                    return@launch
+                }
+                val fileName = withContext(Dispatchers.IO) {
+                    queryDisplayName(context, uri) ?: "leave-${System.currentTimeMillis()}.jpg"
+                }
+                val client = XuegongStore.client()
+                val url = withContext(Dispatchers.IO) {
+                    client.uploadLeaveAttachment(token, state.draft.upFilePath, bytes, fileName)
+                }
+                leaveForm = leaveForm?.copy(
+                    uploading = false,
+                    attachments = (leaveForm?.attachments ?: state.attachments) + (url to fileName),
+                )
+            } catch (e: Exception) {
+                val message = XuegongStore.handleFailure(context, accountKey, e)
+                leaveForm = leaveForm?.copy(uploading = false, error = message)
+            }
+        }
+    }
+
+    fun removeLeaveAttachment(url: String) {
+        val state = leaveForm ?: return
+        leaveForm = state.copy(attachments = state.attachments.filterNot { it.first == url })
+    }
+
+    /** 提交请假。提交前本地校验，通过后走 SaveForm，成功刷新列表。 */
+    fun submitLeave() {
+        val state = leaveForm ?: return
+        if (state.submitting || state.uploading) return
+        val problem = state.draft.validate()
+        if (problem != null) {
+            leaveForm = state.copy(error = problem)
+            return
+        }
+        scope.launch {
+            leaveForm = state.copy(submitting = true, error = "")
+            try {
+                val client = XuegongStore.client()
+                withContext(Dispatchers.IO) {
+                    client.saveDailyLeave(
+                        token = token,
+                        applyInfo = state.draft.toApplyInfo(),
+                        fileList = state.fileList,
+                        imgs = state.attachments,
+                    )
+                }
+                leaveForm = null
+                GlassToaster.show("请假申请已提交")
+                load(token)
+            } catch (e: Exception) {
+                val message = XuegongStore.handleFailure(context, accountKey, e)
+                leaveForm = leaveForm?.copy(submitting = false, error = message)
+            }
+        }
+    }
+
+    fun submitWhereabouts() {
+        val state = whereaboutsForm ?: return
+        if (state.submitting) return
+        val problem = state.draft.validate()
+        if (problem != null) {
+            whereaboutsForm = state.copy(error = problem)
+            return
+        }
+        scope.launch {
+            whereaboutsForm = state.copy(submitting = true, error = "")
+            try {
+                val client = XuegongStore.client()
+                withContext(Dispatchers.IO) {
+                    client.saveWhereabouts(token, state.draft.toApplyInfo())
+                }
+                whereaboutsForm = null
+                GlassToaster.show("去向登记已提交")
+                load(token)
+            } catch (e: Exception) {
+                val message = XuegongStore.handleFailure(context, accountKey, e)
+                whereaboutsForm = whereaboutsForm?.copy(submitting = false, error = message)
+            }
+        }
+    }
+
+    /** 附件选图（相册 / 文件）。选完交给 [uploadLeaveImage]。 */
+    val attachmentLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) uploadLeaveImage(uri)
+    }
+
+    fun submitLogin(inputPassword: String, silent: Boolean) {        if (studentId.isBlank()) {
             loginError = "没有取到教务学号，请先重新登录教务系统"
             return
         }
@@ -199,17 +363,21 @@ fun XuegongScreen(onBack: () -> Unit) {
         title = when {
             leaveDetail != null -> "请假详情"
             whereaboutsDetail != null -> "去向登记详情"
+            leaveForm != null -> "写请假"
+            whereaboutsForm != null -> "去向登记"
             else -> "学工系统"
         },
         subtitle = when {
             detailOpen -> null
             token.isBlank() -> null
-            else -> "只读查看 · 日常请假与节假日去向登记"
+            else -> "日常请假与节假日去向登记"
         },
         onBack = {
             when {
                 leaveDetail != null -> leaveDetail = null
                 whereaboutsDetail != null -> whereaboutsDetail = null
+                leaveForm != null -> if (!(leaveForm?.submitting ?: false)) leaveForm = null
+                whereaboutsForm != null -> if (!(whereaboutsForm?.submitting ?: false)) whereaboutsForm = null
                 else -> onBack()
             }
         },
@@ -235,9 +403,28 @@ fun XuegongScreen(onBack: () -> Unit) {
         ) {
             val leaveDetailSnapshot = leaveDetail
             val whereaboutsDetailSnapshot = whereaboutsDetail
+            val leaveFormSnapshot = leaveForm
+            val whereaboutsFormSnapshot = whereaboutsForm
             when {
                 leaveDetailSnapshot != null -> LeaveDetailView(leaveDetailSnapshot)
                 whereaboutsDetailSnapshot != null -> WhereaboutsDetailView(whereaboutsDetailSnapshot)
+                leaveFormSnapshot != null -> LeaveFormView(
+                    state = leaveFormSnapshot,
+                    onDraft = { leaveForm = leaveForm?.copy(draft = it) },
+                    error = leaveFormSnapshot.error,
+                    uploading = leaveFormSnapshot.uploading,
+                    submitting = leaveFormSnapshot.submitting,
+                    onPickAttachment = { attachmentLauncher.launch("image/*") },
+                    onRemoveAttachment = ::removeLeaveAttachment,
+                    onSubmit = { submitLeave() },
+                )
+                whereaboutsFormSnapshot != null -> WhereaboutsFormView(
+                    state = whereaboutsFormSnapshot,
+                    onDraft = { whereaboutsForm = whereaboutsForm?.copy(draft = it) },
+                    error = whereaboutsFormSnapshot.error,
+                    submitting = whereaboutsFormSnapshot.submitting,
+                    onSubmit = { submitWhereabouts() },
+                )
 
                 token.isBlank() -> LoginView(
                     studentId = studentId,
@@ -293,9 +480,30 @@ fun XuegongScreen(onBack: () -> Unit) {
                         InlineWarning(loadError)
                     }
                     if (tab == 0) {
-                        LeaveTab(leavePage) { leaveDetail = it }
+                        LeaveTab(
+                            page = leavePage,
+                            formLoading = formLoading,
+                            onOpen = { leaveDetail = it },
+                            onWriteLeave = { openLeaveForm() },
+                        )
                     } else {
-                        WhereaboutsTab(whereaboutsPage) { whereaboutsDetail = it }
+                        WhereaboutsTab(
+                            page = whereaboutsPage,
+                            formLoading = formLoading,
+                            onOpen = { whereaboutsDetail = it },
+                            onOpenBatch = { batch ->
+                                // 单列表：已登记 → 看详情；开放中 → 填表提交
+                                val record = whereaboutsPage?.page?.items?.firstOrNull { record ->
+                                    (record.holidayId.isNotBlank() && record.holidayId == batch.id) ||
+                                        record.holidayName == batch.name
+                                }
+                                when {
+                                    record != null -> whereaboutsDetail = record
+                                    batch.open -> openWhereaboutsForm(batch)
+                                    else -> GlassToaster.show("该批次暂未开放登记")
+                                }
+                            },
+                        )
                     }
                     ReadOnlyNotice()
                     Spacer(Modifier.height(8.dp))
@@ -590,7 +798,12 @@ private fun LoginView(
 // ── 日常请假 ────────────────────────────────────────────────────────────
 
 @Composable
-private fun LeaveTab(page: XuegongLeavePage?, onOpen: (XuegongLeaveRecord) -> Unit) {
+private fun LeaveTab(
+    page: XuegongLeavePage?,
+    formLoading: Boolean,
+    onOpen: (XuegongLeaveRecord) -> Unit,
+    onWriteLeave: () -> Unit,
+) {
     if (page == null) {
         SystemEmptyState(title = "暂无数据", message = "没有读到请假记录。")
         return
@@ -601,12 +814,14 @@ private fun LeaveTab(page: XuegongLeavePage?, onOpen: (XuegongLeaveRecord) -> Un
             actionText = page.applyButtonText,
             blockedReason = page.applyBlockedReason,
             locationRequired = page.locationRule.required,
-            rangeDistance = page.locationRule.rangeDistance
+            rangeDistance = page.locationRule.rangeDistance,
+            formLoading = formLoading,
+            onWriteLeave = onWriteLeave,
         )
         if (page.page.items.isEmpty()) {
             SystemEmptyState(
                 title = "没有请假记录",
-                message = "你在学工系统里还没有提交过日常请假。要请假请到学工系统官方页面提交，本应用不代填。"
+                message = "你在学工系统里还没有提交过日常请假。校方入口开放时，可在上方直接填写并提交。"
             )
         } else {
             page.page.items.forEach { record ->
@@ -617,7 +832,7 @@ private fun LeaveTab(page: XuegongLeavePage?, onOpen: (XuegongLeaveRecord) -> Un
     }
 }
 
-/** 校方的"能不能申请"状态卡：只展示，不提供按钮。 */
+/** 校方的"能不能申请"状态卡：开放时带「写请假」入口。 */
 @Composable
 private fun ApplyStatusCard(
     canApply: Boolean,
@@ -625,9 +840,11 @@ private fun ApplyStatusCard(
     blockedReason: String,
     locationRequired: Boolean,
     rangeDistance: String,
+    formLoading: Boolean,
+    onWriteLeave: () -> Unit,
 ) {
     SystemCard(Modifier.fillMaxWidth().moduleEntrance(2)) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -645,7 +862,7 @@ private fun ApplyStatusCard(
                     )
                     Text(
                         text = if (canApply) {
-                            "校方入口文案：${actionText.ifBlank { "申请" }}"
+                            "提交后由校方审批，结果以学工系统为准"
                         } else {
                             blockedReason.ifBlank { "校方暂时关闭了请假申请" }
                         },
@@ -654,6 +871,18 @@ private fun ApplyStatusCard(
                         lineHeight = 18.sp
                     )
                 }
+            }
+            if (canApply) {
+                SystemPrimaryButton(
+                    text = when {
+                        formLoading -> "正在打开表单…"
+                        actionText.isNotBlank() && actionText != "申请" -> actionText
+                        else -> "写请假"
+                    },
+                    onClick = onWriteLeave,
+                    enabled = !formLoading,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
             if (locationRequired) {
                 Row(
@@ -766,26 +995,39 @@ private fun LeaveDetailView(record: XuegongLeaveRecord) {
 
 // ── 节假日去向登记 ──────────────────────────────────────────────────────
 
+/**
+ * 去向登记 Tab：**一个列表承载查看与提交**。
+ *
+ * 每个批次就是一行：已登记 → 点开看登记详情；开放中 → 点开填表提交；
+ * 未开放 → 原样展示状态。不再拆"登记入口"和"记录列表"两份 UI。
+ */
 @Composable
-private fun WhereaboutsTab(page: XuegongWhereaboutsPage?, onOpen: (XuegongWhereaboutsRecord) -> Unit) {
+private fun WhereaboutsTab(
+    page: XuegongWhereaboutsPage?,
+    formLoading: Boolean,
+    onOpen: (XuegongWhereaboutsRecord) -> Unit,
+    onOpenBatch: (XuegongHolidayBatch) -> Unit,
+) {
     if (page == null) {
-        SystemEmptyState(title = "暂无数据", message = "没有读到去向登记记录。")
+        SystemEmptyState(title = "暂无数据", message = "没有读到去向登记信息。")
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (page.batches.isNotEmpty()) {
+        if (page.batches.isEmpty()) {
+            SystemEmptyState(
+                title = "没有登记批次",
+                message = "学校还没有发布节假日去向登记批次，开放后这里会出现入口。"
+            )
+        } else {
             InsetGroupedSection(Modifier.moduleEntrance(2), header = "登记批次") {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    page.batches.forEach { batch -> HolidayBatchRow(batch) }
+                    page.batches.forEach { batch ->
+                        HolidayBatchRow(batch = batch, loading = formLoading, onClick = { onOpenBatch(batch) })
+                    }
                 }
             }
         }
-        if (page.page.items.isEmpty()) {
-            SystemEmptyState(
-                title = "没有登记记录",
-                message = "你在学工系统里还没有提交过节假日去向登记。要登记请到学工系统官方页面提交，本应用不代填。"
-            )
-        } else {
+        if (page.page.items.isNotEmpty()) {
             page.page.items.forEach { record ->
                 WhereaboutsRow(record) { onOpen(record) }
             }
@@ -794,49 +1036,66 @@ private fun WhereaboutsTab(page: XuegongWhereaboutsPage?, onOpen: (XuegongWherea
     }
 }
 
+/** 批次行：显示假期 / 登记时间与状态；整行可点（点开看详情或填表）。 */
 @Composable
-private fun HolidayBatchRow(batch: XuegongHolidayBatch) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = batch.name.ifBlank { "未命名批次" },
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f)
-            )
-            if (batch.statusName.isNotBlank()) {
-                SystemStatusBadge(
-                    text = batch.statusName,
-                    tone = if (batch.open) SystemTone.Success else SystemTone.Neutral
+private fun HolidayBatchRow(
+    batch: XuegongHolidayBatch,
+    loading: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = batch.name.ifBlank { "未命名批次" },
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                if (batch.statusName.isNotBlank()) {
+                    SystemStatusBadge(
+                        text = batch.statusName,
+                        tone = if (batch.open) SystemTone.Success else SystemTone.Neutral
+                    )
+                }
+            }
+            if (batch.holidayBegin.isNotBlank() || batch.holidayEnd.isNotBlank()) {
+                Text(
+                    text = "假期　${batch.holidayBegin.ifBlank { "—" }} 至 ${batch.holidayEnd.ifBlank { "—" }}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (batch.registerBegin.isNotBlank() || batch.registerEnd.isNotBlank()) {
+                Text(
+                    text = "登记　${batch.registerBegin.ifBlank { "—" }} 至 ${batch.registerEnd.ifBlank { "—" }}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (batch.memo.isNotBlank()) {
+                Text(
+                    text = batch.memo,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp
                 )
             }
         }
-        if (batch.holidayBegin.isNotBlank() || batch.holidayEnd.isNotBlank()) {
-            Text(
-                text = "假期　${batch.holidayBegin.ifBlank { "—" }} 至 ${batch.holidayEnd.ifBlank { "—" }}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        if (batch.registerBegin.isNotBlank() || batch.registerEnd.isNotBlank()) {
-            Text(
-                text = "登记　${batch.registerBegin.ifBlank { "—" }} 至 ${batch.registerEnd.ifBlank { "—" }}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        if (batch.memo.isNotBlank()) {
-            Text(
-                text = batch.memo,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                lineHeight = 18.sp
-            )
-        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = if (loading) "正在打开" else "打开",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
 
@@ -1159,11 +1418,11 @@ private fun ExtraFieldsCard(extras: List<Pair<String, String>>) {
     }
 }
 
-/** 页脚固定提示：本页只读。 */
+/** 页脚固定提示：提交入口的范围说明。 */
 @Composable
 private fun ReadOnlyNotice() {
     Text(
-        text = "本页只读：请假、销假与去向登记都要在学工系统官方页面提交，本应用不代填、不代提交。",
+        text = "本应用提供日常请假与去向登记的填写提交，销假、审批、撤销等仍需在学工系统官方页面办理；提交结果以校方审批为准。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         lineHeight = 18.sp
@@ -1252,3 +1511,700 @@ private val XUEGONG_FIELD_LABELS: Map<String, String> = mapOf(
     "HolidayBeginDate" to "假期开始", "HolidayEndDate" to "假期结束",
     "ApplyBeginDate" to "登记开始", "ApplyEndDate" to "登记结束",
 )
+
+// ── 提交表单（1.2.5）────────────────────────────────────────────────────
+
+/** 「写请假」编辑页的状态：草稿 + 附件 + 瞬时状态。 */
+data class XuegongLeaveFormUi(
+    val draft: XuegongLeaveDraft,
+    /** 表单骨架的 `FileList`（提交时原样回传，附件追加进 Imgs）。 */
+    val fileList: org.json.JSONObject?,
+    /** 已上传附件：url → 文件名。 */
+    val attachments: List<Pair<String, String>> = emptyList(),
+    val uploading: Boolean = false,
+    val submitting: Boolean = false,
+    val error: String = "",
+)
+
+/** 「去向登记」编辑页的状态。 */
+data class XuegongWhereaboutsFormUi(
+    val draft: XuegongWhereaboutsDraft,
+    val batch: XuegongHolidayBatch? = null,
+    val submitting: Boolean = false,
+    val error: String = "",
+)
+
+/** 站点时间格式：`2026/10/01 08:00`（H5 固定整点，分钟恒为 00）。 */
+private fun formatSiteTime(millis: Long): String =
+    java.text.SimpleDateFormat("yyyy/MM/dd HH':00'", java.util.Locale.CHINA).format(java.util.Date(millis))
+
+private fun queryDisplayName(context: android.content.Context, uri: android.net.Uri): String? =
+    runCatching {
+        context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    }.getOrNull()
+
+// ── 写请假 ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun LeaveFormView(
+    state: XuegongLeaveFormUi,
+    onDraft: (XuegongLeaveDraft) -> Unit,
+    error: String,
+    uploading: Boolean,
+    submitting: Boolean,
+    onPickAttachment: () -> Unit,
+    onRemoveAttachment: (String) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    val draft = state.draft
+    /** 打开中的选择器："begin"/"end"/"outGo"/"outBack"/"reason"/"goVehicle"/"backVehicle"。 */
+    var picker by remember { mutableStateOf<String?>(null) }
+    var confirmSubmit by remember { mutableStateOf(false) }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        if (draft.notice.isNotBlank()) InlineWarning(draft.notice)
+        if (error.isNotBlank()) InlineWarning(error)
+
+        InsetGroupedSection(header = "请假信息") {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                FormTimeField("请假开始时间", required = true, value = draft.beginTime) { picker = "begin" }
+                FormTimeField("请假结束时间", required = true, value = draft.endTime) { picker = "end" }
+                if (draft.durationText.isNotBlank()) {
+                    InfoLine("共计", draft.durationText)
+                }
+                FormPickField(
+                    label = "请假原因",
+                    required = true,
+                    value = draft.reasonText,
+                    placeholder = if (draft.reasonOptions.isEmpty()) "站点没有下发选项" else "请选择请假原因",
+                    enabled = draft.reasonOptions.isNotEmpty(),
+                    onClick = { picker = "reason" },
+                )
+                FormTextField(
+                    label = "详细说明",
+                    required = true,
+                    value = draft.reasonDetail,
+                    placeholder = "请填写详细说明",
+                    onValueChange = { draft.reasonDetail = it; onDraft(draft) },
+                )
+                FormTextField(
+                    label = "本人移动电话",
+                    value = draft.stuMoveTel,
+                    placeholder = "选填",
+                    keyboardType = KeyboardType.Phone,
+                    onValueChange = { draft.stuMoveTel = it; onDraft(draft) },
+                )
+            }
+        }
+
+        InsetGroupedSection(header = "离校信息") {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                FormSegmentField(
+                    label = "是否离校",
+                    required = true,
+                    options = listOf("不离校", "离校"),
+                    selectedIndex = if (draft.isOut == "1") 1 else 0,
+                ) { index ->
+                    draft.isOut = if (index == 1) "1" else "0"
+                    onDraft(draft)
+                }
+                if (draft.isOut == "1") {
+                    FormTimeField("外出开始时间", required = true, value = draft.outGoTime) { picker = "outGo" }
+                    FormTimeField("外出结束时间", required = true, value = draft.outBackTime) { picker = "outBack" }
+                    FormPickField(
+                        label = "外出方式",
+                        required = true,
+                        value = draft.outGoVehicleText,
+                        placeholder = "请选择外出方式",
+                        enabled = draft.outGoOptions.isNotEmpty(),
+                        onClick = { picker = "goVehicle" },
+                    )
+                    FormPickField(
+                        label = "返回方式",
+                        required = true,
+                        value = draft.outBackVehicleText,
+                        placeholder = "请选择返回方式",
+                        enabled = draft.outBackOptions.isNotEmpty(),
+                        onClick = { picker = "backVehicle" },
+                    )
+                    FormTextField(
+                        label = "外出地点",
+                        required = true,
+                        value = draft.outAddress,
+                        placeholder = "如：安徽省淮南市田家庵区",
+                        onValueChange = { draft.outAddress = it; onDraft(draft) },
+                    )
+                    FormTextField(
+                        label = "详细地址",
+                        value = draft.outAddressStreet,
+                        placeholder = "选填",
+                        onValueChange = { draft.outAddressStreet = it; onDraft(draft) },
+                    )
+                }
+            }
+        }
+
+        InsetGroupedSection(header = "监护与同行") {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                FormSegmentField(
+                    label = "是否已告知监护人",
+                    required = true,
+                    options = listOf("未告知", "已告知"),
+                    selectedIndex = if (draft.isTellGuarder == "1") 1 else 0,
+                ) { index ->
+                    draft.isTellGuarder = if (index == 1) "1" else "0"
+                    onDraft(draft)
+                }
+                if (draft.isTellGuarder == "1") {
+                    FormTextField(
+                        label = "监护人姓名",
+                        value = draft.guarderName,
+                        placeholder = "请填写监护人姓名",
+                        onValueChange = { draft.guarderName = it; onDraft(draft) },
+                    )
+                    FormTextField(
+                        label = "监护人电话",
+                        value = draft.guarderTel,
+                        placeholder = "请填写监护人电话",
+                        keyboardType = KeyboardType.Phone,
+                        onValueChange = { draft.guarderTel = it; onDraft(draft) },
+                    )
+                }
+                FormSegmentField(
+                    label = "是否结伴同行",
+                    required = true,
+                    options = listOf("独自", "结伴"),
+                    selectedIndex = if (draft.isCompanion == "1") 1 else 0,
+                ) { index ->
+                    draft.isCompanion = if (index == 1) "1" else "0"
+                    onDraft(draft)
+                }
+                if (draft.isCompanion == "1") {
+                    FormTextField(
+                        label = "同行人姓名",
+                        value = draft.companionName,
+                        placeholder = "请填写同行人姓名",
+                        onValueChange = { draft.companionName = it; onDraft(draft) },
+                    )
+                    FormTextField(
+                        label = "与本人关系",
+                        value = draft.companionRelationship,
+                        placeholder = "选填",
+                        onValueChange = { draft.companionRelationship = it; onDraft(draft) },
+                    )
+                    FormTextField(
+                        label = "联系电话",
+                        value = draft.companionTel,
+                        placeholder = "选填",
+                        keyboardType = KeyboardType.Phone,
+                        onValueChange = { draft.companionTel = it; onDraft(draft) },
+                    )
+                }
+                FormTextField(
+                    label = "家长姓名",
+                    value = draft.outContacts,
+                    placeholder = "选填",
+                    onValueChange = { draft.outContacts = it; onDraft(draft) },
+                )
+                FormTextField(
+                    label = "家长电话",
+                    value = draft.outContactsTel,
+                    placeholder = "选填",
+                    keyboardType = KeyboardType.Phone,
+                    onValueChange = { draft.outContactsTel = it; onDraft(draft) },
+                )
+            }
+        }
+
+        InsetGroupedSection(
+            header = "证明材料",
+            footer = "图片单张不超过 8M；材料上传后由校方审核，非必传（以校方要求为准）。"
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                state.attachments.forEach { (url, name) ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = name,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "删除",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = SemanticDanger,
+                            modifier = Modifier.clickable { onRemoveAttachment(url) },
+                        )
+                    }
+                }
+                SystemSecondaryButton(
+                    text = when {
+                        uploading -> "正在上传…"
+                        else -> "添加图片"
+                    },
+                    onClick = onPickAttachment,
+                    enabled = !uploading && !submitting,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        SystemPrimaryButton(
+            text = if (submitting) "正在提交…" else "提交请假申请",
+            onClick = { confirmSubmit = true },
+            enabled = !submitting && !uploading,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = "提交后请耐心等待校方审批，结果以学工系统为准。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            lineHeight = 18.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+
+    when (picker) {
+        "begin" -> FormTimeDialog(
+            title = "请假开始时间",
+            initial = draft.beginTime,
+            onConfirm = { draft.beginTime = formatSiteTime(it); onDraft(draft); picker = null },
+            onDismiss = { picker = null },
+        )
+        "end" -> FormTimeDialog(
+            title = "请假结束时间",
+            initial = draft.endTime,
+            onConfirm = { draft.endTime = formatSiteTime(it); onDraft(draft); picker = null },
+            onDismiss = { picker = null },
+        )
+        "outGo" -> FormTimeDialog(
+            title = "外出开始时间",
+            initial = draft.outGoTime,
+            onConfirm = { draft.outGoTime = formatSiteTime(it); onDraft(draft); picker = null },
+            onDismiss = { picker = null },
+        )
+        "outBack" -> FormTimeDialog(
+            title = "外出结束时间",
+            initial = draft.outBackTime,
+            onConfirm = { draft.outBackTime = formatSiteTime(it); onDraft(draft); picker = null },
+            onDismiss = { picker = null },
+        )
+        "reason" -> FormOptionDialog(
+            title = "请假原因",
+            options = draft.reasonOptions,
+            selectedValue = draft.reason,
+            onConfirm = { option ->
+                draft.reason = option.value
+                draft.reasonText = option.label
+                onDraft(draft)
+                picker = null
+            },
+            onDismiss = { picker = null },
+        )
+        "goVehicle" -> FormOptionDialog(
+            title = "外出方式",
+            options = draft.outGoOptions,
+            selectedValue = draft.outGoVehicle,
+            onConfirm = { option ->
+                draft.outGoVehicle = option.value
+                draft.outGoVehicleText = option.label
+                onDraft(draft)
+                picker = null
+            },
+            onDismiss = { picker = null },
+        )
+        "backVehicle" -> FormOptionDialog(
+            title = "返回方式",
+            options = draft.outBackOptions,
+            selectedValue = draft.outBackVehicle,
+            onConfirm = { option ->
+                draft.outBackVehicle = option.value
+                draft.outBackVehicleText = option.label
+                onDraft(draft)
+                picker = null
+            },
+            onDismiss = { picker = null },
+        )
+    }
+
+    if (confirmSubmit) {
+        SystemConfirmDialog(
+            title = "提交请假申请",
+            text = "开始 ${draft.beginTime}\n结束 ${draft.endTime}\n\n提交后由校方审批，确认提交？",
+            confirmText = "确认提交",
+            onConfirm = {
+                confirmSubmit = false
+                onSubmit()
+            },
+            onDismiss = { confirmSubmit = false },
+        )
+    }
+}
+
+// ── 去向登记 ────────────────────────────────────────────────────────────
+
+@Composable
+private fun WhereaboutsFormView(
+    state: XuegongWhereaboutsFormUi,
+    onDraft: (XuegongWhereaboutsDraft) -> Unit,
+    error: String,
+    submitting: Boolean,
+    onSubmit: () -> Unit,
+) {
+    val draft = state.draft
+    var picker by remember { mutableStateOf<String?>(null) }
+    var confirmSubmit by remember { mutableStateOf(false) }
+    val leaving = draft.leaveType != "2"
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        state.batch?.let { batch ->
+            if (batch.holidayBegin.isNotBlank() || batch.holidayEnd.isNotBlank()) {
+                InlineWarning(
+                    "假期 ${batch.holidayBegin} 至 ${batch.holidayEnd}" +
+                        if (batch.memo.isNotBlank()) " · ${batch.memo}" else ""
+                )
+            }
+        }
+        if (error.isNotBlank()) InlineWarning(error)
+
+        InsetGroupedSection(header = "登记信息") {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                FormSegmentField(
+                    label = "去向类型",
+                    required = true,
+                    options = listOf("离校", "留校"),
+                    selectedIndex = if (leaving) 0 else 1,
+                ) { index ->
+                    draft.leaveType = if (index == 0) "1" else "2"
+                    onDraft(draft)
+                }
+                if (leaving) {
+                    FormTimeField("离校开始时间", required = true, value = draft.beginTime) { picker = "begin" }
+                    FormTimeField("离校结束时间", required = true, value = draft.endTime) { picker = "end" }
+                    FormPickField(
+                        label = "交通方式",
+                        required = true,
+                        value = draft.outGoVehicleText,
+                        placeholder = "请选择交通方式",
+                        enabled = draft.outGoOptions.isNotEmpty(),
+                        onClick = { picker = "goVehicle" },
+                    )
+                    FormTextField(
+                        label = "外出地点",
+                        required = true,
+                        value = draft.comeWhere,
+                        placeholder = "如：安徽省合肥市蜀山区",
+                        onValueChange = { draft.comeWhere = it; onDraft(draft) },
+                    )
+                    FormTextField(
+                        label = "详细地址",
+                        value = draft.outAddressStreet,
+                        placeholder = "选填",
+                        onValueChange = { draft.outAddressStreet = it; onDraft(draft) },
+                    )
+                    FormTextField(
+                        label = "同行人数",
+                        value = draft.outNumber,
+                        placeholder = "选填",
+                        keyboardType = KeyboardType.Number,
+                        onValueChange = { draft.outNumber = it; onDraft(draft) },
+                    )
+                } else {
+                    FormTimeField("留校开始时间", required = true, value = draft.stayBeginTime) { picker = "stayBegin" }
+                    FormTimeField("留校结束时间", required = true, value = draft.stayEndTime) { picker = "stayEnd" }
+                }
+                if (draft.durationText.isNotBlank()) {
+                    InfoLine("共计", draft.durationText)
+                }
+            }
+        }
+
+        InsetGroupedSection(header = "联系信息") {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                FormTextField(
+                    label = "去向事由",
+                    value = draft.reason,
+                    placeholder = "选填",
+                    onValueChange = { draft.reason = it; onDraft(draft) },
+                )
+                FormTextField(
+                    label = "联系人姓名",
+                    value = draft.outContacts,
+                    placeholder = "选填",
+                    onValueChange = { draft.outContacts = it; onDraft(draft) },
+                )
+                FormTextField(
+                    label = "与本人关系",
+                    value = draft.outContactsRelationship,
+                    placeholder = "选填",
+                    onValueChange = { draft.outContactsRelationship = it; onDraft(draft) },
+                )
+                FormTextField(
+                    label = "联系人手机",
+                    value = draft.outContactsMoveTel,
+                    placeholder = "选填",
+                    keyboardType = KeyboardType.Phone,
+                    onValueChange = { draft.outContactsMoveTel = it; onDraft(draft) },
+                )
+                FormTextField(
+                    label = "联系人电话",
+                    value = draft.outContactsTel,
+                    placeholder = "选填",
+                    keyboardType = KeyboardType.Phone,
+                    onValueChange = { draft.outContactsTel = it; onDraft(draft) },
+                )
+                FormTextField(
+                    label = "本人移动电话",
+                    value = draft.stuMoveTel,
+                    placeholder = "选填",
+                    keyboardType = KeyboardType.Phone,
+                    onValueChange = { draft.stuMoveTel = it; onDraft(draft) },
+                )
+                FormTextField(
+                    label = "其他联系方式",
+                    value = draft.stuTel,
+                    placeholder = "选填",
+                    onValueChange = { draft.stuTel = it; onDraft(draft) },
+                )
+            }
+        }
+
+        SystemPrimaryButton(
+            text = if (submitting) "正在提交…" else "提交去向登记",
+            onClick = { confirmSubmit = true },
+            enabled = !submitting,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = "提交后如需修改，请在登记开放期内重新进入本页编辑；结果以学工系统为准。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            lineHeight = 18.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+
+    when (picker) {
+        "begin" -> FormTimeDialog(
+            title = "离校开始时间",
+            initial = draft.beginTime,
+            onConfirm = { draft.beginTime = formatSiteTime(it); onDraft(draft); picker = null },
+            onDismiss = { picker = null },
+        )
+        "end" -> FormTimeDialog(
+            title = "离校结束时间",
+            initial = draft.endTime,
+            onConfirm = { draft.endTime = formatSiteTime(it); onDraft(draft); picker = null },
+            onDismiss = { picker = null },
+        )
+        "stayBegin" -> FormTimeDialog(
+            title = "留校开始时间",
+            initial = draft.stayBeginTime,
+            onConfirm = { draft.stayBeginTime = formatSiteTime(it); onDraft(draft); picker = null },
+            onDismiss = { picker = null },
+        )
+        "stayEnd" -> FormTimeDialog(
+            title = "留校结束时间",
+            initial = draft.stayEndTime,
+            onConfirm = { draft.stayEndTime = formatSiteTime(it); onDraft(draft); picker = null },
+            onDismiss = { picker = null },
+        )
+        "goVehicle" -> FormOptionDialog(
+            title = "交通方式",
+            options = draft.outGoOptions,
+            selectedValue = draft.outGoVehicle,
+            onConfirm = { option ->
+                draft.outGoVehicle = option.value
+                draft.outGoVehicleText = option.label
+                onDraft(draft)
+                picker = null
+            },
+            onDismiss = { picker = null },
+        )
+    }
+
+    if (confirmSubmit) {
+        SystemConfirmDialog(
+            title = "提交去向登记",
+            text = "去向类型：${if (leaving) "离校" else "留校"}\n" +
+                if (leaving) "离校 ${draft.beginTime} 至 ${draft.endTime}" else "留校 ${draft.stayBeginTime} 至 ${draft.stayEndTime}",
+            confirmText = "确认提交",
+            onConfirm = {
+                confirmSubmit = false
+                onSubmit()
+            },
+            onDismiss = { confirmSubmit = false },
+        )
+    }
+}
+
+// ── 表单零件 ────────────────────────────────────────────────────────────
+
+/** 表单里的时间选择行：显示当前值，点击弹玻璃滚轮时间选择。 */
+@Composable
+private fun FormTimeField(
+    label: String,
+    value: String,
+    required: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = if (required) "$label *" else label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.width(112.dp),
+        )
+        Text(
+            text = value.ifBlank { "请选择" },
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (value.isBlank()) FontWeight.Normal else FontWeight.Medium,
+            color = if (value.isBlank()) {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** 表单里的下拉选择行。 */
+@Composable
+private fun FormPickField(
+    label: String,
+    value: String,
+    placeholder: String,
+    required: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = if (required) "$label *" else label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.width(112.dp),
+        )
+        Text(
+            text = value.ifBlank { placeholder },
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (value.isBlank()) FontWeight.Normal else FontWeight.Medium,
+            color = if (value.isBlank()) {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** 表单里的两态分段（是否离校 / 是否告知监护人…）。 */
+@Composable
+private fun FormSegmentField(
+    label: String,
+    options: List<String>,
+    selectedIndex: Int,
+    required: Boolean = false,
+    onSelect: (Int) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = if (required) "$label *" else label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        SystemSegmentedControl(
+            options = options,
+            selectedIndex = selectedIndex,
+            onSelect = onSelect,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/** 表单里的文本输入行。 */
+@Composable
+private fun FormTextField(
+    label: String,
+    value: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit,
+    required: Boolean = false,
+    keyboardType: KeyboardType = KeyboardType.Text,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = if (required) "$label *" else label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        GlassTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = placeholder,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        )
+    }
+}
+
+/** 时间选择弹窗：初始值取自站点时间格式。 */
+@Composable
+private fun FormTimeDialog(
+    title: String,
+    initial: String,
+    onConfirm: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    GlassDateTimePickerDialog(
+        title = title,
+        initialMillis = parseSiteTime(initial) ?: System.currentTimeMillis(),
+        onConfirm = onConfirm,
+        onDismiss = onDismiss,
+    )
+}
+
+/** 字典单选弹窗：把站点的 `{value,text}` 字典喂给玻璃滚轮。 */
+@Composable
+private fun FormOptionDialog(
+    title: String,
+    options: List<XuegongDictOption>,
+    selectedValue: String,
+    onConfirm: (XuegongDictOption) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val labels = options.map { it.label }
+    val selectedIndex = options.indexOfFirst { it.value == selectedValue }.takeIf { it >= 0 } ?: 0
+    GlassOptionWheelDialog(
+        title = title,
+        options = labels,
+        selectedIndex = selectedIndex,
+        onConfirm = { index -> onConfirm(options[index]) },
+        onDismiss = onDismiss,
+    )
+}

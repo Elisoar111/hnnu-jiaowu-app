@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -72,6 +73,8 @@ import com.hnnujw.course.secondclass.SecondClassEnrollAnswer
 import com.hnnujw.course.secondclass.SecondClassEnrollField
 import com.hnnujw.course.secondclass.SecondClassEnrollState
 import com.hnnujw.course.secondclass.resolveActivityCoverUrl
+import com.hnnujw.course.ui.system.GlassDatePickerDialog
+import com.hnnujw.course.ui.system.GlassOptionWheelDialog
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassProgressBar
 import com.hnnujw.course.ui.system.GlassTextField
@@ -129,10 +132,25 @@ data class SecondClassActivityCenterUi(
     val msgHasMore: Boolean = false,
     /** 未读消息数（驱动一键已读按钮显隐）。 */
     val msgUnread: Int = 0,
-    /** 「申报」页：我的申报记录（只读，来自 `/project/request/list1`）。 */
+    /** 「申报」页：我的申报记录（来自 `/project/request/list1`）。 */
     val applications: List<com.hnnujw.course.secondclass.SecondClassApplication> = emptyList(),
-    /** 申报项目分类（六大能力模块），只用于页内的说明文案。 */
+    /** 申报分类（六大能力模块，classifyId），「分类」下拉的数据源。 */
     val appCategories: List<com.hnnujw.course.secondclass.SecondClassActivityCategory> = emptyList(),
+    /** 申报**类型**（`/dict/school/system-para/list?fieldType=honor`，「类别」下拉的数据源）。 */
+    val declareTypes: List<com.hnnujw.course.secondclass.SecondClassActivityCategory> = emptyList(),
+    /** 「申报 · 未申报」项目列表（`/project/home/page/list`）。 */
+    val declareProjects: List<com.hnnujw.course.secondclass.SecondClassDeclareProject> = emptyList(),
+    val declareHasMore: Boolean = false,
+    /** 0 = 未申报（项目列表）/ 1 = 已申报（我的申报记录）。 */
+    val declareSegment: Int = 0,
+    /** 申报**类型**（categoryId，对应站点「类别」下拉；空 = 全部）。 */
+    val declareCategory: String = "",
+    /** 申报分类（classifyId，对应站点「分类」下拉；空 = 全部）。 */
+    val declareClassify: String = "",
+    /** 0 = 最新 / 1 = 最热（站点 sortType）。 */
+    val declareSort: Int = 0,
+    /** 申报项目搜索词（防抖后由 Route 发请求）。 */
+    val declareKeyword: String = "",
 )
 
 /** 活动详情（含报名表单与签到信息）。 */
@@ -148,6 +166,35 @@ data class SecondClassActivityDetailUi(
     /** 我的等待签到码内容（`qutuo://waitSign?...`）。 */
     val mySignCode: String = "",
 )
+
+/**
+ * 「申报」填报页（站点 `creditProject` 路由的同构实现）：
+ * 选奖项 → 起止日期 → 总结报告 → 证明材料 → 提交。
+ */
+data class SecondClassDeclareFormUi(
+    val project: com.hnnujw.course.secondclass.SecondClassDeclareProject,
+    val detail: com.hnnujw.course.secondclass.SecondClassDeclareProjectDetail? = null,
+    val loadingDetail: Boolean = false,
+    /** 选中的奖项（档位）id；0 = 未选。 */
+    val optionId: Int = 0,
+    val startTime: Long = 0L,
+    val endTime: Long = 0L,
+    val report: String = "",
+    /** 关联活动（可选）。 */
+    val relateActivity: SecondClassActivity? = null,
+    val relateKeyword: String = "",
+    val relateOptions: List<SecondClassActivity> = emptyList(),
+    val relateSearching: Boolean = false,
+    val relateDialog: Boolean = false,
+    /** 已上传的证明材料。 */
+    val materials: List<com.hnnujw.course.secondclass.SecondClassDeclareMaterial> = emptyList(),
+    val uploading: Boolean = false,
+    val submitting: Boolean = false,
+    val error: String = "",
+) {
+    val selectedOption: com.hnnujw.course.secondclass.SecondClassDeclareOption?
+        get() = detail?.options?.firstOrNull { it.id == optionId }
+}
 
 /**
  * 活动中心的分段标签。
@@ -182,6 +229,21 @@ fun SecondClassActivityCenterScreen(
     onReadAllMessages: () -> Unit = {},
     /** 点击一条消息（Route 负责把未读标记为已读）。 */
     onOpenMessage: (com.hnnujw.course.secondclass.SecondClassMessage) -> Unit = {},
+    // ── 申报（1.2.5）────────────────────────────────────────────────────
+    /** 任一申报筛选项变化：segment（0 未申报 / 1 已申报）、类型、分类、排序。 */
+    onDeclareFilters: (segment: Int, category: String, classify: String, sort: Int) -> Unit = { _, _, _, _ -> },
+    /** 申报项目搜索词（Route 里防抖）。 */
+    onDeclareKeyword: (String) -> Unit = {},
+    /** 点项目行 / 「立即申请」：Route 拉项目详情并打开填报页。 */
+    onOpenDeclareProject: (com.hnnujw.course.secondclass.SecondClassDeclareProject) -> Unit = {},
+    /** 选证明材料（Route 持有选图 launcher）。 */
+    onPickDeclareMaterial: () -> Unit = {},
+    /** 删除一份已上传的证明材料。 */
+    onRemoveDeclareMaterial: (String) -> Unit = {},
+    /** 关联活动搜索（弹窗里输入关键词）。 */
+    onSearchRelateActivity: (String) -> Unit = {},
+    /** 提交申报。 */
+    onSubmitDeclare: () -> Unit = {},
     coverBase: String = "",
     onOpenAttachment: (SecondClassAttachment) -> Unit,
     /**
@@ -224,17 +286,20 @@ fun SecondClassActivityCenterScreen(
     var applicationDetail by remember {
         mutableStateOf<com.hnnujw.course.secondclass.SecondClassApplication?>(null)
     }
+    /** 「申报 · 填报页」：点项目行的「立即申请」进入。 */
+    var declareForm by remember { mutableStateOf<SecondClassDeclareFormUi?>(null) }
 
     GlassPageScaffold(
         title = when {
             currentDetail != null -> "活动详情"
             applicationDetail != null -> "申报详情"
+            declareForm != null -> "奖励申报"
             else -> "活动中心"
         },
-        subtitle = if (currentDetail == null) {
+        subtitle = if (currentDetail == null && declareForm == null) {
             when (ui.tab) {
                 1 -> "我报名的活动"
-                2 -> "我的申报记录"
+                2 -> "类型 · 分类 · 奖励申报"
                 3 -> if (ui.msgUnread > 0) "未读 ${ui.msgUnread}" else "站内消息"
                 4 -> "模块积分与排行榜"
                 else -> null
@@ -246,10 +311,11 @@ fun SecondClassActivityCenterScreen(
         onBack = when {
             currentDetail != null -> ({ onCloseDetail() })
             applicationDetail != null -> ({ applicationDetail = null })
+            declareForm != null -> ({ declareForm = null })
             else -> onClose
         },
         actions = {
-            if (currentDetail == null && applicationDetail == null) {
+            if (currentDetail == null && applicationDetail == null && declareForm == null) {
                 when (ui.tab) {
                     0 -> {
                         // 筛选：已满 / 本院系可报
@@ -303,6 +369,7 @@ fun SecondClassActivityCenterScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             val openApplication = applicationDetail
+            val openDeclareForm = declareForm
             if (currentDetail != null) {
                 ActivityDetailBody(
                     ui = currentDetail,
@@ -314,6 +381,15 @@ fun SecondClassActivityCenterScreen(
                 )
             } else if (openApplication != null) {
                 ApplicationDetailBody(openApplication)
+            } else if (openDeclareForm != null) {
+                DeclareFormBody(
+                    state = openDeclareForm,
+                    onState = { declareForm = it },
+                    onPickMaterial = onPickDeclareMaterial,
+                    onRemoveMaterial = onRemoveDeclareMaterial,
+                    onSearchRelate = onSearchRelateActivity,
+                    onSubmit = onSubmitDeclare,
+                )
             } else {
                 ActivityListBody(
                     ui = ui,
@@ -331,6 +407,12 @@ fun SecondClassActivityCenterScreen(
                     onLoadMore = onLoadMore,
                     onOpenDetail = onOpenDetail,
                     onOpenApplication = { applicationDetail = it },
+                    onDeclareSegment = { onDeclareFilters(it, ui.declareCategory, ui.declareClassify, ui.declareSort) },
+                    onDeclareCategory = { onDeclareFilters(ui.declareSegment, it, ui.declareClassify, ui.declareSort) },
+                    onDeclareClassify = { onDeclareFilters(ui.declareSegment, ui.declareCategory, it, ui.declareSort) },
+                    onDeclareSort = { onDeclareFilters(ui.declareSegment, ui.declareCategory, ui.declareClassify, it) },
+                    onDeclareKeyword = onDeclareKeyword,
+                    onOpenProject = onOpenDeclareProject,
                     onOpenMessage = onOpenMessage,
                     transcriptContent = transcriptContent,
                     onBindSecondClass = onBindSecondClass,
@@ -346,6 +428,10 @@ fun SecondClassActivityCenterScreen(
     // 申报详情同理：返回键先回申报列表
     BackHandler(enabled = applicationDetail != null) {
         applicationDetail = null
+    }
+    // 申报填报页：返回键先回申报列表
+    BackHandler(enabled = declareForm != null) {
+        declareForm = null
     }
 
     // 扫码方式选择：相机扫码 / 从相册识别（合并成一个入口后的二级选择）
@@ -442,6 +528,12 @@ private fun ActivityListBody(
     onOpenDetail: (Int) -> Unit,
     /** 打开一条申报记录的页内详情（只读，不再发请求）。 */
     onOpenApplication: (com.hnnujw.course.secondclass.SecondClassApplication) -> Unit = {},
+    onDeclareSegment: (Int) -> Unit = {},
+    onDeclareCategory: (String) -> Unit = {},
+    onDeclareClassify: (String) -> Unit = {},
+    onDeclareSort: (Int) -> Unit = {},
+    onDeclareKeyword: (String) -> Unit = {},
+    onOpenProject: (com.hnnujw.course.secondclass.SecondClassDeclareProject) -> Unit = {},
     onOpenMessage: (com.hnnujw.course.secondclass.SecondClassMessage) -> Unit,
     transcriptContent: @Composable () -> Unit = {},
     onBindSecondClass: () -> Unit = {},
@@ -484,8 +576,15 @@ private fun ActivityListBody(
             2 -> ApplicationTab(
                 ui = ui,
                 onRefresh = onRefresh,
+                onLoadMore = onLoadMore,
                 onOpenDetail = onOpenApplication,
                 onBindSecondClass = onBindSecondClass,
+                onDeclareSegment = onDeclareSegment,
+                onDeclareCategory = onDeclareCategory,
+                onDeclareClassify = onDeclareClassify,
+                onDeclareSort = onDeclareSort,
+                onDeclareKeyword = onDeclareKeyword,
+                onOpenProject = onOpenProject,
             )
             // 「成绩单」现在是最右边的第 5 个 Tab：宿主注入的内容直接占据余下空间
             4 -> Box(Modifier.weight(1f)) { transcriptContent() }
@@ -502,7 +601,7 @@ private fun ActivityListBody(
         // 自己的错误态完整交代，这里就不再重复一遍。
         val listEmpty = when (ui.tab) {
             1 -> ui.myActivities.isEmpty()
-            2 -> ui.applications.isEmpty()
+            2 -> if (ui.declareSegment == 0) ui.declareProjects.isEmpty() else ui.applications.isEmpty()
             3 -> ui.messages.isEmpty()
             // 成绩单的错误由它自己的加载链路负责
             4 -> true
@@ -1114,29 +1213,36 @@ private fun MyHoursSummary(count: Int, earnedHours: Double, partial: Boolean) {
 }
 
 /**
- * 「申报」页：我的申报记录（只读）。
+ * 申报 Tab：**类型 / 分类筛选 + 未申报项目列表 + 已申报记录**。
  *
- * 数据来自 `/project/request/list1`，一次拉全、不做翻页（申报条目天然很少）。
- *
- * ⚠️ 本页**不提供任何提交入口**：申报要上传证明材料、要选认定档位，必须由用户本人在
- * 第二课堂官方页面完成。这里只回答一个问题 ——「我申报了什么、算多少学时、现在什么状态」。
+ * 与站点 `/service/declare`（奖励申报）页同构：顶部分段切「未申报 / 已申报」，
+ * 未申报里先选**类型**（类别）与**分类**，再从项目列表点「立即申请」进填报页。
  */
 @Composable
 private fun ApplicationTab(
     ui: SecondClassActivityCenterUi,
     onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
     onOpenDetail: (com.hnnujw.course.secondclass.SecondClassApplication) -> Unit,
     onBindSecondClass: () -> Unit,
+    onDeclareSegment: (Int) -> Unit,
+    onDeclareCategory: (String) -> Unit,
+    onDeclareClassify: (String) -> Unit,
+    onDeclareSort: (Int) -> Unit,
+    onDeclareKeyword: (String) -> Unit,
+    onOpenProject: (com.hnnujw.course.secondclass.SecondClassDeclareProject) -> Unit,
 ) {
     when {
-        ui.loading && ui.applications.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            SystemLoadingState("正在读取申报记录…")
-        }
-        ui.applications.isEmpty() && (ui.error.isNotBlank() || ui.needBind) -> ListFailureState(
-            ui = ui,
-            onRefresh = onRefresh,
-            onBindSecondClass = onBindSecondClass,
-        )
+        ui.loading && ui.applications.isEmpty() && ui.declareProjects.isEmpty() ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                SystemLoadingState("正在读取申报信息…")
+            }
+        (ui.applications.isEmpty() && ui.declareProjects.isEmpty()) && (ui.error.isNotBlank() || ui.needBind) ->
+            ListFailureState(
+                ui = ui,
+                onRefresh = onRefresh,
+                onBindSecondClass = onBindSecondClass,
+            )
         else -> LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
@@ -1144,55 +1250,204 @@ private fun ApplicationTab(
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item { ApplyGuide(ui.appCategories) }
-            if (ui.applications.isEmpty()) {
+            item {
+                SystemSegmentedControl(
+                    options = listOf("未申报", "已申报"),
+                    selectedIndex = ui.declareSegment,
+                    onSelect = onDeclareSegment,
+                    modifier = Modifier.fillMaxWidth(),
+                    height = 44.dp,
+                )
+            }
+            if (ui.declareSegment == 0) {
+                // 类型（类别）+ 分类：用户点名要求的「选择类型来申报，查看类型」
                 item {
-                    SystemEmptyState(
-                        title = "还没有申报记录",
-                        message = "在第二课堂官方页面提交的奖项、竞赛、荣誉等申报，会出现在这里。",
+                    FilterChipRow(
+                        title = "类型",
+                        options = ui.declareTypes,
+                        selectedId = ui.declareCategory,
+                        onSelect = onDeclareCategory,
                     )
                 }
+                item {
+                    FilterChipRow(
+                        title = "分类",
+                        options = ui.appCategories,
+                        selectedId = ui.declareClassify,
+                        onSelect = onDeclareClassify,
+                    )
+                }
+                item {
+                    GlassTextField(
+                        value = ui.keyword,
+                        onValueChange = onDeclareKeyword,
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = "搜索申报项目名称",
+                        singleLine = true,
+                    )
+                }
+                if (ui.declareProjects.isEmpty()) {
+                    item {
+                        SystemEmptyState(
+                            title = if (ui.error.isNotBlank()) "项目加载失败" else "没有可申报的项目",
+                            message = if (ui.error.isNotBlank()) {
+                                ui.error
+                            } else {
+                                "换个类型或分类试试；学校发布新项目后会出现在这里。"
+                            },
+                            action = if (ui.error.isNotBlank()) {
+                                {
+                                    SystemPrimaryButton(
+                                        text = "重试",
+                                        onClick = onRefresh,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                } else {
+                    items(ui.declareProjects.size, key = { ui.declareProjects[it].identity }) { index ->
+                        DeclareProjectRow(
+                            project = ui.declareProjects[index],
+                            onClick = { onOpenProject(ui.declareProjects[index]) },
+                        )
+                    }
+                    if (ui.declareHasMore) {
+                        item {
+                            SystemSecondaryButton(
+                                text = "加载更多",
+                                onClick = onLoadMore,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                    item {
+                        Text(
+                            text = "申报项目与认定档位由校方配置；提交后等待审核，结果以第二课堂站点为准。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 16.sp,
+                        )
+                    }
+                }
             } else {
-                items(ui.applications.size, key = { index -> ui.applications[index].identity }) { index ->
-                    ApplicationRow(ui.applications[index]) { onOpenDetail(ui.applications[index]) }
+                if (ui.applications.isEmpty()) {
+                    item {
+                        SystemEmptyState(
+                            title = "还没有申报记录",
+                            message = "在「未申报」里选好类型并提交的申报，会出现在这里。",
+                        )
+                    }
+                } else {
+                    items(ui.applications.size, key = { index -> ui.applications[index].identity }) { index ->
+                        ApplicationRow(ui.applications[index]) { onOpenDetail(ui.applications[index]) }
+                    }
                 }
             }
         }
     }
 }
 
-/** 申报页顶部的说明卡：讲清楚"这里只是看，提交要去官方页面"。 */
+/** 一行横向滚动的筛选胶囊（类型 / 分类共用）；首位是「全部」。 */
 @Composable
-private fun ApplyGuide(
-    categories: List<com.hnnujw.course.secondclass.SecondClassActivityCategory>,
+private fun FilterChipRow(
+    title: String,
+    options: List<com.hnnujw.course.secondclass.SecondClassActivityCategory>,
+    selectedId: String,
+    onSelect: (String) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterPill(label = "全部", selected = selectedId.isBlank()) { onSelect("") }
+            options.forEach { option ->
+                FilterPill(label = option.name, selected = option.id == selectedId) { onSelect(option.id) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FilterPill(label: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = if (selected) {
+            SemanticSuccess.copy(alpha = 0.16f)
+        } else {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+        },
+        modifier = Modifier.clickable(onClick = onClick),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) SemanticSuccess else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+        )
+    }
+}
+
+/** 申报项目行：项目名 + 模块 + 奖项数；行尾「立即申请」或「已截止」。 */
+@Composable
+private fun DeclareProjectRow(
+    project: com.hnnujw.course.secondclass.SecondClassDeclareProject,
+    onClick: () -> Unit,
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
         shape = RoundedCornerShape(16.dp),
     ) {
         Column(
             Modifier.fillMaxWidth().padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            Text(
-                text = "这里只显示你已提交的申报",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = "申报要上传证明材料、选择认定档位，必须由你本人在第二课堂官方页面提交，" +
-                    "本应用不代填、不代提交。",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                lineHeight = 18.sp,
-            )
-            if (categories.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
-                    text = "申报范围：" + categories.joinToString(" · ") { it.name },
+                    text = project.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                StatusChip(if (project.closed) "已截止" else "立即申请")
+            }
+            val meta = listOfNotNull(
+                project.classifyName.takeIf { it.isNotBlank() },
+                if (project.optionsCount > 0) "共 ${project.optionsCount} 个奖项" else null,
+                project.limitTypeName.takeIf { it.isNotBlank() },
+            ).joinToString(" · ")
+            if (meta.isNotBlank()) {
+                Text(
+                    text = meta,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (project.closed && project.closeApplyRemark.isNotBlank()) {
+                Text(
+                    text = project.closeApplyRemark,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SemanticWarning,
                     lineHeight = 16.sp,
                 )
             }
@@ -1250,6 +1505,349 @@ private fun ApplicationRow(
             }
         }
     }
+}
+
+// ── 申报 · 填报页（站点 creditProject 的同构实现）────────────────────────
+
+/**
+ * 申报填报页：选奖项 → 起止日期 → 总结报告 → 证明材料 → 提交。
+ *
+ * 校验口径与站点一致：奖项、开始、结束、总结报告、证明材料**都必填**；
+ * 开始不得早于本学期开始（由站点校验，这里只做先后顺序）、结束不早于开始。
+ */
+@Composable
+private fun DeclareFormBody(
+    state: SecondClassDeclareFormUi,
+    onState: (SecondClassDeclareFormUi) -> Unit,
+    onPickMaterial: () -> Unit,
+    onRemoveMaterial: (String) -> Unit,
+    onSearchRelate: (String) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    val detail = state.detail
+    var picker by remember { mutableStateOf<String?>(null) }
+    var confirmSubmit by remember { mutableStateOf(false) }
+    val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.CHINA) }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (state.error.isNotBlank()) {
+            Text(
+                text = state.error,
+                style = MaterialTheme.typography.bodySmall,
+                color = SemanticDanger,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(horizontal = PagePadding),
+            )
+        }
+        InsetGroupedSection(header = "申报项目") {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ApplicationInfoLine("项目名称", state.project.name)
+                ApplicationInfoLine("所属分类", state.project.classifyName)
+                ApplicationInfoLine("申报类型", state.project.limitTypeName)
+                if (!detail?.explains.isNullOrBlank()) {
+                    ApplicationInfoLine("填写说明", detail!!.explains)
+                }
+            }
+        }
+        InsetGroupedSection(header = "认定档位与时间") {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                // 奖项名称（档位）：站点是 picker，这里是玻璃滚轮弹窗
+                Row(
+                    Modifier.fillMaxWidth().clickable(enabled = !state.loadingDetail && !detail?.options.isNullOrEmpty()) {
+                        picker = "option"
+                    },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = "奖项名称 *",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.width(84.dp),
+                    )
+                    Text(
+                        text = when {
+                            state.loadingDetail -> "正在读取档位…"
+                            detail == null -> "加载失败，返回重试"
+                            detail.options.isEmpty() -> "该项目暂无可选档位"
+                            else -> state.selectedOption?.label ?: "请选择奖项名称"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (state.selectedOption != null) FontWeight.Medium else FontWeight.Normal,
+                        color = if (state.selectedOption != null) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth().clickable { picker = "start" },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = "开始日期 *",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.width(84.dp),
+                    )
+                    Text(
+                        text = if (state.startTime > 0) dateFormat.format(Date(state.startTime)) else "请选择开始日期",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (state.startTime > 0) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth().clickable { picker = "end" },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = "结束日期 *",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.width(84.dp),
+                    )
+                    Text(
+                        text = if (state.endTime > 0) dateFormat.format(Date(state.endTime)) else "请选择结束日期",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (state.endTime > 0) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+        InsetGroupedSection(header = "总结报告") {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlassTextField(
+                    value = state.report,
+                    onValueChange = { onState(state.copy(report = it)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = "请输入总结报告（必填）",
+                    singleLine = false,
+                    minHeight = 120.dp,
+                )
+                // 关联活动（可选）：站点申请页的搜索选择
+                Row(
+                    Modifier.fillMaxWidth().clickable { onState(state.copy(relateDialog = true, relateKeyword = "")) },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = "关联活动",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.width(84.dp),
+                    )
+                    Text(
+                        text = state.relateActivity?.name ?: "选填，点击搜索关联的活动",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (state.relateActivity != null) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        },
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (state.relateActivity != null) {
+                        Text(
+                            text = "清除",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = SemanticDanger,
+                            modifier = Modifier.clickable { onState(state.copy(relateActivity = null)) },
+                        )
+                    }
+                }
+            }
+        }
+        InsetGroupedSection(
+            header = "证明材料",
+            footer = "图片单张不超过 8M；至少上传一份证明材料（站点校验要求）。",
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                state.materials.forEach { material ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = material.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "删除",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = SemanticDanger,
+                            modifier = Modifier.clickable { onRemoveMaterial(material.url) },
+                        )
+                    }
+                }
+                SystemSecondaryButton(
+                    text = if (state.uploading) "正在上传…" else "添加图片",
+                    onClick = onPickMaterial,
+                    enabled = !state.uploading && !state.submitting,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        SystemPrimaryButton(
+            text = when {
+                state.submitting -> "正在提交…"
+                else -> "提交申报"
+            },
+            onClick = { confirmSubmit = true },
+            enabled = !state.submitting && !state.uploading && !state.loadingDetail,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = "提交后等待审核；如需修改或补充材料，请到「已申报」查看状态并在官方页面跟进。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            lineHeight = 16.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+
+    when (picker) {
+        "option" -> {
+            val options = detail?.options.orEmpty()
+            GlassOptionWheelDialog(
+                title = "选择奖项名称",
+                options = options.map { it.label },
+                selectedIndex = options.indexOfFirst { it.id == state.optionId }.coerceAtLeast(0),
+                onConfirm = { index ->
+                    onState(state.copy(optionId = options[index].id))
+                    picker = null
+                },
+                onDismiss = { picker = null },
+            )
+        }
+        "start" -> GlassDatePickerDialog(
+            title = "项目开始日期",
+            initialMillis = state.startTime.takeIf { it > 0 } ?: System.currentTimeMillis(),
+            onConfirm = { onState(state.copy(startTime = it)); picker = null },
+            onDismiss = { picker = null },
+        )
+        "end" -> GlassDatePickerDialog(
+            title = "项目结束日期",
+            initialMillis = state.endTime.takeIf { it > 0 } ?: System.currentTimeMillis(),
+            onConfirm = { onState(state.copy(endTime = it)); picker = null },
+            onDismiss = { picker = null },
+        )
+    }
+
+    if (state.relateDialog) {
+        SystemDialog(onDismissRequest = { onState(state.copy(relateDialog = false)) }, title = {
+            Text(
+                text = "关联活动",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                GlassTextField(
+                    value = state.relateKeyword,
+                    onValueChange = { onState(state.copy(relateKeyword = it)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = "输入活动名称搜索",
+                    singleLine = true,
+                )
+                SystemSecondaryButton(
+                    text = "搜索",
+                    onClick = { onSearchRelate(state.relateKeyword) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (state.relateSearching) {
+                    SystemLoadingState("搜索中…")
+                } else if (state.relateOptions.isEmpty()) {
+                    Text(
+                        text = "没有找到相关活动，可直接留空提交。",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Column(
+                        Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        state.relateOptions.forEach { option ->
+                            Text(
+                                text = option.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onState(state.copy(relateActivity = option, relateDialog = false))
+                                    }
+                                    .padding(vertical = 8.dp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (confirmSubmit) {
+        val problem = declareFormProblem(state)
+        if (problem != null) {
+            confirmSubmit = false
+            onState(state.copy(error = problem))
+        } else {
+            SystemConfirmDialog(
+                title = "提交申报",
+                text = buildString {
+                    append("项目：").append(state.project.name).append('\n')
+                    state.selectedOption?.let { append("档位：").append(it.name).append('\n') }
+                    if (state.startTime > 0) append("开始：").append(dateFormat.format(Date(state.startTime))).append('\n')
+                    if (state.endTime > 0) append("结束：").append(dateFormat.format(Date(state.endTime))).append('\n')
+                    append("材料：").append(state.materials.size).append(" 份\n\n确认提交？")
+                },
+                confirmText = "确认提交",
+                onConfirm = {
+                    confirmSubmit = false
+                    onSubmit()
+                },
+                onDismiss = { confirmSubmit = false },
+            )
+        }
+    }
+}
+
+/** 提交前的本地校验，与站点 submit() 的判定一致（学期起点由站点校验）。 */
+internal fun declareFormProblem(state: SecondClassDeclareFormUi): String? = when {
+    state.optionId <= 0 -> "请选择奖项名称"
+    state.startTime <= 0L -> "请选择项目开始日期"
+    state.endTime <= 0L -> "请选择项目结束日期"
+    state.endTime < state.startTime -> "结束日期不能小于开始日期"
+    state.report.isBlank() -> "请输入总结报告"
+    state.materials.isEmpty() -> "请上传证明材料"
+    else -> null
 }
 
 /** 申报详情的页内视图（数据全部来自列表项，不再发请求）。 */

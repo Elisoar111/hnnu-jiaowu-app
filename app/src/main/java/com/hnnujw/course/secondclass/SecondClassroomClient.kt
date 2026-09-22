@@ -5,8 +5,12 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,7 +31,8 @@ import kotlin.coroutines.resumeWithException
  * - 站点前端的 `Encrypt` 在该构建里是恒等函数，所以没有签名/加密，照抄编码即可。
  * - 认证靠 `Authorization: <access_token>`，没有 Cookie 依赖。
  *
- * 这里**只做查询**，不提供任何写接口：第二课堂的报名/申报一律回到官方站点操作。
+ * 写接口只做站点**已开放给学生的**报名与申报提交（报名 / 取消报名 / 奖励申报），
+ * 序列化与站点 H5 完全一致；组织侧的 sign/switch、sign/repair 等管理通道一律没有。
  */
 class SecondClassroomClient(
     baseUrl: String,
@@ -433,19 +438,22 @@ class SecondClassroomClient(
     /**
      * 我的申报记录：`GET /project/request/list1` → `data.list`。
      *
+     * 「已申报」页签用：支持按模块（classifyId）与关键词过滤，参数与站点一致。
      * 一次性拉全（`pageSize = 50`）：申报记录天然很少（实测本人 1 条），
      * 为它单独写一套翻页链路不划算。
-     *
-     * ⚠️ 这里**只读**。站点上的申报提交（`/innovate/bonus/apply/submission`、
-     * `/innovate-field-apply/add`、`/innovate-contest-apply/add`、
-     * `/ideology/advanced/enroll` …）一律不在本客户端里出现：申报涉及
-     * 材料附件与个人陈述，必须由用户本人在官方页面完成。
      */
     suspend fun myApplications(
         token: String,
         pageSize: Int = APPLICATION_PAGE_SIZE,
+        classifyId: String = "",
+        search: String = "",
     ): List<SecondClassApplication> {
-        val params = JSONObject().put("pageNum", 1).put("pageSize", pageSize)
+        val params = JSONObject()
+            .put("pageNum", 1)
+            .put("pageSize", pageSize)
+            .put("status", "0,1,2,3")
+            .put("classifyId", classifyId)
+            .put("search", search)
         return get("/project/request/list1", params, token)
             .optJSONObject("data")
             ?.optJSONArray("list")
@@ -471,9 +479,8 @@ class SecondClassroomClient(
     /**
      * 申报项目分类：`GET /dict/project/choice-sort` → `data.filterArray`。
      *
-     * 实测 `filterArray` 是六大能力模块（`level = 1`，首项是 `id = 0` 的「全部」），
-     * 与成绩单的模块名对得上。这里只用来在界面上说明"申报是分模块的"，
-     * 不参与任何提交。
+     * 站点申报页的「分类」下拉（classifyId），首项是 `id = 0` 的「全部」，
+     * 这里过滤掉空项、由界面自己补"全部"。
      */
     suspend fun applicationCategories(token: String): List<SecondClassActivityCategory> =
         get("/dict/project/choice-sort", JSONObject(), token)
@@ -483,6 +490,154 @@ class SecondClassroomClient(
                 SecondClassActivityCategory(id = item.text("id"), name = item.text("name"))
             }
             .filter { it.name.isNotBlank() && it.id != "0" && it.name != "全部" }
+
+    /**
+     * 申报**类型**：`GET /dict/school/system-para/list?fieldType=honor`。
+     *
+     * 站点申报页的「类别」下拉（categoryId），对应奖励类型（如"荣誉/奖项/竞赛"等，
+     * 具体由学校配置）。用户点名要求"申报要选择类型来申报"—— 就是这个下拉。
+     * `data` 本身是数组。
+     */
+    suspend fun declareTypes(token: String): List<SecondClassActivityCategory> =
+        get("/dict/school/system-para/list", JSONObject().put("fieldType", "honor"), token)
+            .dataArray()
+            .mapItems { item ->
+                SecondClassActivityCategory(id = item.text("id"), name = item.text("name"))
+            }
+            .filter { it.name.isNotBlank() && it.id.isNotBlank() }
+
+    /**
+     * 申报项目列表：`GET project/home/page/list`（站点「未申报」页签）。
+     *
+     * 参数与站点 chunk26 完全一致：search / pageNum / pageSize /
+     * sortType（0 最新 / 1 最热）/ classifyId（分类）/ category（类型）。
+     */
+    suspend fun declareProjects(
+        token: String,
+        pageNum: Int = 1,
+        pageSize: Int = ACTIVITY_PAGE_SIZE,
+        search: String = "",
+        sortType: Int = 0,
+        classifyId: String = "",
+        category: String = "",
+    ): SecondClassDeclarePage {
+        val params = JSONObject()
+            .put("search", search)
+            .put("pageNum", pageNum)
+            .put("pageSize", pageSize)
+            .put("sortType", sortType)
+            .put("classifyId", classifyId)
+            .put("category", category)
+        val data = get("/project/home/page/list", params, token).optJSONObject("data")
+        val items = data?.optJSONArray("list").mapObjects { it.toDeclareProject() }
+        val hasMore = if (data?.has("lastPage") == true) {
+            data.bool("lastPage")
+        } else {
+            items.isNotEmpty() && items.size >= pageSize
+        }
+        return SecondClassDeclarePage(items = items, hasMore = hasMore)
+    }
+
+    private fun JSONObject.toDeclareProject(): SecondClassDeclareProject = SecondClassDeclareProject(
+        id = opt("id").asInt(),
+        name = text("name"),
+        classifyId = text("classifyId"),
+        classifyName = text("classifyName"),
+        optionsCount = opt("optionsCount").asInt(),
+        limitTypeName = optJSONObject("projectLimitType")?.text("name").orEmpty(),
+        status = opt("status").asInt(),
+        closeApplyRemark = text("closeApplyRemark"),
+    )
+
+    /**
+     * 申报项目详情：`GET /project/detail/info?id=`。
+     *
+     * `optionList` 是可选的奖项（档位），`explains` 是站点「填写说明」弹窗的文案。
+     */
+    suspend fun declareProjectDetail(token: String, projectId: Int): SecondClassDeclareProjectDetail {
+        val data = get("/project/detail/info", JSONObject().put("id", projectId), token)
+            .optJSONObject("data") ?: return SecondClassDeclareProjectDetail(id = projectId, name = "")
+        return SecondClassDeclareProjectDetail(
+            id = data.opt("id").asInt().takeIf { it > 0 } ?: projectId,
+            name = data.text("name"),
+            explains = data.text("explains"),
+            options = data.optJSONArray("optionList").mapObjects { option ->
+                SecondClassDeclareOption(
+                    id = option.opt("id").asInt(),
+                    name = option.text("name"),
+                    hours = option.optDouble("optionHours", 0.0),
+                    awardsValid = option.opt("awardsValid").asInt(),
+                )
+            },
+        )
+    }
+
+    /**
+     * 上传申报证明材料：`POST import/upload/image`（multipart）。
+     *
+     * 站点实现（chunk0 的 `iTqn` 模块，schoolId=10381 走**本地直传**分支）：
+     * 字段 `file` 放文件、`params` 放 `Encrypt(JSON.stringify({type:4}))` ——
+     * 而本站构建里 `Encrypt` 是**恒等函数**（app.js 的 `aNLv` 模块），
+     * 所以 `params` 就是字面量 `{"type":4}`。头 `Authorization: <token>` 与其它接口一致。
+     * 成功后 `data` 是 url（历史构建里是 `url|…`，取竖线前一段更稳）。
+     */
+    suspend fun uploadDeclareMaterial(
+        token: String,
+        bytes: ByteArray,
+        fileName: String,
+        mimeType: String?,
+    ): String {
+        val builder = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart(
+                "file",
+                fileName,
+                bytes.toRequestBody(mimeType?.toMediaType()),
+            )
+            .addFormDataPart("params", "{\"type\":4}")
+        val json = request(base + "/import/upload/image", builder.build(), token)
+        // 信封两种形态都吃：data 直接是 url 串，或 data:{url:...}
+        val url = (json.optJSONObject("data")?.text("url") ?: json.text("data"))
+            .substringBefore("|")
+            .trim()
+        if (url.isBlank()) throw SecondClassException("上传返回缺少附件地址，请重试")
+        return url
+    }
+
+    /**
+     * 提交申报：`POST /project/apply/add_3_0_1`，载荷即站点 `subData`：
+     * `{projectId, optionId, startTime(毫秒), endTime(毫秒), report, joinNumber:1,
+     *   relateActivityId, relateActivityName, urls:[{id:0,url,name,size,type}]}`。
+     *
+     * 站点的前置校验（optionId / report / urls 非空、起止先后、不得早于学期开始）
+     * 由上层表单完成；这里不做自动重试，失败把服务端 `msg` 原样交给用户。
+     *
+     * @return 新申报记录的 id（站点成功响应 `data.id`，用户据此跳"我的申报"）。
+     */
+    suspend fun submitDeclareApplication(token: String, submission: SecondClassDeclareSubmission): Int {
+        val urls = JSONArray()
+        submission.materials.forEach { urls.put(it.toJson()) }
+        val body = JSONObject()
+            .put("projectId", submission.projectId)
+            .put("optionId", submission.optionId)
+            .put("startTime", submission.startTime)
+            .put("endTime", submission.endTime)
+            .put("report", submission.report)
+            .put("joinNumber", 1)
+            .put("relateActivityId", submission.relateActivityId ?: JSONObject.NULL)
+            .put("relateActivityName", submission.relateActivityName)
+            .put("urls", urls)
+        val payload = post("/project/apply/add_3_0_1", body, token)
+        return payload.optJSONObject("data")?.opt("id").asInt()
+    }
+
+    /** 关联活动搜索（站点申请页 `GET /activity/search/list?searchName=`）。 */
+    suspend fun searchRelateActivities(token: String, keyword: String): List<SecondClassActivity> {
+        if (keyword.isBlank()) return emptyList()
+        return get("/activity/search/list", JSONObject().put("searchName", keyword), token)
+            .dataArray()
+            .mapItems { it.toActivity() }
+    }
 
     /** 活动通知：`{pageNum, pageSize, activityId}` → `data.list`。 */
     suspend fun activityNotices(
@@ -831,7 +986,7 @@ class SecondClassroomClient(
         return request(base + path, form, token)
     }
 
-    private suspend fun request(url: String, form: FormBody?, token: String?): JSONObject {
+    private suspend fun request(url: String, form: RequestBody?, token: String?): JSONObject {
         var target = url
         var hops = 0
         while (true) {
