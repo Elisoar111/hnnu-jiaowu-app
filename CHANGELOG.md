@@ -4,6 +4,32 @@
 > 自 1.0.68 起，每个版本的更新日志以 `release-notes/vX.Y.Z.md` 为唯一数据源，由 CI 扇出到本文件、GitHub Release 与应用内更新提示。
 > 1.0.67 未发布：该 tag 的流水线在版本号校验步骤失败，未产出任何 Release，内容顺延至 1.0.68。
 
+## [1.2.4] - 2026-09-22
+
+### 新增
+
+- 接入学工系统（学生工作处 `xg.hnnu.edu.cn`），只读查看日常请假与节假日去向登记。新增 `xuegong/XuegongClient.kt`（登录、请假列表、去向登记列表，同源重定向跟随，HTML 登录页翻成 `sessionExpired`）、`xuegong/XuegongStore.kt`（复用 `CredentialStore`，token 存 `xuegong_prefs`）、`xuegong/XuegongModels.kt`、`XuegongActivity.kt` 与 `ui/screen/XuegongScreen.kt`（液态玻璃页头信息卡 + 统计胶囊 + 图标化列表 + 分区详情 + `moduleEntrance()` 入场动效）；入口在「我的」页新增的「校园服务」分组。
+- 学工系统登录：`POST /PhoneApi/api/Account/Login`，密码用站点写死的 JSEncrypt 公钥做 RSA PKCS#1 v1.5 加密后提交，成功判据是响应 `Msg == "OK"`；成功后请求头为 `Authorization: Bearer <token>`（与二课的无前缀写法不同）。`utils/RSAUtils.kt` 新增 `encryptWithPublicKey(spkiBase64, data)`，直接用 `X509EncodedKeySpec` 吃 DER，不用手工剥 TLV。登录状态失效时用保存的密码自动静默续期一次（只试一次，失败即回到登录框）；顶栏提供「刷新」与「退出学工登录」，后者只清本机学工凭据。
+- 第二课堂新增「申报」标签（位于「已报」右侧）：`SecondClassroomClient.myApplications()` 拉取 `/project/request/list1`（一次 50 条），`applicationCategories()` 拉取 `/dict/project/choice-sort`；新增模型 `SecondClassApplication`，列表展示项目名、认定档位、所属模块、认定学时与时间，点开进入详情看完整字段。只读，不含任何提交通道。
+- 后台自动检查更新：新增 `network/UpdateCheckScheduler.kt`（`AlarmManager.setAndAllowWhileIdle` 自续期、24 小时一次、穿透 Doze）、`network/UpdateCheckReceiver.kt`（`goAsync()` + 协程 + `withTimeoutOrNull(9s)`，`finally` 重排下一次）、`network/UpdateNotifier.kt`（建「版本更新」通知渠道，同一版本只通知一次，点通知去下载页）；`MainActivity` 启动时挂载调度，与登录态无关。不引入 WorkManager（项目未依赖）。
+
+### 变更
+
+- 学工系统页面按应用既有的液态玻璃语言重做：页头信息卡（系统图标 + 系统名 + 登录徽章 + 学号 + 统计胶囊）、`InsetGroupedSection` 分区的登录表单、图标 chip 行式列表、时间线卡片式的详情页、页面底部固定的只读提示，全部走 `glassSurfaceColor()` / `glassBorderColor()` 与 `moduleEntrance()` 入场动效，不再是纯文字堆叠。
+- 学工接口的错误判定只认 HTTP 状态：实测 `/DailyLeave/StuDisLeave` 会在 `data` 完全正常的情况下返回 `errcode: 1, errmsg: "销假失败"`，errcode 语义未定，因此不拿它判成败。同时该站点两处列表的信封不一致（请假有 `data` 包裹、`HolidayWhereabouts/GetStuList` 是顶层裸对象），客户端分别取值。
+- 明文 HTTP 白名单新增 `xg.hnnu.edu.cn`（该站点无 HTTPS 入口）。`network_security_config.xml` 是白名单机制、注释里已写明「新增明文站点必须显式登记」，未回到全局开关。
+- 第二课堂 Tab 由 4 个变 5 个，`TABS = 活动 / 已报 / 申报 / 消息 / 成绩单`；消息与成绩单的下标后移，`when(ui.tab)` 内容分支、副标题与顶栏按钮、空态判定、以及宿主借助下标驱动的「成绩单按需加载」常量与 `loadMore` 分支全部同步调整。
+- 学工系统与二课申报的只读边界写进页面文案与手册：提交类接口（`DailyLeave/SaveForm`、`HolidayWhereabouts/SaveForm`、`HolidayStay/SaveForm`、`HolidayStay/Del`、二课 `/project/apply/delete`、`/project/apply/repeal` 及各类 `apply/add`）一律不接入。
+
+### 文档
+
+- 用户手册新增第 8 章「学工系统」（登录、日常请假、节假日去向登记、只读说明），其后章节整体顺延；第 7 章第二课堂补充「申报」标签的用法与只读/原始状态码说明；第 10 章新增「校园服务」分组条目，并更新「检查更新」与「有新版本吗」两处关于后台巡检的描述；手册版本标注同步为 v1.2.4。
+- 删除仓库中上一轮逆向分析留下的 9 个临时文件（`cas_*.js` / `cas_login.html` / `scripts/_probe_*.py`），均未被任何代码引用。
+
+### 公告
+
+- 随包新增 v1.2.4 公告（`20260922_v1_2_4_release`），版本范围锁在 10204–10204。
+
 ## [1.2.3] - 2026-09-22
 
 ### 新增
