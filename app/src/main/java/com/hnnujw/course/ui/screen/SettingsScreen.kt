@@ -41,6 +41,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.TextFormat
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.HowToReg
 import androidx.compose.material.icons.outlined.School
@@ -104,6 +105,9 @@ fun SettingsScreen(
     wallpaperName: String = "",
     themeName: String = "跟随系统",
     onThemeSelect: () -> Unit = {},
+    /** 当前应用字体（系统 / 苹方 / 自定义·文件名）。 */
+    fontName: String = "系统字体",
+    onFontSelect: () -> Unit = {},
     startupPageName: String = "课表",
     onStartupPageSelect: () -> Unit = {},
     glassEffectEnabled: Boolean = true,
@@ -286,6 +290,13 @@ fun SettingsScreen(
                     title = "背景",
                     subtitle = wallpaperName.ifBlank { "选择背景色或图片" },
                     onClick = onWallpaperSelect
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.TextFormat,
+                    iconTint = Color(0xFFFF9500),
+                    title = "字体",
+                    subtitle = fontName,
+                    onClick = onFontSelect
                 )
                 InsetGroupedRow(
                     icon = Icons.Outlined.AutoAwesome,

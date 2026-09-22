@@ -14,6 +14,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -116,6 +117,11 @@ fun CourseSelectorTheme(
 
     val colorScheme = baseColorScheme
 
+    // 应用字体：选项切换 / 自定义字体重新导入时 key 变化 → 重建 Typography，
+    // MaterialTheme 换新 typography 当帧全文生效，无需重启或重建 Activity。
+    val appFontFamily = rememberAppFontFamily()
+    val themedTypography = remember(appFontFamily) { Typography.withFontFamily(appFontFamily) }
+
     val view = LocalView.current
     val rootWallpaperColors = rememberWallpaperRegionAppearance(darkTheme = resolvedDarkTheme)
     val metrics = view.resources.displayMetrics
@@ -163,7 +169,7 @@ fun CourseSelectorTheme(
     ) {
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = Typography,
+            typography = themedTypography,
             shapes = AppShapes,
             content = { ProvideWallpaperAppearance(rootWallpaperColors, content) }
         )

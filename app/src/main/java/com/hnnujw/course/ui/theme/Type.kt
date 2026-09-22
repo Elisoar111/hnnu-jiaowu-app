@@ -107,6 +107,31 @@ val Typography = Typography(
     )
 )
 
+/**
+ * 以指定字体重建整套 Typography。
+ *
+ * 15 个 M3 样式逐一 copy（displaySmall 没在静态 val 里定制过，也一并覆盖，
+ * 避免切到苹方后它漏成默认字体）。等宽的 MonoData* 是顶层 val 而不是
+ * Typography 成员，不受影响——数字指标等终端风格展示永远等宽。
+ */
+fun Typography.withFontFamily(family: FontFamily): Typography = Typography(
+    displayLarge = displayLarge.copy(fontFamily = family),
+    displayMedium = displayMedium.copy(fontFamily = family),
+    displaySmall = displaySmall.copy(fontFamily = family),
+    headlineLarge = headlineLarge.copy(fontFamily = family),
+    headlineMedium = headlineMedium.copy(fontFamily = family),
+    headlineSmall = headlineSmall.copy(fontFamily = family),
+    titleLarge = titleLarge.copy(fontFamily = family),
+    titleMedium = titleMedium.copy(fontFamily = family),
+    titleSmall = titleSmall.copy(fontFamily = family),
+    bodyLarge = bodyLarge.copy(fontFamily = family),
+    bodyMedium = bodyMedium.copy(fontFamily = family),
+    bodySmall = bodySmall.copy(fontFamily = family),
+    labelLarge = labelLarge.copy(fontFamily = family),
+    labelMedium = labelMedium.copy(fontFamily = family),
+    labelSmall = labelSmall.copy(fontFamily = family)
+)
+
 // ═══════════════════════════════════════════════════════════
 // 等宽字体排版（用于数字指标、延迟数据等终端风格展示）
 // ═══════════════════════════════════════════════════════════

@@ -75,6 +75,9 @@ signature_report.txt
 # Whitelist (sensitive)
 whitelist.json
 
+# 字体源文件（苹方全家桶 ~60MB 不入库；只提交 res/font 里裁出来的三个字重）
+/font/
+
 # Other
 *.bak
 *.tmp

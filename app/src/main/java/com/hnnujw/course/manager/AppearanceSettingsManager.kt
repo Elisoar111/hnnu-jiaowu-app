@@ -164,6 +164,13 @@ fun imageWallpaperStyle(
     )
 }
 
+/** 应用字体选项：系统字体（默认）/ 苹方（随包内置）/ 自定义（用户从手机导入的 ttf / otf）。 */
+enum class AppFontOption(val label: String) {
+    System("系统字体"),
+    Apple("苹方字体"),
+    Custom("自定义字体"),
+}
+
 /**
  * 外观偏好单例。壁纸以 Compose state 暴露，供各页画布观察，切换即重绘。
  */
@@ -171,6 +178,7 @@ object AppearanceSettingsManager {
     private const val PREFS_NAME = "appearance_settings"
     private const val KEY_WALLPAPER = "wallpaper_preset"
     private const val KEY_CUSTOM_COLOR = "wallpaper_custom_color"
+    private const val KEY_APP_FONT = "app_font_option"
     /** 旧键。只在读不到 [KEY_MODE] 时用来推断模式，升级用户的设置才不会丢。 */
     private const val KEY_USE_CUSTOM = "wallpaper_use_custom"
     private const val KEY_MODE = "wallpaper_mode"
@@ -202,7 +210,6 @@ object AppearanceSettingsManager {
 
     private var prefs: SharedPreferences? = null
     private var appContext: Context? = null
-
     var themeMode by mutableStateOf(AppThemeMode.System)
         private set
 
@@ -244,6 +251,21 @@ object AppearanceSettingsManager {
      * 拨动开关当帧生效，不需要走一次页面重建。
      */
     var showClassRank by mutableStateOf(true)
+        private set
+
+    /** 应用字体（默认系统字体）。主题层订阅它重建 Typography，切换当帧全文生效。 */
+    var appFont by mutableStateOf(AppFontOption.System)
+        private set
+
+    /** 自定义字体的显示名（导入时的文件名）；未导入时为空串。 */
+    var customFontName by mutableStateOf("")
+        private set
+
+    /**
+     * 自定义字体内容版本：导入成功时 +1。主题层用它做 remember 的 key，
+     * 同名文件被替换后也能重新加载 Typeface。
+     */
+    var customFontVersion by mutableStateOf(0)
         private set
 
     /** 用户自定义底色，从未设置过则为 null。 */
@@ -305,6 +327,15 @@ object AppearanceSettingsManager {
             ?: WallpaperPreset.Aurora
         glassEffectEnabled = prefs?.getBoolean(KEY_GLASS_EFFECT, true) ?: true
         showClassRank = prefs?.getBoolean(KEY_SHOW_CLASS_RANK, true) ?: true
+        appFont = prefs?.getString(KEY_APP_FONT, null)
+            ?.let { name -> runCatching { AppFontOption.valueOf(name) }.getOrNull() }
+            ?: AppFontOption.System
+        if (appFont == AppFontOption.Custom && !CustomFontStore.exists(app)) {
+            // 字体文件被清数据/换机迁移弄丢了：别把用户留在"选了自定义但没有字体"的档位
+            appFont = AppFontOption.System
+            prefs?.edit()?.putString(KEY_APP_FONT, AppFontOption.System.name)?.apply()
+        }
+        customFontName = if (CustomFontStore.exists(app)) CustomFontStore.displayName(app) else ""
         customColor = prefs
             ?.takeIf { it.contains(KEY_CUSTOM_COLOR) }
             ?.getInt(KEY_CUSTOM_COLOR, 0)
@@ -381,6 +412,68 @@ object AppearanceSettingsManager {
         if (showClassRank == enabled) return
         showClassRank = enabled
         prefs?.edit()?.putBoolean(KEY_SHOW_CLASS_RANK, enabled)?.apply()
+    }
+
+    /**
+     * 切换应用字体。
+     *
+     * 选「自定义」但还没导入过字体文件时会被拦下——调用方（字体弹窗）应当
+     * 先走导入流程，导入成功会经 [onCustomFontImported] 自动落到自定义档。
+     */
+    fun updateAppFont(value: AppFontOption) {
+        if (appFont == value) return
+        if (value == AppFontOption.Custom && customFontName.isBlank()) {
+            // 正常路径下名字在导入时已写入；万一只剩文件（偏好被清过）也放行，
+            // 顺手把名字补回来——别把用户卡死在"点自定义没反应"
+            val app = appContext ?: return
+            if (!CustomFontStore.exists(app)) return
+            customFontName = CustomFontStore.displayName(app)
+        }
+        appFont = value
+        prefs?.edit()?.putString(KEY_APP_FONT, value.name)?.apply()
+    }
+
+    /**
+     * 自定义字体导入成功后的收口：记显示名、推进内容版本（主题层拿它当
+     * remember 的 key 重载 Typeface）、并把当前选项直接切到自定义档——
+     * 导入即应用，省一次点击。显示名本身由 [CustomFontStore.import] 落盘。
+     */
+    fun onCustomFontImported(name: String) {
+        customFontName = name
+        customFontVersion += 1
+        appFont = AppFontOption.Custom
+        prefs?.edit()?.putString(KEY_APP_FONT, AppFontOption.Custom.name)?.apply()
+    }
+
+    /**
+     * 从 SAF Uri 导入自定义字体（异步：复制 + 校验在 IO 线程做，几十 MB 的
+     * ttf 不该卡主线程）。挂在管理器自己的 [ioScope] 上而不是调用方的
+     * rememberCoroutineScope——弹窗在导入途中被关掉也不能把导入掐死。
+     *
+     * @param onResult 回主线程。ok=true 时 msg 是显示名，false 时是给用户看的失败原因。
+     */
+    fun importCustomFont(
+        context: Context,
+        uri: Uri,
+        suggestedName: String,
+        onResult: (ok: Boolean, message: String) -> Unit
+    ) {
+        val app = appContext ?: context.applicationContext.also { appContext = it }
+        ioScope.launch {
+            val result = runCatching { CustomFontStore.import(app, uri, suggestedName) }
+            withContext(Dispatchers.Main) {
+                result.fold(
+                    onSuccess = { name ->
+                        onCustomFontImported(name)
+                        onResult(true, name)
+                    },
+                    onFailure = { e ->
+                        Log.w(TAG, "自定义字体导入失败", e)
+                        onResult(false, e.message ?: "字体导入失败，请重试")
+                    }
+                )
+            }
+        }
     }
 
     /**

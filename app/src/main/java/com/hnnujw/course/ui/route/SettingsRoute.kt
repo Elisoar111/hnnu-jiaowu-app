@@ -118,6 +118,7 @@ fun SettingsRoute(
     var pendingAccountDelete by remember { mutableStateOf<UserManager.AccountRecord?>(null) }
     var showWallpaperDialog by remember { mutableStateOf(false) }
     var showThemeDialog by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var showFontDialog by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var showStartupPageDialog by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     val startupPagePreferences = remember(context) { StartupPagePreferences.from(context) }
     var startupPage by remember(startupPagePreferences) { mutableStateOf(startupPagePreferences.read()) }
@@ -482,6 +483,17 @@ fun SettingsRoute(
         wallpaperName = currentWallpaperName,
         themeName = AppearanceSettingsManager.themeMode.label,
         onThemeSelect = { showThemeDialog = true },
+        fontName = AppearanceSettingsManager.appFont.label.let { label ->
+            // 自定义档把字体文件名带上，用户才知道当前用的是哪个字体
+            if (AppearanceSettingsManager.appFont == com.hnnujw.course.manager.AppFontOption.Custom &&
+                AppearanceSettingsManager.customFontName.isNotBlank()
+            ) {
+                "$label（${AppearanceSettingsManager.customFontName}）"
+            } else {
+                label
+            }
+        },
+        onFontSelect = { showFontDialog = true },
         // 启动页选择器：二课 Tab 已恢复，无需兜底
         startupPageName = startupPage.label,
         onStartupPageSelect = { showStartupPageDialog = true },
@@ -524,6 +536,9 @@ fun SettingsRoute(
     )
     if (showThemeDialog) {
         com.hnnujw.course.ui.screen.AppThemeSettingsDialog { showThemeDialog = false }
+    }
+    if (showFontDialog) {
+        com.hnnujw.course.ui.screen.FontSettingsDialog(onDismiss = { showFontDialog = false })
     }
     if (showStartupPageDialog) {
         com.hnnujw.course.ui.screen.StartupPageSettingsDialog(
