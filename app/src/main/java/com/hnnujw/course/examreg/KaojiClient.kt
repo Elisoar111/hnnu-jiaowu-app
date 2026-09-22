@@ -4,11 +4,8 @@ import com.hnnujw.course.academic.AcademicException
 import com.hnnujw.course.academic.AcademicHtml
 import com.hnnujw.course.academic.AcademicHttpTransport
 import com.hnnujw.course.academic.AcademicStatus
-import com.hnnujw.course.manager.UserManager
 import com.hnnujw.course.model.SchoolConfig
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * 教务系统「考级项目报名」（kjgl/kjbm_*，gnmkdm=N2510）客户端。
@@ -16,12 +13,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * 全部走 [AcademicHttpTransport] 的已登录会话（与课表/成绩共用 Cookie），
  * 会话失效以「响应是登录页」判定 —— 正方对未登录的 XHR 一律 200 回登录页。
  *
- * ## 测试账号保护（硬性要求）
- *
- * [TEST_ACCOUNTS] 里的账号（当前只有 2505050111）**永远不会**发出报名/退报
- * 这类写请求：[submitRegistration] / [withdrawRegistration] 在入口处直接返回
- * 模拟结果，连前置检查 POST 也不发。读接口（入口页 / 已报名列表 / 报名表单页）
- * 不受限 —— 它们是幂等 GET，与网页浏览等价。
+ * 报名/退报是真实的写请求，与网页端操作等价；界面层负责在确认弹窗里
+ * 让用户复核报名说明与联系电话后才调用这里。
  */
 object KaojiClient {
 
@@ -29,12 +22,6 @@ object KaojiClient {
     private const val INDEX_PATH = "kjgl/kjbm_cxXskjbm.html"
     private const val GNMKDM = "N2510"
     private const val XMLBFL = "1001"
-
-    /** 这些账号只读演示：报名/退报一律本地模拟，不触碰教务系统。 */
-    private val TEST_ACCOUNTS = setOf("2505050111")
-
-    /** 学号命中测试账号（currentAccountKey 是复合键，学号要看 studentId）。 */
-    fun isTestAccount(): Boolean = UserManager.getInstance().studentId.trim() in TEST_ACCOUNTS
 
     // ── 结果模型 ─────────────────────────────────────────────────────────
 
@@ -45,8 +32,6 @@ object KaojiClient {
     }
 
     sealed class SubmitResult {
-        /** 测试账号的本地模拟成功：没有发生任何网络写请求。 */
-        data class Simulated(val message: String) : SubmitResult()
         data class Success(val message: String) : SubmitResult()
         data class Failure(val message: String) : SubmitResult()
         data class NeedLogin(val message: String) : SubmitResult()
@@ -56,7 +41,7 @@ object KaojiClient {
 
     /**
      * 拉取考级报名主页：项目卡片 + 已报名记录。
-     * 两个请求都是 GET，与网页浏览等价，不受测试账号限制。
+     * 两个请求都是 GET，与网页浏览等价。
      */
     suspend fun loadPage(transport: AcademicHttpTransport, school: SchoolConfig): LoadResult {
         return try {
@@ -105,10 +90,6 @@ object KaojiClient {
         xqm: String,
         phone: String,
     ): SubmitResult {
-        // 🔒 测试账号：任何写请求都不发（连前置检查也不发），本地直接模拟成功。
-        if (isTestAccount()) {
-            return SubmitResult.Simulated("测试账号演示：已模拟报名「${project.title}」，未向教务系统提交任何数据")
-        }
         return try {
             val check = transport.postForm(
                 transport.appUrl("kjgl/kjbm_cxJcXskjbm.html"),
@@ -165,20 +146,17 @@ object KaojiClient {
         }
     }
 
-    // ── 退报（受测试账号保护）────────────────────────────────────────────
+    // ── 退报 ─────────────────────────────────────────────────────────────
 
     /**
      * 退报一条已报名记录。站点口径：已缴费或正在缴费（jfzt 的 sfqr/sfzfzzt）
-     * 不允许退报。测试账号直接本地模拟，不发任何 POST。
+     * 不允许退报；报名截止后的禁退由界面层判断（不发起请求）。
      */
     suspend fun withdrawRegistration(
         transport: AcademicHttpTransport,
         school: SchoolConfig,
         record: KaojiRegistered,
     ): SubmitResult {
-        if (isTestAccount()) {
-            return SubmitResult.Simulated("测试账号演示：已模拟退报「${record.name}」，未向教务系统提交任何数据")
-        }
         return try {
             val status = transport.postForm(
                 transport.appUrl("kjgl/kjbm_cxXskjbmjfzt.html?xsbmqk_id=${record.id}"),

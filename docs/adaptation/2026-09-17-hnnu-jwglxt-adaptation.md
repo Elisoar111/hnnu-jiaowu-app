@@ -53,7 +53,7 @@
 
 | 字段 | 来源 | 说明 |
 | --- | --- | --- |
-| 姓名 | `GET /xtgl/index_cxYhxxIndex.html?gnmkdm=index` → `<h4 class="media-heading">胡敏翔&nbsp;&nbsp;学生</h4>` | `parseName` 会剥离"学生/同学/教师/老师"后缀 |
+| 姓名 | `GET /xtgl/index_cxYhxxIndex.html?gnmkdm=index` → `<h4 class="media-heading">张三（示例名）&nbsp;&nbsp;学生</h4>` | `parseName` 会剥离"学生/同学/教师/老师"后缀 |
 | 学号 | **该页没有**，需回退到 `GET /xtgl/index_initMenu.html` 读 `<input id="sessionUserKey" value="<学号>">` | 由 `zfMenuIdentityFallback` 完成 |
 
 ---

@@ -561,20 +561,8 @@ fun LoginScreen(
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // WebView Cookie Button - 密码模式下点击自动切换到 Cookie 登录
-                        if (loginTab == 0 && onPasswordLogin != null) {
-                            // 密码模式：不显示内嵌浏览器按钮，显示提示文字
-                            TextButton(
-                                onClick = { loginTab = 1 },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    text = "切换到 Cookie 登录 →",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        } else if (loginTab == 1) {
+                        // WebView Cookie Button - Cookie 模式下提供内嵌浏览器入口
+                        if (loginTab == 1) {
                             SystemSecondaryButton(
                                 text = "内嵌浏览器自动获取",
                                 onClick = onOpenWebView,
