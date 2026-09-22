@@ -84,8 +84,10 @@ import com.hnnujw.course.ui.system.SystemCard
 import com.hnnujw.course.ui.system.SystemConfirmDialog
 import com.hnnujw.course.ui.system.SystemDialog
 import com.hnnujw.course.ui.system.SystemEmptyState
+import com.hnnujw.course.ui.system.SystemActionMenu
 import com.hnnujw.course.ui.system.SystemIconButton
 import com.hnnujw.course.ui.system.SystemLoadingState
+import com.hnnujw.course.ui.system.SystemMenuAction
 import com.hnnujw.course.ui.system.SystemPrimaryButton
 import com.hnnujw.course.ui.system.SystemSecondaryButton
 import com.hnnujw.course.ui.system.SystemSegmentedControl
@@ -302,7 +304,7 @@ fun SecondClassActivityCenterScreen(
             currentDetail != null -> "活动详情"
             applicationDetail != null -> "申报详情"
             declareForm != null -> "奖励申报"
-            else -> "活动中心"
+            else -> "第二课堂"
         },
         subtitle = if (currentDetail == null && declareForm == null) {
             when (ui.tab) {
@@ -326,21 +328,15 @@ fun SecondClassActivityCenterScreen(
             if (currentDetail == null && applicationDetail == null && declareForm == null) {
                 when (ui.tab) {
                     0 -> {
-                        // 筛选：已满 / 本院系可报
-                        SystemIconButton(
-                            icon = Icons.Outlined.FilterList,
-                            contentDescription = "筛选活动",
-                            onClick = { showFilterSheet = true },
-                        )
-                        SystemIconButton(
-                            icon = Icons.Outlined.Refresh,
-                            contentDescription = "刷新",
-                            onClick = onRefresh,
-                        )
-                        SystemIconButton(
-                            icon = Icons.Outlined.QrCodeScanner,
-                            contentDescription = "扫码签到或识别图片",
-                            onClick = { showScanPicker = true },
+                        // 活动页的动作收进「更多」菜单（与课表顶栏同款交互）：
+                        // 筛选 / 刷新 / 扫码，不再占顶栏一排图标位。
+                        SystemActionMenu(
+                            description = "更多活动操作",
+                            actions = listOf(
+                                SystemMenuAction("筛选活动", Icons.Outlined.FilterList, onClick = { showFilterSheet = true }),
+                                SystemMenuAction("刷新", Icons.Outlined.Refresh, onClick = { onRefresh() }),
+                                SystemMenuAction("扫码签到", Icons.Outlined.QrCodeScanner, onClick = { showScanPicker = true })
+                            )
                         )
                     }
                     2 -> SystemIconButton(

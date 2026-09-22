@@ -36,8 +36,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -453,9 +451,6 @@ fun ScheduleScreen(
             else pagerState.animateScrollToPage(requestedUnit - 1, animationSpec = com.hnnujw.course.ui.theme.MotionProfile.pagerSpring())
         }
     }
-    // 顶栏左右箭头：周视图移动一周；日视图按参考实现整周跳（同星期翻周），横向滑动负责逐日。
-    fun moveWeek(delta: Int) = moveUnit(delta * if (dayView) 7 else 1)
-
     // 桌面组件等外部来源的「回到今天」：必须同时复位星期，否则日视图下会
     // 落到"这一周你上次浏览的那天"而不是今天（深链只带周次信息的坑）。
     LaunchedEffect(todayRequest) {
@@ -530,12 +525,6 @@ fun ScheduleScreen(
                     weekOffset = if (reducedMotion) 0f else pagerState.currentPageOffsetFraction,
                     firstWeekDate = effectiveFirstWeekDate,
                     actualWeek = actualWeek,
-                    onPrevClick = {
-                        moveWeek(-1)
-                    },
-                    onNextClick = {
-                        moveWeek(1)
-                    },
                     onSettingsClick = onSettingsClick,
                     onExportClick = onExportClick,
                     onMakeUpFromWeekday = onMakeUpFromWeekday,
@@ -687,8 +676,6 @@ fun ScheduleScreen(
 @Composable
 fun WeekHeaderCompact(
     currentWeek: Int,
-    onPrevClick: () -> Unit,
-    onNextClick: () -> Unit,
     onSettingsClick: () -> Unit = {},
     onExportClick: () -> Unit = {},
     /** 点击周末（周六=6/周日=7）星期条触发补课入口；为空时周末条不可点。 */
@@ -877,28 +864,7 @@ fun WeekHeaderCompact(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        com.hnnujw.course.ui.system.TopBarActionRail(spacing = lerpDp(4.dp, 3.dp, collapse)) {
-                            val buttonSize = lerpDp(34.dp, 30.dp, collapse)
-                            val iconSize = lerpDp(16.dp, 15.dp, collapse)
-                            action(
-                                index = 0,
-                                icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                                contentDescription = "上一周",
-                                onClick = onPrevClick,
-                                enabled = currentWeek > 1,
-                                buttonSize = buttonSize,
-                                iconSize = iconSize
-                            )
-                            action(
-                                index = 1,
-                                icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = "下一周",
-                                onClick = onNextClick,
-                                enabled = currentWeek < 25,
-                                buttonSize = buttonSize,
-                                iconSize = iconSize
-                            )
-                        }
+                        // 翻周靠横向滑动 pager（箭头已按需求移除，动作行更宽松）。
                         // 日/周视图切换（参考项目的 ScheduleViewToggle）：
                         // 88dp 定宽壳里放 36dp 高的分段控件，折叠时随行高一起收。
                         Box(
