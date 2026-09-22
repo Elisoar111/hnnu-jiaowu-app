@@ -4,6 +4,28 @@
 > 自 1.0.68 起，每个版本的更新日志以 `release-notes/vX.Y.Z.md` 为唯一数据源，由 CI 扇出到本文件、GitHub Release 与应用内更新提示。
 > 1.0.67 未发布：该 tag 的流水线在版本号校验步骤失败，未产出任何 Release，内容顺延至 1.0.68。
 
+## [1.2.5] - 2026-09-23
+
+### 新增
+
+- 课表日视图：`ScheduleAgenda`（周次 + 节次换算真实时间轴，正在上课 / 下一节 / 剩余堂数）与 `ScheduleAgendaContent`（按天分页的课程卡列表）；顶栏「日 / 周」`LiquidSegmentedControl` 切换，两种视图各自记住滚动位置；日视图偏离今天时时间列显示「今天」快捷按钮，星期条点按跳日且高亮跟随浏览日。
+- 分页同步泛化：`ScheduleWeekPagerSync` 由「周次」泛化为「页单元」制（周视图 = 周次，日视图 = (周-1)*7+星期），新增 firstUnit / lastUnit 参数，`settledWeek` 更名 `settledUnit`，单元测试同步覆盖两种模式。
+- 桌面小组件回归（三种样式）：`schedule/ScheduleWidgetProvider` + `ScheduleSingleWidgetProvider` + `ScheduleTimelineWidgetProvider`（RemoteViews 渲染，浅深色两套背景），`ScheduleRepository.snapshot` 只读本地课表缓存（schedule_cache + 自定义课程 + 四级时间基准兜底），`ScheduleWidgetUpdater`（prefs 监听 + 会话流 + 跨天边界闹钟，挂 CourseApplication 主进程），`ScheduleWidgetNavigation` 深链（点组件回课表 / 课程详情 / 同步 / 设置），`ScheduleWidgetPicker` 预览并请求钉到桌面。
+- 课表设置新增「课表显示」分区：显示密度「标准 / 紧凑」（紧凑节次行高 ×0.78，`ScheduleDisplayStore` 全局持久化）；课表字号由滚轮弹窗改为 `SystemPicker` 内联点选档位。
+
+### 变更
+
+- 课表顶栏动作区重构：移除上一周 / 下一周箭头（翻周由 pager 横滑承担），动作行改为「日 / 周切换 + 更多菜单」；`SystemActionMenu` 收纳同步课表 / 导出课表 / 添加课程 / 桌面组件 / 课表设置五个动作；标题列宽度放宽，「第 X 周」、日期与「(非本周)」标注不再受挤压。
+- 第二课堂入口大标题「活动中心」改为「第二课堂」；活动页顶栏筛选 / 刷新 / 扫码三个图标收进「···」更多菜单（与课表顶栏同款交互），其余 Tab 动作不变。
+
+### 文档
+
+- 用户手册：4.1 改为「日视图与周视图」（含新顶栏说明），4.2 改为「切换周次与回到今天」（横滑 + 星期条点按 + 今天按钮），4.6 / 4.8 入口改为「···」菜单写法并补充显示密度行，4.9 整节重写为「桌面小组件（1.2.5 起）」三种样式与用法；第 7 章补充大标题与「···」菜单说明，7.4 / 7.5 入口同步；重跑 `scripts/build_manual.py` 重新生成 `assets/users_manual.json`。
+
+### 公告
+
+- 随包新增 v1.2.5 公告（`20260923_v1_2_5_release`），版本范围锁 10205–10205。
+
 ## [1.2.4] - 2026-09-22
 
 ### 新增
