@@ -41,6 +41,9 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -68,6 +71,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
@@ -91,8 +96,14 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hnnujw.course.ui.system.AnimatedIconSpec
+import com.hnnujw.course.ui.system.AnimatedLineIcon
 import com.hnnujw.course.ui.system.GlassLoadingState
+import com.hnnujw.course.ui.system.LiquidButton
+import com.hnnujw.course.ui.system.LiquidSegmentedControl
 import com.hnnujw.course.ui.system.PagePadding
+import com.hnnujw.course.ui.system.SystemActionMenu
+import com.hnnujw.course.ui.system.SystemMenuAction
 import com.hnnujw.course.ui.system.SystemCard
 import com.hnnujw.course.ui.system.SystemDialog
 import com.hnnujw.course.ui.system.SystemEmptyState
@@ -291,7 +302,9 @@ data class ScheduleCourseUi(
         sourceId, name, teacher, day, startPeriod, endPeriod, weeks, location
     ),
     val hasConflict: Boolean = false,
-    val isCurrent: Boolean = false
+    val isCurrent: Boolean = false,
+    /** 日视图用：今天「下一节」的课（周网格不用这个标记）。 */
+    val isNext: Boolean = false
 ) {
     fun record() = com.hnnujw.course.schedule.ScheduleCourseRecord(id, name, teacher, location, day, startPeriod, endPeriod, weeks, isCustom)
 }
@@ -312,6 +325,22 @@ fun ScheduleScreen(
     onExportClick: () -> Unit = {},
     /** 点击周末（周六=6/周日=7）星期条触发补课入口；为空时周末条不可点。 */
     onMakeUpFromWeekday: (Int) -> Unit = {},
+    /** true = 日视图（按天分页的列表）；false = 周网格。持久化在 Route。 */
+    dayView: Boolean = false,
+    onDayViewChange: (Boolean) -> Unit = {},
+    /** 右上角更多菜单：同步课表。 */
+    onSyncClick: () -> Unit = {},
+    /** 右上角更多菜单：添加自定义课程。 */
+    onAddClick: () -> Unit = {},
+    /** 右上角更多菜单：添加桌面小组件。 */
+    onWidgetClick: () -> Unit = {},
+    /** true = 紧凑显示密度（节次行高 ×0.78，参考项目同款）。持久化在 Route。 */
+    compact: Boolean = false,
+    /**
+     * 「回到今天」请求计数器：Route 每发一次跳转请求就 +1（桌面组件点按等）。
+     * 0 = 无请求。用 nonce 而不是布尔，连续两次点按也能各跳一次。
+     */
+    todayRequest: Int = 0,
     errorMessage: String = "",
     onRetry: () -> Unit = {},
     firstWeekDate: String? = null,
@@ -365,44 +394,97 @@ fun ScheduleScreen(
             course.day == today && start != null && end != null && nowMinutes in start until end
         }.map { it.id }.toSet()
     }
-    val pagerState = rememberPagerState(
-        initialPage = (currentWeek - 1).coerceIn(0, maxWeeks - 1),
-        pageCount = { maxWeeks }
-    )
+    // 日视图状态：今天星期几（1..7）+ 正在浏览的星期。跨进程恢复交给
+    // rememberSaveable；冷启动由 Route 用真实日期重置 currentWeek，这里跟随之。
+    val todayDay = (Calendar.getInstance().apply { timeInMillis = minuteClock }.get(Calendar.DAY_OF_WEEK) + 5) % 7 + 1
+    var selectedDayState by rememberSaveable { mutableIntStateOf(todayDay) }
+    // 日视图的时间线（今天有哪些堂 / 正在上 / 下一节）。与周网格共用 minuteClock，
+    // 每分钟重算一次，"正在上课"标记不需要额外的秒级时钟。
+    val agendaBase = remember(effectiveFirstWeekDate, periodTimes) {
+        com.hnnujw.course.schedule.ScheduleTimeBase(
+            effectiveFirstWeekDate.orEmpty(),
+            periodTimes.associate { it.period to it.startTime },
+            periodTimes.associate { it.period to it.endTime })
+    }
+    val agenda = remember(courses, agendaBase, minuteClock) {
+        com.hnnujw.course.schedule.ScheduleAgenda.calculate(courses.map { it.record() }, agendaBase, minuteClock)
+    }
+    // 「下一节」只在还是今天的课时标出来（明天的下一节不该出现在今天的时间线里）。
+    val nextTodayId = agenda.next?.takeIf { next ->
+        agenda.today.any { it.startsAt == next.startsAt && it.course.id == next.course.id }
+    }?.course?.id
+    val pagerState = key(dayView) {
+        val firstPageUnit = 1
+        val lastPageUnit = if (dayView) maxWeeks * 7 else maxWeeks
+        // 日视图的页单元 = (周-1)*7 + 星期；周视图的页单元 = 周次。
+        // 切换视图时页数变化，pager 状态必须重建并落到当前浏览的单元上。
+        val requestedUnit = if (dayView) (currentWeek - 1) * 7 + selectedDayState else currentWeek
+        rememberPagerState(
+            initialPage = (requestedUnit - firstPageUnit).coerceIn(0, lastPageUnit - firstPageUnit),
+            pageCount = { lastPageUnit }
+        )
+    }
 
     val latestWeekChange by rememberUpdatedState(onWeekChange)
     val latestRequestedWeek by rememberUpdatedState(currentWeek)
     val latestWeekRequestKey by rememberUpdatedState(weekRequestKey)
-    val weekSync = remember(pagerState) {
-        com.hnnujw.course.schedule.ScheduleWeekPagerSync(currentWeek, weekRequestKey)
+    val latestSelectedDay by rememberUpdatedState(selectedDayState)
+    // 日视图下外部（Route）请求的仍是"周次"，换算成该周的 [selectedDay] 那一天。
+    val weekSync = remember(pagerState, dayView) {
+        val lastPageUnit = if (dayView) maxWeeks * 7 else maxWeeks
+        val requestedUnit = if (dayView) (currentWeek - 1) * 7 + latestSelectedDay else currentWeek
+        com.hnnujw.course.schedule.ScheduleWeekPagerSync(requestedUnit, weekRequestKey, 1, lastPageUnit)
     }
 
     var arrowJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    var requestedPage by remember { mutableIntStateOf(pagerState.currentPage) }
+    // 记"单元"（周视图 = 周次，日视图 = 周*7+天）而不是页码：视图切换时页码含义会变。
+    var requestedUnit by remember(dayView) { mutableIntStateOf(pagerState.currentPage + 1) }
     val userDragging by pagerState.interactionSource.collectIsDraggedAsState()
     LaunchedEffect(userDragging) {
-        if (userDragging) { arrowJob?.cancel(); requestedPage = pagerState.currentPage }
+        if (userDragging) { arrowJob?.cancel(); requestedUnit = pagerState.currentPage + 1 }
     }
-    fun moveWeek(delta: Int) {
-        requestedPage = ((if (arrowJob?.isActive == true) requestedPage else pagerState.currentPage) + delta).coerceIn(0, maxWeeks - 1)
+    fun moveUnit(delta: Int) {
+        val lastPageUnit = if (dayView) maxWeeks * 7 else maxWeeks
+        requestedUnit = ((if (arrowJob?.isActive == true) requestedUnit else pagerState.currentPage + 1) + delta)
+            .coerceIn(1, lastPageUnit)
         arrowJob?.cancel()
         arrowJob = coroutineScope.launch {
-            if (reducedMotion) pagerState.scrollToPage(requestedPage)
-            else pagerState.animateScrollToPage(requestedPage, animationSpec = com.hnnujw.course.ui.theme.MotionProfile.pagerSpring())
+            if (reducedMotion) pagerState.scrollToPage(requestedUnit - 1)
+            else pagerState.animateScrollToPage(requestedUnit - 1, animationSpec = com.hnnujw.course.ui.theme.MotionProfile.pagerSpring())
         }
     }
+    // 顶栏左右箭头：周视图移动一周；日视图按参考实现整周跳（同星期翻周），横向滑动负责逐日。
+    fun moveWeek(delta: Int) = moveUnit(delta * if (dayView) 7 else 1)
 
-    LaunchedEffect(pagerState) {
+    // 桌面组件等外部来源的「回到今天」：必须同时复位星期，否则日视图下会
+    // 落到"这一周你上次浏览的那天"而不是今天（深链只带周次信息的坑）。
+    LaunchedEffect(todayRequest) {
+        if (todayRequest == 0) return@LaunchedEffect
+        val target = actualWeek ?: return@LaunchedEffect
+        val targetUnit = if (dayView) (target - 1) * 7 + todayDay else target
+        selectedDayState = todayDay
+        moveUnit(targetUnit - (pagerState.currentPage + 1))
+    }
+
+    LaunchedEffect(pagerState, dayView) {
         snapshotFlow {
             Triple(latestRequestedWeek to latestWeekRequestKey, pagerState.isScrollInProgress, pagerState.settledPage)
         }.collect { (request, scrolling, page) ->
-            val targetPage = weekSync.requestPage(request.first, request.second)
+            val requestedUnit2 = if (dayView) (request.first - 1) * 7 + latestSelectedDay else request.first
+            val targetPage = weekSync.requestPage(requestedUnit2, request.second)
             if (targetPage != null) {
                 arrowJob?.cancel()
                 pagerState.scrollToPage(targetPage)
-                weekSync.settledWeek(targetPage)
+                weekSync.settledUnit(targetPage)
             } else if (!scrolling) {
-                weekSync.settledWeek(page)?.let(latestWeekChange)
+                weekSync.settledUnit(page)?.let { unit ->
+                    if (dayView) {
+                        selectedDayState = (unit - 1) % 7 + 1
+                        latestWeekChange((unit - 1) / 7 + 1)
+                    } else {
+                        latestWeekChange(unit)
+                    }
+                }
             }
         }
     }
@@ -410,6 +492,8 @@ fun ScheduleScreen(
     // 所有 pager 页共用一个滚动位置：顶栏折叠进度要跟着它推导，
     // 而且左右切周时纵向位置不该跳回顶部。
     val gridScrollState = rememberScrollState()
+    // 日视图的滚动位置单独一份：切换视图时各自记住滚到哪，不互相串。
+    val dayScrollState = rememberScrollState()
     val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val headerMetrics = rememberScheduleHeaderMetrics(maxWidth)
     // 折叠行程 = 顶栏高度差，于是收缩与滚动 1:1 对消，全程跟手。
@@ -437,8 +521,12 @@ fun ScheduleScreen(
             // topBar slot 只测量单个子项，两个兄弟节点会叠放并让通知条压到状态栏，
             // 因此顶栏与内联通知必须在同一个 Column 里纵向排布。
             Column(modifier = Modifier.moduleEntrance(0).reportNoticeAnchor()) {
+                // 日视图下顶栏展示的是 pager 当前落定的周/天（滑动逐日变化）。
+                val shownUnit = pagerState.currentPage + 1
+                val shownWeek = if (dayView) (shownUnit - 1) / 7 + 1 else shownUnit
+                val shownDay = if (dayView) (shownUnit - 1) % 7 + 1 else todayDay
                 WeekHeaderCompact(
-                    currentWeek = pagerState.currentPage + 1,
+                    currentWeek = shownWeek,
                     weekOffset = if (reducedMotion) 0f else pagerState.currentPageOffsetFraction,
                     firstWeekDate = effectiveFirstWeekDate,
                     actualWeek = actualWeek,
@@ -451,6 +539,24 @@ fun ScheduleScreen(
                     onSettingsClick = onSettingsClick,
                     onExportClick = onExportClick,
                     onMakeUpFromWeekday = onMakeUpFromWeekday,
+                    dayView = dayView,
+                    onDayViewChange = onDayViewChange,
+                    selectedDay = shownDay,
+                    onDayClick = { day ->
+                        // 点星期条跳到本周那一天（日视图）；周视图的周末点击仍走补课。
+                        moveUnit((shownWeek - 1) * 7 + day - (pagerState.currentPage + 1))
+                    },
+                    onTodayClick = {
+                        if (actualWeek != null) {
+                            val target = if (dayView) (actualWeek - 1) * 7 + todayDay else actualWeek
+                            moveUnit(target - (pagerState.currentPage + 1))
+                        }
+                    },
+                    showTodayButton = dayView && (actualWeek == null ||
+                        shownWeek != actualWeek || (dayView && shownDay != todayDay)),
+                    onSyncClick = onSyncClick,
+                    onAddClick = onAddClick,
+                    onWidgetClick = onWidgetClick,
                     collapseFraction = headerCollapse,
                     sampleBackdrop = headerSampleBackdrop
                 )
@@ -499,7 +605,10 @@ fun ScheduleScreen(
                     beyondViewportPageCount = 0,
                     pageSpacing = 0.dp
                 ) { page ->
-                    val weekNumber = page + 1
+                    // 页单元：周视图 = 周次；日视图 = (周-1)*7 + 星期。
+                    val unit = page + 1
+                    val weekNumber = if (dayView) (unit - 1) / 7 + 1 else unit
+                    val dayNumber = if (dayView) (unit - 1) % 7 + 1 else todayDay
                     // 「本节上哪门」：冲突时段的用户选择。一门课只要覆盖到任何一个
                     // 选了别人的节次，就整体让位隐藏（key 只到节，A 占 1-2、B 占 2-3
                     // 只在第 2 节撞车时，A 的第 1 节不受影响）。
@@ -515,9 +624,19 @@ fun ScheduleScreen(
                             }.map { it.id }.toSet()
                         }
                     }
-                    val displayedCourses = remember(courses, conflictIds, liveIds, weekNumber, actualWeek, conflictHiddenIds) {
-                        courses.filter { it.id !in conflictHiddenIds }.map { it.copy(hasConflict = it.id in conflictIds,
-                            isCurrent = weekNumber == actualWeek && it.id in liveIds) }
+                    val isTodayPage = actualWeek != null && weekNumber == actualWeek && dayNumber == todayDay
+                    val displayedCourses = remember(courses, conflictIds, liveIds, weekNumber, actualWeek, conflictHiddenIds, isTodayPage, nextTodayId) {
+                        courses.filter { it.id !in conflictHiddenIds }.map {
+                            it.copy(
+                                hasConflict = it.id in conflictIds,
+                                isCurrent = if (dayView) {
+                                    isTodayPage && it.id in liveIds
+                                } else {
+                                    weekNumber == actualWeek && it.id in liveIds
+                                },
+                                isNext = dayView && isTodayPage && it.id == nextTodayId
+                            )
+                        }
                     }
                     Box(Modifier.fillMaxSize().graphicsLayer {
                         val offset = pagerState.currentPage + pagerState.currentPageOffsetFraction - page
@@ -525,18 +644,37 @@ fun ScheduleScreen(
                         scaleY = scaleX
                         alpha = if (reducedMotion) 1f else com.hnnujw.course.ui.theme.SchedulePagerMotion.alpha(offset)
                     }) {
-                    ScheduleGrid(
-                        courses = displayedCourses,
-                        currentWeek = weekNumber,
-                        periodTimes = periodTimes,
-                        periodCount = periodCount,
-                        onCourseClick = onCourseClick,
-                        scrollState = gridScrollState,
-                        // 【常量】而不是 paddingValues.calculateTopPadding()：后者随顶栏
-                        // 一起收缩，而它施加在 verticalScroll 内部，于是顶栏每缩 1dp
-                        // 内容就被额外上提 1dp——手指走 60dp、内容走 120dp。
-                        topInset = statusBarHeight + headerMetrics.expanded
-                    )
+                    if (dayView) {
+                        ScheduleDayList(
+                            courses = displayedCourses,
+                            week = weekNumber,
+                            day = dayNumber,
+                            firstWeekDate = effectiveFirstWeekDate,
+                            times = periodTimes,
+                            scrollState = dayScrollState,
+                            topInset = statusBarHeight + headerMetrics.expanded,
+                            onCourseClick = onCourseClick,
+                            agenda = agenda,
+                            now = minuteClock,
+                            isToday = isTodayPage,
+                            onCalendar = onSettingsClick
+                        )
+                    } else {
+                        ScheduleGrid(
+                            courses = displayedCourses,
+                            currentWeek = weekNumber,
+                            periodTimes = periodTimes,
+                            periodCount = periodCount,
+                            onCourseClick = onCourseClick,
+                            scrollState = gridScrollState,
+                            // 紧凑显示密度：节次行高 ×0.78，一屏能看到更多节次。
+                            compact = compact,
+                            // 【常量】而不是 paddingValues.calculateTopPadding()：后者随顶栏
+                            // 一起收缩，而它施加在 verticalScroll 内部，于是顶栏每缩 1dp
+                            // 内容就被额外上提 1dp——手指走 60dp、内容走 120dp。
+                            topInset = statusBarHeight + headerMetrics.expanded
+                        )
+                    }
                     }
                 }
             }
@@ -561,7 +699,22 @@ fun WeekHeaderCompact(
     sampleBackdrop: Backdrop? = null,
     weekOffset: Float = 0f,
     firstWeekDate: String? = null,
-    actualWeek: Int? = null
+    actualWeek: Int? = null,
+    /** true = 日视图：标题副行带星期、星期条可点跳日、时间列给「今天」按钮。 */
+    dayView: Boolean = false,
+    onDayViewChange: (Boolean) -> Unit = {},
+    /** 日视图当前浏览的星期（1..7），用于星期条高亮与副行标注。 */
+    selectedDay: Int = 1,
+    /** 日视图点星期条跳到本周那一天。 */
+    onDayClick: (Int) -> Unit = {},
+    /** 日视图「回到今天」（当前周 + 今天星期）。 */
+    onTodayClick: () -> Unit = {},
+    /** 是否显示「今天」快捷按钮（仅在日视图且当前不在今天时为真）。 */
+    showTodayButton: Boolean = false,
+    /** 右上角更多菜单：同步课表 / 添加课程 / 桌面组件。 */
+    onSyncClick: () -> Unit = {},
+    onAddClick: () -> Unit = {},
+    onWidgetClick: () -> Unit = {}
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
     val calendar = Calendar.getInstance()
@@ -704,8 +857,10 @@ fun WeekHeaderCompact(
                         // (非本周) 刻意放在这一行而不是标题行 —— 标题行右侧紧邻动作按钮，
                         // 可用宽度被挤压时后缀会被裁成"(非本"（真机实测复现）；
                         // 日期行本身很短，拼在这里永远能完整显示。
+                        // 日视图再拼上「· 周X」：这一行是当前浏览日期的完整坐标。
+                        val daySuffix = if (dayView) "  周${weekLabels[selectedDay - 1]}" else null
                         Text(
-                            text = if (weekSuffix != null) "$todayLabel  $weekSuffix" else todayLabel,
+                            text = listOfNotNull(todayLabel, daySuffix, weekSuffix).joinToString("  "),
                             fontSize = lerpSp(13f, 11f, collapse),
                             // 同上：显式钉行高，别去继承 24.sp。13sp 的文字配 24sp 行高会让这一行
                             // 上下各空出 11px，既挤占标题行的余量，视觉上也把日期推得离标题太远。
@@ -717,42 +872,85 @@ fun WeekHeaderCompact(
                         )
                     }
 
-                    com.hnnujw.course.ui.system.TopBarActionRail(Modifier.testTag("schedule-header-actions"), spacing = lerpDp(4.dp, 3.dp, collapse)) {
-                        val buttonSize = lerpDp(34.dp, 30.dp, collapse)
-                        val iconSize = lerpDp(16.dp, 15.dp, collapse)
-                        action(
-                            index = 0,
-                            icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                            contentDescription = "上一周",
-                            onClick = onPrevClick,
-                            enabled = currentWeek > 1,
-                            buttonSize = buttonSize,
-                            iconSize = iconSize
-                        )
-                        action(
-                            index = 1,
-                            icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = "下一周",
-                            onClick = onNextClick,
-                            enabled = currentWeek < 25,
-                            buttonSize = buttonSize,
-                            iconSize = iconSize
-                        )
-                        action(
-                            index = 2,
-                            icon = Icons.Default.Share,
-                            contentDescription = "导出",
-                            onClick = onExportClick,
-                            buttonSize = buttonSize,
-                            iconSize = iconSize
-                        )
-                        action(
-                            index = 3,
-                            icon = Icons.Default.Settings,
-                            contentDescription = "设置",
-                            onClick = onSettingsClick,
-                            buttonSize = buttonSize,
-                            iconSize = iconSize
+                    Row(
+                        modifier = Modifier.testTag("schedule-header-actions"),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        com.hnnujw.course.ui.system.TopBarActionRail(spacing = lerpDp(4.dp, 3.dp, collapse)) {
+                            val buttonSize = lerpDp(34.dp, 30.dp, collapse)
+                            val iconSize = lerpDp(16.dp, 15.dp, collapse)
+                            action(
+                                index = 0,
+                                icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                contentDescription = "上一周",
+                                onClick = onPrevClick,
+                                enabled = currentWeek > 1,
+                                buttonSize = buttonSize,
+                                iconSize = iconSize
+                            )
+                            action(
+                                index = 1,
+                                icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "下一周",
+                                onClick = onNextClick,
+                                enabled = currentWeek < 25,
+                                buttonSize = buttonSize,
+                                iconSize = iconSize
+                            )
+                        }
+                        // 日/周视图切换（参考项目的 ScheduleViewToggle）：
+                        // 88dp 定宽壳里放 36dp 高的分段控件，折叠时随行高一起收。
+                        Box(
+                            modifier = Modifier
+                                .width(88.dp)
+                                .height(48.dp)
+                                .testTag("schedule-view-toggle"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            LiquidSegmentedControl(
+                                options = listOf("日视图", "周视图"),
+                                selectedIndex = if (dayView) 0 else 1,
+                                onSelect = { onDayViewChange(it == 0) },
+                                height = lerpDp(36.dp, 32.dp, collapse)
+                            ) { index, selection, color ->
+                                Text(
+                                    text = if (index == 0) "日" else "周",
+                                    fontSize = 14.sp,
+                                    color = color,
+                                    fontWeight = if (selection >= 0.5f) FontWeight.Bold else FontWeight.Medium
+                                )
+                            }
+                        }
+                        // 右上角更多菜单（参考项目的做法）：同步 / 导出 / 添加课程 /
+                        // 桌面组件 / 课表设置 收进一个入口，动作行不再被 4 个图标挤满。
+                        SystemActionMenu(
+                            description = "更多课表操作",
+                            actions = listOf(
+                                SystemMenuAction("同步课表", Icons.Outlined.Refresh, onSyncClick),
+                                SystemMenuAction("导出课表", Icons.Filled.Share, onExportClick),
+                                SystemMenuAction("添加课程", Icons.Outlined.Add, onAddClick),
+                                SystemMenuAction("桌面组件", Icons.Outlined.Widgets, onWidgetClick),
+                                SystemMenuAction("课表设置", Icons.Filled.Settings, onSettingsClick)
+                            ),
+                            modifier = Modifier.testTag("schedule-more"),
+                            trigger = { toggle ->
+                                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                                    LiquidButton(
+                                        onClick = toggle,
+                                        modifier = Modifier.size(40.dp),
+                                        minHeight = 40.dp,
+                                        horizontalPadding = 0.dp
+                                    ) {
+                                        AnimatedLineIcon(
+                                            AnimatedIconSpec.More,
+                                            Modifier.size(21.dp),
+                                            description = "更多课表操作",
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
                         )
                     }
                 }
@@ -773,11 +971,31 @@ fun WeekHeaderCompact(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // 时间列这一格放月份：七个日列只写「几号」，月份在这里出现一次。
+                    // 日视图偏离今天时，这一格让位给「今天」快捷键（参考项目同款位置）。
                     Box(
                         modifier = Modifier.width(scheduleTimeColumnWidth() + ScheduleTimeColumnShadowWidth),
                         contentAlignment = Alignment.CenterStart
                     ) {
-                        if (monthLabel != null) {
+                        if (showTodayButton) {
+                            LiquidButton(
+                                onClick = onTodayClick,
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .testTag("schedule-today"),
+                                minHeight = 40.dp,
+                                horizontalPadding = 0.dp
+                            ) {
+                                Text(
+                                    text = "今天",
+                                    fontSize = 11.sp,
+                                    // 固定高度容器里的文字必须显式写行高（同标题行的坑）。
+                                    lineHeight = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1
+                                )
+                            }
+                        } else if (monthLabel != null) {
                             Text(
                                 text = monthLabel,
                                 fontSize = lerpSp(10f, 9f, collapse),
@@ -1209,6 +1427,8 @@ fun ScheduleGrid(
      * 共用一个，左右切周时纵向位置不会跳回顶部。
      */
     scrollState: ScrollState = rememberScrollState(),
+    /** true = 紧凑显示密度：节次最小行高 ×0.78（参考项目同款）。 */
+    compact: Boolean = false,
     /**
      * 顶栏高度。**施加在 verticalScroll 内部**——容器保持全出血，于是滚动位置 0
      * 时内容起始于顶栏之下，滚起来则从顶栏底下穿过，顶栏芯片才有东西可折射。
@@ -1237,7 +1457,12 @@ fun ScheduleGrid(
         ((constraints.maxWidth - gridPadding.roundToPx() * 2 - timeColumnWidth.roundToPx() -
             ScheduleTimeColumnShadowWidth.roundToPx()) / 7f).roundToInt()
     }
-    val periodHeight = rememberCoursePeriodHeight(courses, dayColumnWidthPx, schedulePeriodHeight())
+    // 紧凑密度只压「最小行高」：实测文字仍可能把行撑高，字不会被裁。
+    // 0.78 与参考项目一致 —— 一屏能多看约四分之一的节次。
+    val periodHeight = rememberCoursePeriodHeight(
+        courses, dayColumnWidthPx,
+        schedulePeriodHeight() * if (compact) 0.78f else 1f
+    )
     val totalHeight = periodHeight * periodCount
     val darkGrid = com.hnnujw.course.ui.system.rememberGlassDarkTheme()
     val gridTint = MaterialTheme.colorScheme.surface.copy(alpha =

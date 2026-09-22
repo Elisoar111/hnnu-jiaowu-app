@@ -259,6 +259,8 @@ class MainActivity : FragmentActivity() {
         AppTabNavigation.accept(intent)
         // App 已在运行时再扫一次码 / 再点一次链接走这里（singleTop 语义）
         com.hnnujw.course.secondclass.SecondClassDeepLinkNavigation.accept(intent)
+        // 桌面课表组件点击（组件 Intent 带 CLEAR_TOP|SINGLE_TOP，热态走这里）
+        com.hnnujw.course.schedule.ScheduleWidgetNavigation.accept(intent)
     }
 }
 

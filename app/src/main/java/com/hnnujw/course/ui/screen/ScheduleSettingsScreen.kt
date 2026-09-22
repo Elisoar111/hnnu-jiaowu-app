@@ -40,6 +40,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.shapes.Capsule
@@ -64,6 +65,7 @@ import com.hnnujw.course.ui.system.LocalNoticeAnchor
 import com.hnnujw.course.ui.system.NoticeAnchorState
 import com.hnnujw.course.ui.system.PagePadding
 import com.hnnujw.course.ui.system.SectionSpacing
+import com.hnnujw.course.ui.system.SystemPicker
 import com.hnnujw.course.ui.system.SystemTopBar
 import com.hnnujw.course.ui.system.SystemConfirmDialog
 import com.hnnujw.course.ui.system.drawWallpaperPattern
@@ -120,7 +122,11 @@ fun ScheduleSettingsScreen(
      * 用来在「第一周开始日期」这行直接告诉用户日期是设过的还是推算出来的，
      * 免得为了定位"日期对不上"还得连电脑抓日志。
      */
-    effectiveFirstWeekDate: String? = null
+    effectiveFirstWeekDate: String? = null,
+    /** true = 课表用「紧凑」显示密度（节次行高 ×0.78）。 */
+    displayCompact: Boolean = false,
+    /** 切换显示密度；持久化由调用方负责。 */
+    onDisplayCompactChange: (Boolean) -> Unit = {}
 ) {
     var periodCount by remember { mutableStateOf(manager.periodCount) }
     var storedPeriodTimes by remember { mutableStateOf(periodTimesOverride ?: manager.getPeriodTimes()) }
@@ -269,6 +275,45 @@ fun ScheduleSettingsScreen(
                             }
                         }
                     }
+                    // 「课表显示」分区（参考项目同款）：显示密度 + 课表字号，
+                    // 都用 SystemPicker 内联选择，改动即时生效。
+                    InsetGroupedSection(header = "课表显示") {
+                        InsetGroupedRow(
+                            title = "显示密度",
+                            subtitle = "名称和地点仍可完整查看",
+                            trailing = {
+                                SystemPicker(
+                                    options = listOf("标准", "紧凑"),
+                                    selectedIndex = if (displayCompact) 1 else 0,
+                                    onSelect = { onDisplayCompactChange(it == 1) },
+                                    modifier = Modifier.width(104.dp)
+                                )
+                            },
+                            showDivider = true
+                        )
+                        // 课表字号：**只改课表**。设置的是"渲染密度里的 fontScale 倍率"，
+                        // 所以网格几何（列宽 / 行高 / 留白）一点不变，只有字变大变小；
+                        // 其它页面不读这个值，不受影响。
+                        InsetGroupedRow(
+                            icon = Icons.Filled.FormatSize,
+                            iconTint = Color(0xFF34C759),
+                            title = "课表字号",
+                            subtitle = "只影响课表内的课程卡片与节次时间",
+                            trailing = {
+                                SystemPicker(
+                                    options = ScheduleFontScaleOptions.map { it.second },
+                                    selectedIndex = scheduleFontScaleIndex(fontScale),
+                                    onSelect = { index ->
+                                        val value = ScheduleFontScaleOptions[index.coerceIn(0, ScheduleFontScaleOptions.lastIndex)].first
+                                        fontScale = value
+                                        manager.scheduleFontScale = value
+                                    },
+                                    modifier = Modifier.width(104.dp)
+                                )
+                            },
+                            showDivider = false
+                        )
+                    }
                     StaggerIn(index = 0, settled = entranceSettled) {
                         InsetGroupedSection(
                             header = "基础设置",
@@ -322,25 +367,6 @@ fun ScheduleSettingsScreen(
                                 // 原先是 Material DropdownMenu；换成与节次时间同一种
                                 // 滚轮弹窗，两处交互一致
                                 onClick = { showPeriodCountPicker = true }
-                            )
-                            // 课表字号：**只改课表**。设置的是"渲染密度里的 fontScale 倍率"，
-                            // 所以网格几何（列宽 / 行高 / 留白）一点不变，只有字变大变小；
-                            // 其它页面不读这个值，不受影响。
-                            InsetGroupedRow(
-                                icon = Icons.Filled.FormatSize,
-                                iconTint = Color(0xFF34C759),
-                                title = "课表字号",
-                                subtitle = "只影响课表内的课程卡片与节次时间",
-                                trailing = {
-                                    Text(
-                                        text = scheduleFontScaleLabel(fontScale),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        color = NeuPrimary
-                                    )
-                                },
-                                showDivider = false,
-                                onClick = { showFontScalePicker = true }
                             )
                         }
                     }
@@ -429,23 +455,6 @@ fun ScheduleSettingsScreen(
                         showPeriodCountPicker = false
                     },
                     onDismiss = { showPeriodCountPicker = false }
-                )
-            }
-
-            if (showFontScalePicker) {
-                GlassOptionWheelDialog(
-                    title = "课表字号",
-                    options = ScheduleFontScaleOptions.map { it.second },
-                    selectedIndex = scheduleFontScaleIndex(fontScale),
-                    onConfirm = { index ->
-                        val value = ScheduleFontScaleOptions[index.coerceIn(0, ScheduleFontScaleOptions.lastIndex)].first
-                        fontScale = value
-                        // 落 manager：revision++ → ScheduleScreen 的 remember key 变化 →
-                        // CompositionLocal 下发新倍率，课表立即重排（不用重启）。
-                        manager.scheduleFontScale = value
-                        showFontScalePicker = false
-                    },
-                    onDismiss = { showFontScalePicker = false }
                 )
             }
 

@@ -169,6 +169,14 @@ fun ScheduleRoute() {
     var makeUpWeek by remember { mutableIntStateOf(1) }
     /** true = 顶栏导出按钮弹「日历 / Excel」格式选择。 */
     var showExportChooser by rememberSaveable { mutableStateOf(false) }
+    /** true = 显示「添加桌面组件」选择器（三种样式预览 + 请求钉到桌面）。 */
+    var showWidgetPicker by rememberSaveable { mutableStateOf(false) }
+    // 日 / 周视图偏好：全局生效（不按账号），冷启动还原。
+    var dayView by rememberSaveable { mutableStateOf(ScheduleDisplayStore.dayView(context)) }
+    // 显示密度（标准 / 紧凑）：同属全局展示偏好。
+    var scheduleCompact by rememberSaveable { mutableStateOf(ScheduleDisplayStore.compact(context)) }
+    // 「回到今天」请求计数（桌面组件点按时 +1，见 ScheduleScreen.todayRequest）。
+    var todayNonce by remember { mutableIntStateOf(0) }
     
     // Managers
     val settingsManager = remember { ScheduleSettingsManager.getInstance().apply { init(context) } }
@@ -580,8 +588,50 @@ fun ScheduleRoute() {
             } else {
                 showExportChooser = true
             }
-        }
+        },
+        dayView = dayView,
+        onDayViewChange = { dayView = it; ScheduleDisplayStore.setDayView(context, it) },
+        onSyncClick = { loadSchedule(true) },
+        onAddClick = { editingId = java.util.UUID.randomUUID().toString() },
+        onWidgetClick = { showWidgetPicker = true },
+        compact = scheduleCompact
     )
+    }
+
+    // 桌面组件点按的深链：回到今天 / 打开课程详情 / 同步。账号对不上则忽略
+    // （组件是按账号渲染的，换账号后旧组件的点击不该把课表拉到别人的"今天"）。
+    val widgetRequest = ScheduleWidgetNavigation.requested
+    LaunchedEffect(widgetRequest) {
+        val request = widgetRequest ?: return@LaunchedEffect
+        if (!ScheduleWidgetNavigation.matchesCurrentAccount(request)) {
+            ScheduleWidgetNavigation.consume()
+            return@LaunchedEffect
+        }
+        when (request.action) {
+            ScheduleWidgetAction.Today, ScheduleWidgetAction.Course -> {
+                ScheduleDates.weekAt(displayedTimeBase?.firstWeekDate, System.currentTimeMillis())?.let {
+                    currentWeek = it
+                }
+                todayNonce++
+                if (request.action == ScheduleWidgetAction.Course) {
+                    val target = courses.firstOrNull { it.id == request.course }
+                    if (target != null) {
+                        notificationCourseJson = null
+                        detailSourceBounds = null
+                        detailId = target.id
+                    } else {
+                        GlassToaster.show("课程信息已更新，请在课表中查看")
+                    }
+                }
+            }
+            ScheduleWidgetAction.Sync -> loadSchedule(true)
+            ScheduleWidgetAction.Calendar -> {
+                settingsTermOverride = null
+                showSettingsDialog = true
+            }
+            ScheduleWidgetAction.Login -> Unit // 未登录时 MainActivity 已导向登录页
+        }
+        ScheduleWidgetNavigation.consume()
     }
 
     // ── 导出 ─────────────────────────────────────────────────────────────
@@ -639,6 +689,9 @@ fun ScheduleRoute() {
                 }
             },
         )
+    }
+    if (showWidgetPicker) {
+        com.hnnujw.course.ui.screen.ScheduleWidgetPicker(onDismiss = { showWidgetPicker = false })
     }
     if (makeUpDay != 0) {
         val targetWeek = makeUpWeek

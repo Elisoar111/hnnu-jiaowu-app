@@ -17,6 +17,9 @@ class CourseApplication : Application() {
         }
         if (processName == packageName) {
             com.hnnujw.course.schedule.ScheduleReminderScheduler.get(this).start(this)
+            // 桌面课表组件刷新守护：缓存/设置变化监听 + 跨天边界闹钟。
+            // 只在主进程启动，避免 :xxx 子进程重复注册 prefs 监听。
+            com.hnnujw.course.schedule.ScheduleWidgetUpdater.start(this)
             // 消息中心巡检：每 12 小时一次。开机/更新后闹钟会被系统清掉，
             // MessageCheckReceiver 也会收到那些广播并自行重排，这里负责首次排程。
             com.hnnujw.course.academic.MessageCenterNotifier.schedule(this)
