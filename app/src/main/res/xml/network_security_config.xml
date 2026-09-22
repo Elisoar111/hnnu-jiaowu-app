@@ -9,10 +9,13 @@
   - 默认（base-config）：禁止明文，证书只信系统信任链（公共 CA）。
   - 例外（domain-config）：只有下面这两个确知需要明文的站点放开。
 
-  为什么这两个站点需要例外：
+  为什么这些站点需要例外：
   - 211.70.176.172：淮南师范学院教务系统的**备用入口**（IP 直连），该站只有 http。
     （主站 jwgl.hnnu.edu.cn 走 https，公共 CA 通配证书 *.hnnu.edu.cn，不需要例外。）
   - www.gdjw.zjut.edu.cn：浙江工业大学教务的旧入口，历史上只有 http。
+  - xg.hnnu.edu.cn：淮南师范学院**学工系统**，全站只有 http（实测 https 连接超时），
+    日常请假 / 节假日去向登记等接口都在这里。它承载的是学生本人查看自己的请假与
+    去向登记记录（只读展示），不涉及密码以外的敏感数据 —— 密码经 RSA 加密后才出网。
 
   新增明文站点必须在这里显式登记，不要再回到全局开关。
 -->
@@ -29,5 +32,7 @@
         <!-- 浙江工业大学教务旧入口（仅 http） -->
         <domain includeSubdomains="true">www.gdjw.zjut.edu.cn</domain>
         <domain includeSubdomains="true">gdjw.zjut.edu.cn</domain>
+        <!-- 淮南师范学院学工系统（全站仅 http） -->
+        <domain includeSubdomains="true">xg.hnnu.edu.cn</domain>
     </domain-config>
 </network-security-config>

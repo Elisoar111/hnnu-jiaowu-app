@@ -428,6 +428,62 @@ class SecondClassroomClient(
         return toActivityPage(get("/activity/my-cancel-list", params, token), pageNum, pageSize)
     }
 
+    // ── 申报（站点「申报」页 /service/declare）────────────────────────────
+
+    /**
+     * 我的申报记录：`GET /project/request/list1` → `data.list`。
+     *
+     * 一次性拉全（`pageSize = 50`）：申报记录天然很少（实测本人 1 条），
+     * 为它单独写一套翻页链路不划算。
+     *
+     * ⚠️ 这里**只读**。站点上的申报提交（`/innovate/bonus/apply/submission`、
+     * `/innovate-field-apply/add`、`/innovate-contest-apply/add`、
+     * `/ideology/advanced/enroll` …）一律不在本客户端里出现：申报涉及
+     * 材料附件与个人陈述，必须由用户本人在官方页面完成。
+     */
+    suspend fun myApplications(
+        token: String,
+        pageSize: Int = APPLICATION_PAGE_SIZE,
+    ): List<SecondClassApplication> {
+        val params = JSONObject().put("pageNum", 1).put("pageSize", pageSize)
+        return get("/project/request/list1", params, token)
+            .optJSONObject("data")
+            ?.optJSONArray("list")
+            .mapObjects { item ->
+                SecondClassApplication(
+                    id = item.opt("id").asInt(),
+                    projectName = item.text("projectName"),
+                    optionName = item.text("optionName"),
+                    classifyName = item.text("classifyName"),
+                    hours = item.optDouble("hours", 0.0),
+                    optionHours = item.optDouble("optionHours", 0.0),
+                    status = item.opt("status").asInt(),
+                    startTime = item.opt("startTime").asLong(),
+                    endTime = item.opt("endTime").asLong(),
+                    lastTime = item.opt("ltime").asLong(),
+                    remark = item.text("remark"),
+                    limitTypeName = item.optJSONObject("projectLimitType")?.text("name").orEmpty(),
+                )
+            }
+            .filter { it.id > 0 || it.projectName.isNotBlank() }
+    }
+
+    /**
+     * 申报项目分类：`GET /dict/project/choice-sort` → `data.filterArray`。
+     *
+     * 实测 `filterArray` 是六大能力模块（`level = 1`，首项是 `id = 0` 的「全部」），
+     * 与成绩单的模块名对得上。这里只用来在界面上说明"申报是分模块的"，
+     * 不参与任何提交。
+     */
+    suspend fun applicationCategories(token: String): List<SecondClassActivityCategory> =
+        get("/dict/project/choice-sort", JSONObject(), token)
+            .optJSONObject("data")
+            ?.optJSONArray("filterArray")
+            .mapObjects { item ->
+                SecondClassActivityCategory(id = item.text("id"), name = item.text("name"))
+            }
+            .filter { it.name.isNotBlank() && it.id != "0" && it.name != "全部" }
+
     /** 活动通知：`{pageNum, pageSize, activityId}` → `data.list`。 */
     suspend fun activityNotices(
         token: String,
@@ -927,6 +983,9 @@ class SecondClassroomClient(
 
         /** 活动列表 / 我的活动的页长。站点默认 10，这里取 20 少翻一半页。 */
         private const val ACTIVITY_PAGE_SIZE = 20
+
+        /** 申报记录一次拉全的页长（申报天然很少，不做翻页）。 */
+        private const val APPLICATION_PAGE_SIZE = 50
 
         /**
          * "我的活动"的 `status` 过滤串。与网页端"我的活动"页完全一致：

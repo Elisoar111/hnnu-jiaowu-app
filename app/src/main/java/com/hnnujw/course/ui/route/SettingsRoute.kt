@@ -497,6 +497,10 @@ fun SettingsRoute(
         notificationsAllowed = notificationsAllowed,
         onNotificationSettings = { MainActivity.openNotificationSettings(context) },
         onMessageCenter = { context.startActivity(Intent(context, MessageCenterActivity::class.java)) },
+        onXuegongSystem = {
+            runCatching { context.startActivity(Intent(context, com.hnnujw.course.XuegongActivity::class.java)) }
+                .onFailure { GlassToaster.show("无法打开学工系统页面") }
+        },
         onCheckUpdate = { checkForUpdate() },
         onOpenManual = {
             runCatching { context.startActivity(Intent(context, com.hnnujw.course.ManualActivity::class.java)) }

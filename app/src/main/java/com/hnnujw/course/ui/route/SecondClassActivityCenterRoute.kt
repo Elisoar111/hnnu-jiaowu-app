@@ -370,6 +370,23 @@ fun SecondClassActivityCenterRoute(
                     ui = ui.copy(myActivities = page.items, myHasMore = page.hasMore, loading = false)
                 }
                 2 -> {
+                    // 「申报」：我的申报记录（只读）。一次拉全，没有翻页
+                    ui = ui.copy(loading = ui.applications.isEmpty(), loadMoreError = false)
+                    val applications = withContext(Dispatchers.IO) { c.myApplications(token) }
+                    ui = ui.copy(applications = applications, loading = false)
+                    // 申报分类只用来渲染顶部说明卡：拉不到不算失败，静默即可
+                    if (ui.appCategories.isEmpty()) {
+                        val categories = try {
+                            withContext(Dispatchers.IO) { c.applicationCategories(token) }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                        if (categories.isNotEmpty()) ui = ui.copy(appCategories = categories)
+                    }
+                }
+                3 -> {
                     ui = ui.copy(loading = ui.messages.isEmpty(), loadMoreError = false)
                     val page = withContext(Dispatchers.IO) { c.messages(token, pageNum = 1) }
                     msgPage = 1
@@ -443,7 +460,8 @@ fun SecondClassActivityCenterRoute(
         onClose = onClose,
         onTab = {
             ui = ui.copy(tab = it)
-            if (it == 3) onTranscriptTabSelected()
+            // 下标见 SecondClassActivityCenterScreen 的 TABS：4 = 成绩单
+            if (it == 4) onTranscriptTabSelected()
         },
         onKeyword = { ui = ui.copy(keyword = it) },
         onCategory = { ui = ui.copy(classifyId = it) },
@@ -488,7 +506,8 @@ fun SecondClassActivityCenterRoute(
                                     loadingMore = false,
                                 )
                             }
-                            2 -> {
+                            // 3 = 消息（2 = 申报，一次拉全，没有翻页）
+                            3 -> {
                                 ui = ui.copy(loadingMore = true)
                                 val nextPage = msgPage + 1
                                 val page = withContext(Dispatchers.IO) { c.messages(token, pageNum = nextPage) }

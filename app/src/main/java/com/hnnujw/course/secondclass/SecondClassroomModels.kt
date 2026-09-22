@@ -106,6 +106,41 @@ data class SecondClassSnapshot(
     val boards: Map<SecondClassRankLevel, SecondClassRankBoard> = emptyMap(),
 )
 
+/**
+ * 一条「我的申报」记录（`/project/request/list1`）。
+ *
+ * 字段名取自实测响应。⚠️ **`status` 只有原始状态码，站点没有下发任何状态文案**
+ * —— 实测该账号唯一一条记录是 `status = 2`，且传 `status=2` 能把它筛出来。
+ * 在没有各状态的真实样本之前不臆造「已通过 / 已驳回」这种结论：
+ * [statusLabel] 如实显示数字，等拿到样本再补映射。
+ */
+data class SecondClassApplication(
+    val id: Int,
+    /** 申报项目名（实测如「B类赛事受到校级及以上表彰」）。 */
+    val projectName: String,
+    /** 申报的具体档位（实测如「校级三等奖」）。 */
+    val optionName: String,
+    /** 所属模块（思想政治素养 / 创新创业能力 …）。 */
+    val classifyName: String,
+    /** 认定学时。实测与 [optionHours] 同值。 */
+    val hours: Double,
+    val optionHours: Double,
+    /** 原始状态码，见类注释。 */
+    val status: Int,
+    val startTime: Long,
+    val endTime: Long,
+    /** 最近一次操作时间（站点的 `ltime`）。 */
+    val lastTime: Long,
+    val remark: String,
+    /** 必修 / 选修（`projectLimitType.name`）。 */
+    val limitTypeName: String,
+) {
+    val statusLabel: String get() = if (status > 0) "状态 $status" else "未知"
+
+    /** 列表 key：同一项目可能有多档，只有 id 唯一。 */
+    val identity: String get() = id.toString()
+}
+
 /** 第二课堂站点的业务异常。 [sessionExpired] 为真时上层应清掉本地 token 并提示重新登录。 */
 class SecondClassException(
     message: String,

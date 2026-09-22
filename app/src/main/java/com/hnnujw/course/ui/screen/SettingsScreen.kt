@@ -24,9 +24,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.Assignment
 import androidx.compose.material.icons.outlined.AssignmentInd
 import androidx.compose.material.icons.outlined.Campaign
-import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.ContentPasteSearch
@@ -122,6 +122,8 @@ fun SettingsScreen(
     notificationsAllowed: Boolean = true,
     /** 打开系统通知设置页。 */
     onNotificationSettings: () -> Unit = {},
+    /** 学工系统（日常请假 / 节假日去向登记，只读查看）。 */
+    onXuegongSystem: () -> Unit = {},
     onMessageCenter: () -> Unit = {},
     /** 公告中心未读数；> 0 时入口显示红点。 */
     announcementUnread: Int = 0,
@@ -243,6 +245,18 @@ fun SettingsScreen(
                     },
                     showDivider = false,
                     onClick = onNotificationSettings
+                )
+            }
+
+            // 校园服务：学工系统（学生工作处的系统，与教务/二课都不是一套）
+            InsetGroupedSection(Modifier.moduleEntrance(3), header = "校园服务") {
+                SettingsRow(
+                    icon = Icons.AutoMirrored.Outlined.Assignment,
+                    iconTint = Color(0xFF34C759),
+                    title = "学工系统",
+                    subtitle = "日常请假 · 节假日去向登记（只读查看）",
+                    onClick = onXuegongSystem,
+                    showDivider = false
                 )
             }
 

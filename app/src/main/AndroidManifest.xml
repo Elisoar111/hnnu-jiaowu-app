@@ -136,6 +136,13 @@
             android:configChanges="uiMode"
             android:exported="false"
             android:screenOrientation="portrait" />
+        <!-- 学工系统（xg.hnnu.edu.cn）：日常请假 + 节假日去向登记，只读展示。
+             该站只有 http，域名已登记在 network_security_config 的明文白名单里。 -->
+        <activity
+            android:name=".XuegongActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
 
         <!-- 第二课堂附件查看器：Word / Excel / PDF / 图片 / 文本内置渲染。
              附件是直链（不需要登录态），下载落在 cacheDir/attachments，
@@ -193,6 +200,12 @@
         </receiver>
 
         <!-- 考前 24 小时提醒（一次性闹钟）；开机 / 更新 / 改时间后按本地考试缓存重排。 -->
+        <!-- 版本巡检：App 没打开时也能发现新版本并弹系统通知。
+             AlarmManager 每天唤一次，收到后自己排下一次（见 UpdateCheckScheduler）。
+             不依赖登录态，因此不需要任何 intent-filter。 -->
+        <receiver
+            android:name=".network.UpdateCheckReceiver"
+            android:exported="false" />
         <receiver android:name=".schedule.ExamReminderReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="com.hnnujw.course.action.EXAM_REMINDER" />

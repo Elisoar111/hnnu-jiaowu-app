@@ -114,7 +114,7 @@ data class SecondClassActivityCenterUi(
      * 而不是那句会误导人的「没有符合条件的活动」—— 用户会以为真没活动可报。
      */
     val needBind: Boolean = false,
-    /** 0 活动 / 1 我的活动 / 2 消息 / 3 成绩单 */
+    /** 0 活动 / 1 已报 / 2 申报 / 3 消息 / 4 成绩单（见 [TABS] 的说明，别按旧下标理解） */
     val tab: Int = 0,
     val keyword: String = "",
     val categories: List<com.hnnujw.course.secondclass.SecondClassActivityCategory> = emptyList(),
@@ -129,6 +129,10 @@ data class SecondClassActivityCenterUi(
     val msgHasMore: Boolean = false,
     /** 未读消息数（驱动一键已读按钮显隐）。 */
     val msgUnread: Int = 0,
+    /** 「申报」页：我的申报记录（只读，来自 `/project/request/list1`）。 */
+    val applications: List<com.hnnujw.course.secondclass.SecondClassApplication> = emptyList(),
+    /** 申报项目分类（六大能力模块），只用于页内的说明文案。 */
+    val appCategories: List<com.hnnujw.course.secondclass.SecondClassActivityCategory> = emptyList(),
 )
 
 /** 活动详情（含报名表单与签到信息）。 */
@@ -145,7 +149,15 @@ data class SecondClassActivityDetailUi(
     val mySignCode: String = "",
 )
 
-private val TABS = listOf("活动", "已报", "消息", "成绩单")
+/**
+ * 活动中心的分段标签。
+ *
+ * ⚠️ 下标是有语义的，插项必须同步所有 `when (tab)`：
+ * 0 = 活动 / 1 = 已报 / **2 = 申报**（1.2.4 新增，插在「已报」右边）/ 3 = 消息 / 4 = 成绩单。
+ * 「成绩单」由宿主注入内容，它挪到 4 之后，`SecondClassActivityCenterRoute` 里
+ * 判断"要不要去拉成绩单数据"的下标也要跟着改。
+ */
+private val TABS = listOf("活动", "已报", "申报", "消息", "成绩单")
 
 /** 活动中心整页。列表与详情在同一层级里切换（与公告中心同构）。 */
 @Composable
@@ -203,14 +215,28 @@ fun SecondClassActivityCenterScreen(
     var filterAbleEnroll by rememberSaveable { mutableStateOf(false) }
     // 「我的」的分段：0 进行中 / 1 已结束（放页面级，切 Tab 回来保持）
     var mySegment by rememberSaveable { mutableIntStateOf(0) }
+    /**
+     * 「申报」页的页内详情。
+     *
+     * 申报记录的字段在列表接口里已经给全（项目 / 档位 / 模块 / 学时 / 状态 / 时间），
+     * 所以点开**不需要再发一次请求** —— 与活动详情那条链路不同。
+     */
+    var applicationDetail by remember {
+        mutableStateOf<com.hnnujw.course.secondclass.SecondClassApplication?>(null)
+    }
 
     GlassPageScaffold(
-        title = if (currentDetail != null) "活动详情" else "活动中心",
+        title = when {
+            currentDetail != null -> "活动详情"
+            applicationDetail != null -> "申报详情"
+            else -> "活动中心"
+        },
         subtitle = if (currentDetail == null) {
             when (ui.tab) {
                 1 -> "我报名的活动"
-                2 -> if (ui.msgUnread > 0) "未读 ${ui.msgUnread}" else "站内消息"
-                3 -> "模块积分与排行榜"
+                2 -> "我的申报记录"
+                3 -> if (ui.msgUnread > 0) "未读 ${ui.msgUnread}" else "站内消息"
+                4 -> "模块积分与排行榜"
                 else -> null
             }
         } else {
@@ -219,10 +245,11 @@ fun SecondClassActivityCenterScreen(
         // 详情打开时永远显示返回（回列表）；列表层级是否显示返回取决于 onClose 是否为 null（Tab 模式隐藏）
         onBack = when {
             currentDetail != null -> ({ onCloseDetail() })
+            applicationDetail != null -> ({ applicationDetail = null })
             else -> onClose
         },
         actions = {
-            if (currentDetail == null) {
+            if (currentDetail == null && applicationDetail == null) {
                 when (ui.tab) {
                     0 -> {
                         // 筛选：已满 / 本院系可报
@@ -242,7 +269,17 @@ fun SecondClassActivityCenterScreen(
                             onClick = { showScanPicker = true },
                         )
                     }
-                    2 -> {
+                    2 -> SystemIconButton(
+                        icon = Icons.Outlined.Refresh,
+                        contentDescription = "刷新申报记录",
+                        onClick = onRefresh,
+                    )
+                    1 -> SystemIconButton(
+                        icon = Icons.Outlined.Refresh,
+                        contentDescription = "刷新",
+                        onClick = onRefresh,
+                    )
+                    3 -> {
                         // 一键已读（同选课页 DoneAll 图标，仅点击、无长按）：常显，无未读时点了只提示
                         SystemIconButton(
                             icon = Icons.Default.DoneAll,
@@ -255,12 +292,7 @@ fun SecondClassActivityCenterScreen(
                             onClick = onRefresh,
                         )
                     }
-                    1 -> SystemIconButton(
-                        icon = Icons.Outlined.Refresh,
-                        contentDescription = "刷新",
-                        onClick = onRefresh,
-                    )
-                    3 -> SystemIconButton(
+                    4 -> SystemIconButton(
                         icon = Icons.Outlined.Refresh,
                         contentDescription = "刷新成绩单",
                         onClick = onTranscriptRefresh,
@@ -270,6 +302,7 @@ fun SecondClassActivityCenterScreen(
         },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            val openApplication = applicationDetail
             if (currentDetail != null) {
                 ActivityDetailBody(
                     ui = currentDetail,
@@ -279,6 +312,8 @@ fun SecondClassActivityCenterScreen(
                     onOpenAttachment = onOpenAttachment,
                     onScan = onScan,
                 )
+            } else if (openApplication != null) {
+                ApplicationDetailBody(openApplication)
             } else {
                 ActivityListBody(
                     ui = ui,
@@ -295,6 +330,7 @@ fun SecondClassActivityCenterScreen(
                     onRefresh = onRefresh,
                     onLoadMore = onLoadMore,
                     onOpenDetail = onOpenDetail,
+                    onOpenApplication = { applicationDetail = it },
                     onOpenMessage = onOpenMessage,
                     transcriptContent = transcriptContent,
                     onBindSecondClass = onBindSecondClass,
@@ -306,6 +342,10 @@ fun SecondClassActivityCenterScreen(
     // 详情打开时拦一下系统返回键：先回列表，而不是直接退出（与顶栏箭头一致）
     BackHandler(enabled = currentDetail != null) {
         onCloseDetail()
+    }
+    // 申报详情同理：返回键先回申报列表
+    BackHandler(enabled = applicationDetail != null) {
+        applicationDetail = null
     }
 
     // 扫码方式选择：相机扫码 / 从相册识别（合并成一个入口后的二级选择）
@@ -400,6 +440,8 @@ private fun ActivityListBody(
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onOpenDetail: (Int) -> Unit,
+    /** 打开一条申报记录的页内详情（只读，不再发请求）。 */
+    onOpenApplication: (com.hnnujw.course.secondclass.SecondClassApplication) -> Unit = {},
     onOpenMessage: (com.hnnujw.course.secondclass.SecondClassMessage) -> Unit,
     transcriptContent: @Composable () -> Unit = {},
     onBindSecondClass: () -> Unit = {},
@@ -439,8 +481,15 @@ private fun ActivityListBody(
                 onRefresh = onRefresh,
                 onBindSecondClass = onBindSecondClass,
             )
-            // 「成绩单」是第 4 个 Tab（在「消息」右边）：宿主注入的内容直接占据余下空间
-            3 -> Box(Modifier.weight(1f)) { transcriptContent() }
+            2 -> ApplicationTab(
+                ui = ui,
+                onRefresh = onRefresh,
+                onOpenDetail = onOpenApplication,
+                onBindSecondClass = onBindSecondClass,
+            )
+            // 「成绩单」现在是最右边的第 5 个 Tab：宿主注入的内容直接占据余下空间
+            4 -> Box(Modifier.weight(1f)) { transcriptContent() }
+            // 3 = 消息
             else -> MessageTab(
                 ui = ui,
                 onLoadMore = onLoadMore,
@@ -453,9 +502,10 @@ private fun ActivityListBody(
         // 自己的错误态完整交代，这里就不再重复一遍。
         val listEmpty = when (ui.tab) {
             1 -> ui.myActivities.isEmpty()
-            2 -> ui.messages.isEmpty()
+            2 -> ui.applications.isEmpty()
+            3 -> ui.messages.isEmpty()
             // 成绩单的错误由它自己的加载链路负责
-            3 -> true
+            4 -> true
             else -> ui.activities.isEmpty()
         }
         if (ui.error.isNotBlank() && !listEmpty) {
@@ -1061,6 +1111,282 @@ private fun MyHoursSummary(count: Int, earnedHours: Double, partial: Boolean) {
             )
         }
     }
+}
+
+/**
+ * 「申报」页：我的申报记录（只读）。
+ *
+ * 数据来自 `/project/request/list1`，一次拉全、不做翻页（申报条目天然很少）。
+ *
+ * ⚠️ 本页**不提供任何提交入口**：申报要上传证明材料、要选认定档位，必须由用户本人在
+ * 第二课堂官方页面完成。这里只回答一个问题 ——「我申报了什么、算多少学时、现在什么状态」。
+ */
+@Composable
+private fun ApplicationTab(
+    ui: SecondClassActivityCenterUi,
+    onRefresh: () -> Unit,
+    onOpenDetail: (com.hnnujw.course.secondclass.SecondClassApplication) -> Unit,
+    onBindSecondClass: () -> Unit,
+) {
+    when {
+        ui.loading && ui.applications.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            SystemLoadingState("正在读取申报记录…")
+        }
+        ui.applications.isEmpty() && (ui.error.isNotBlank() || ui.needBind) -> ListFailureState(
+            ui = ui,
+            onRefresh = onRefresh,
+            onBindSecondClass = onBindSecondClass,
+        )
+        else -> LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                horizontal = PagePadding, vertical = 8.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item { ApplyGuide(ui.appCategories) }
+            if (ui.applications.isEmpty()) {
+                item {
+                    SystemEmptyState(
+                        title = "还没有申报记录",
+                        message = "在第二课堂官方页面提交的奖项、竞赛、荣誉等申报，会出现在这里。",
+                    )
+                }
+            } else {
+                items(ui.applications.size, key = { index -> ui.applications[index].identity }) { index ->
+                    ApplicationRow(ui.applications[index]) { onOpenDetail(ui.applications[index]) }
+                }
+            }
+        }
+    }
+}
+
+/** 申报页顶部的说明卡：讲清楚"这里只是看，提交要去官方页面"。 */
+@Composable
+private fun ApplyGuide(
+    categories: List<com.hnnujw.course.secondclass.SecondClassActivityCategory>,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "这里只显示你已提交的申报",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "申报要上传证明材料、选择认定档位，必须由你本人在第二课堂官方页面提交，" +
+                    "本应用不代填、不代提交。",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp,
+            )
+            if (categories.isNotEmpty()) {
+                Text(
+                    text = "申报范围：" + categories.joinToString(" · ") { it.name },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ApplicationRow(
+    application: com.hnnujw.course.secondclass.SecondClassApplication,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = application.projectName.ifBlank { "申报记录" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                StatusChip(application.statusLabel)
+            }
+            if (application.optionName.isNotBlank()) {
+                Text(
+                    text = application.optionName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            val meta = listOfNotNull(
+                application.classifyName.takeIf { it.isNotBlank() },
+                if (application.hours > 0) "${trimDecimal(application.hours)} 学时" else null,
+                application.limitTypeName.takeIf { it.isNotBlank() },
+                if (application.lastTime > 0) formatFull(application.lastTime) else null,
+            ).joinToString(" · ")
+            if (meta.isNotBlank()) {
+                Text(
+                    text = meta,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** 申报详情的页内视图（数据全部来自列表项，不再发请求）。 */
+@Composable
+private fun ApplicationDetailBody(
+    application: com.hnnujw.course.secondclass.SecondClassApplication,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = PagePadding, vertical = 12.dp
+        ),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = application.projectName.ifBlank { "申报记录" },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    ApplicationInfoLine("认定档位", application.optionName)
+                    ApplicationInfoLine("所属模块", application.classifyName)
+                    ApplicationInfoLine("申报类型", application.limitTypeName)
+                    ApplicationInfoLine(
+                        "认定学时",
+                        if (application.hours > 0) "${trimDecimal(application.hours)} 学时" else "",
+                    )
+                    ApplicationInfoLine("当前状态", application.statusLabel)
+                    ApplicationInfoLine(
+                        "申报开始",
+                        if (application.startTime > 0) formatFull(application.startTime) else "",
+                    )
+                    ApplicationInfoLine(
+                        "申报截止",
+                        if (application.endTime > 0) formatFull(application.endTime) else "",
+                    )
+                    ApplicationInfoLine(
+                        "最近更新",
+                        if (application.lastTime > 0) formatFull(application.lastTime) else "",
+                    )
+                }
+            }
+        }
+        if (application.remark.isNotBlank()) {
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "备注",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = application.remark,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            lineHeight = 22.sp,
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            Text(
+                text = "状态由第二课堂站点判定，本应用原样展示、不替站点下结论。" +
+                    "要看审核意见或补充材料，请到第二课堂官方页面。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 16.sp,
+            )
+        }
+    }
+}
+
+/** 一行「标签 + 值」；值为空时整行不渲染。 */
+@Composable
+private fun ApplicationInfoLine(label: String, value: String) {
+    if (value.isBlank()) return
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(72.dp),
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+            lineHeight = 20.sp,
+        )
+    }
+}
+
+/** 中性状态胶囊。站点没给状态文案，所以这里不做颜色语义（不臆造"已通过"用绿色）。 */
+@Composable
+private fun StatusChip(text: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        )
+    }
+}
+
+/** `3.0 → "3"`、`2.5 → "2.5"`：学时在站点上是浮点，整数时不显示多余小数位。 */
+private fun trimDecimal(value: Double): String {
+    val asLong = value.toLong()
+    return if (value == asLong.toDouble()) asLong.toString() else value.toString()
 }
 
 @Composable
