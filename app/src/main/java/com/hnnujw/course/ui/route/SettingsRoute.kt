@@ -501,6 +501,10 @@ fun SettingsRoute(
             runCatching { context.startActivity(Intent(context, com.hnnujw.course.XuegongActivity::class.java)) }
                 .onFailure { GlassToaster.show("无法打开学工系统页面") }
         },
+        onKaojiRegistration = {
+            runCatching { context.startActivity(Intent(context, com.hnnujw.course.KaojiActivity::class.java)) }
+                .onFailure { GlassToaster.show("无法打开考级报名页面") }
+        },
         onCheckUpdate = { checkForUpdate() },
         onOpenManual = {
             runCatching { context.startActivity(Intent(context, com.hnnujw.course.ManualActivity::class.java)) }

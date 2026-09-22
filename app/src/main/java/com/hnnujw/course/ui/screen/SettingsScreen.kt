@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.HowToReg
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -122,8 +123,11 @@ fun SettingsScreen(
     notificationsAllowed: Boolean = true,
     /** 打开系统通知设置页。 */
     onNotificationSettings: () -> Unit = {},
-    /** 学工系统（日常请假 / 节假日去向登记，只读查看）。 */
+    /** 学工系统（日常请假 / 节假日去向登记）。 */
     onXuegongSystem: () -> Unit = {},
+
+    /** 考级项目报名（教务系统内的等级考试报名）。 */
+    onKaojiRegistration: () -> Unit = {},
     onMessageCenter: () -> Unit = {},
     /** 公告中心未读数；> 0 时入口显示红点。 */
     announcementUnread: Int = 0,
@@ -248,14 +252,22 @@ fun SettingsScreen(
                 )
             }
 
-            // 校园服务：学工系统（学生工作处的系统，与教务/二课都不是一套）
+            // 校园服务：学工系统（学生工作处的系统，与教务/二课都不是一套）；
+            // 考级项目报名（教务系统内的等级考试报名，复用教务登录态）
             InsetGroupedSection(Modifier.moduleEntrance(3), header = "校园服务") {
                 SettingsRow(
                     icon = Icons.AutoMirrored.Outlined.Assignment,
                     iconTint = Color(0xFF34C759),
                     title = "学工系统",
-                    subtitle = "日常请假 · 节假日去向登记（只读查看）",
-                    onClick = onXuegongSystem,
+                    subtitle = "日常请假 · 节假日去向登记（可提交）",
+                    onClick = onXuegongSystem
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.HowToReg,
+                    iconTint = Color(0xFF5E5CE6),
+                    title = "考级项目报名",
+                    subtitle = "四六级 / 普通话等等级考试报名与退报",
+                    onClick = onKaojiRegistration,
                     showDivider = false
                 )
             }

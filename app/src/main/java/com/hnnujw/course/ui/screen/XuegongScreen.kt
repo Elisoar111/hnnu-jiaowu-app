@@ -58,6 +58,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hnnujw.course.manager.UserManager
+import com.hnnujw.course.ui.system.AreaData
+import com.hnnujw.course.ui.system.AreaWheelPickerDialog
 import com.hnnujw.course.ui.system.GlassDatePickerDialog
 import com.hnnujw.course.ui.system.GlassDateTimePickerDialog
 import com.hnnujw.course.ui.system.GlassOptionWheelDialog
@@ -1596,12 +1598,12 @@ private fun LeaveFormView(
                         enabled = draft.outBackOptions.isNotEmpty(),
                         onClick = { picker = "backVehicle" },
                     )
-                    FormTextField(
+                    FormPickField(
                         label = "外出地点",
                         required = true,
                         value = draft.outAddress,
-                        placeholder = "如：安徽省淮南市田家庵区",
-                        onValueChange = { draft.outAddress = it; onDraft(draft) },
+                        placeholder = "省 / 市 / 区县三级选择",
+                        onClick = { picker = "area" },
                     )
                     FormTextField(
                         label = "详细地址",
@@ -1806,6 +1808,15 @@ private fun LeaveFormView(
             },
             onDismiss = { picker = null },
         )
+        "area" -> AreaWheelPickerDialog(
+            initialValue = draft.outAddress,
+            onConfirm = { province, city, county ->
+                draft.outAddress = AreaData.concat(province, city, county)
+                onDraft(draft)
+                picker = null
+            },
+            onDismiss = { picker = null },
+        )
     }
 
     if (confirmSubmit) {
@@ -1902,12 +1913,12 @@ private fun WhereaboutsFormView(
                         enabled = draft.outGoOptions.isNotEmpty(),
                         onClick = { picker = "goVehicle" },
                     )
-                    FormTextField(
+                    FormPickField(
                         label = "外出地点",
                         required = true,
                         value = draft.comeWhere,
-                        placeholder = "如：安徽省合肥市蜀山区",
-                        onValueChange = { draft.comeWhere = it; onDraft(draft) },
+                        placeholder = "省 / 市 / 区县三级选择",
+                        onClick = { picker = "area" },
                     )
                     FormTextField(
                         label = "详细地址",
@@ -2026,6 +2037,15 @@ private fun WhereaboutsFormView(
             onConfirm = { option ->
                 draft.outGoVehicle = option.value
                 draft.outGoVehicleText = option.label
+                onDraft(draft)
+                picker = null
+            },
+            onDismiss = { picker = null },
+        )
+        "area" -> AreaWheelPickerDialog(
+            initialValue = draft.comeWhere,
+            onConfirm = { province, city, county ->
+                draft.comeWhere = AreaData.concat(province, city, county)
                 onDraft(draft)
                 picker = null
             },

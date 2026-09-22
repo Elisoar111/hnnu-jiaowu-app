@@ -144,6 +144,13 @@
             android:exported="false"
             android:screenOrientation="portrait" />
 
+        <!-- 教务系统「考级项目报名」：复用教务会话（jwgl https）；测试账号只读演示 -->
+        <activity
+            android:name=".KaojiActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <!-- 第二课堂附件查看器：Word / Excel / PDF / 图片 / 文本内置渲染。
              附件是直链（不需要登录态），下载落在 cacheDir/attachments，
              该目录已登记在 file_paths.xml 的 cache-path 下，可被 FileProvider 暴露。 -->
