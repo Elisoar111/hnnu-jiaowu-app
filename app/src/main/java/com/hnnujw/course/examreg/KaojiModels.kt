@@ -61,9 +61,9 @@ data class KaojiRegistered(
     val fee: String,
     /** 报名时间（bmsj）。 */
     val registeredAt: String,
-    /** 考试开始（kssj）。 */
+    /** 报名起止窗口（kssj/jssj）。⚠️ 实测这两个字段是**报名**窗口不是考试时间，界面不展示。 */
     val examBegin: String,
-    /** 考试结束（jssj）。 */
+    /** 报名起止窗口的截止段（jssj），口径同 [examBegin]。 */
     val examEnd: String,
     /** 准考证号（zkzh），未生成时为空。 */
     val ticketNo: String,
@@ -75,11 +75,7 @@ data class KaojiRegistered(
     val term: String,
     /** 报名手机号（sjhm）。 */
     val phone: String,
-) {
-    /** 已缴费或正在缴费（此时不允许退报，口径照站点 JS）。 */
-    val paidOrPaying: Boolean
-        get() = false
-}
+)
 
 /** 入口页解析结果。 */
 data class KaojiPage(

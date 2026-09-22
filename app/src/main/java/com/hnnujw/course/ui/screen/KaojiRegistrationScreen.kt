@@ -82,16 +82,18 @@ fun KaojiRegistrationScreen(
 ) {
     val scope = rememberCoroutineScope()
 
-    var page by remember { mutableStateOf<KaojiPage?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf("") }
-    var needLogin by remember { mutableStateOf(false) }
+    // ⚠️ 全部按 accountKey 重置：切换账号后这些状态必须回到初始值，
+    // 否则会把上一个账号的报名数据展示给新账号（与 XuegongScreen 同一约定）。
+    var page by remember(accountKey) { mutableStateOf<KaojiPage?>(null) }
+    var loading by remember(accountKey) { mutableStateOf(false) }
+    var error by remember(accountKey) { mutableStateOf("") }
+    var needLogin by remember(accountKey) { mutableStateOf(false) }
 
     /** 正在提交的项目 id（报名）/ 记录 id（退报），用于按钮防抖。 */
-    var submittingId by remember { mutableStateOf<String?>(null) }
-    var confirmProject by remember { mutableStateOf<KaojiProject?>(null) }
-    var confirmPhone by remember { mutableStateOf("") }
-    var withdrawTarget by remember { mutableStateOf<KaojiRegistered?>(null) }
+    var submittingId by remember(accountKey) { mutableStateOf<String?>(null) }
+    var confirmProject by remember(accountKey) { mutableStateOf<KaojiProject?>(null) }
+    var confirmPhone by remember(accountKey) { mutableStateOf("") }
+    var withdrawTarget by remember(accountKey) { mutableStateOf<KaojiRegistered?>(null) }
 
     /**
      * 该记录是否还能退报：只有**当前开放批次**里报名截止时间未过的记录才给

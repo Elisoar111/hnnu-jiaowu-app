@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -109,7 +110,7 @@ object AreaData {
         var city = tables.citiesOf(province)
             .filter { it.name.isNotEmpty() && rest.startsWith(it.name) }
             .maxByOrNull { it.name.length }
-        var restAfterCity = city?.let { rest.removePrefix(it.name) } ?: rest
+        val restAfterCity = city?.let { rest.removePrefix(it.name) } ?: rest
 
         // 市段缺失（如「北京市东城区」）：直接按区县名收尾。
         var county: Node? = null
@@ -125,8 +126,6 @@ object AreaData {
             if (direct != null) {
                 if (city == null) city = provinceCounties.firstOrNull { it.code.take(4) == direct.code.take(4) && it.code.endsWith("00") }
                 county = direct
-                restAfterCity = rest.removePrefix(city?.name ?: "")
-                if (county.name != restAfterCity) restAfterCity = county.name
             }
         }
         return Triple(province, city, county)
@@ -188,8 +187,9 @@ fun AreaWheelPickerDialog(
     }
 
     if (tables.isEmpty) {
-        // 数据缺失（资产损坏/加载失败）时不弹空轮子，直接取消。
-        onDismiss()
+        // 数据缺失（资产损坏/加载失败）时不弹空轮子：下一帧再取消，
+        // 不能在组合期间直接写调用方的状态（Compose 反模式）。
+        LaunchedEffect(tables) { onDismiss() }
         return
     }
 
