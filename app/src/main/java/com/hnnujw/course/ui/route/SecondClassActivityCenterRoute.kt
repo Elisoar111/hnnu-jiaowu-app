@@ -664,26 +664,51 @@ fun SecondClassActivityCenterRoute(
             )
         },
         onDeclareKeyword = { ui = ui.copy(keyword = it) },
+        // 填报页状态提升在 Route：Screen 只读参数 + 回写回调（修复「点立即申请打不开」）
+        declareForm = declareForm,
+        onDeclareFormChange = { declareForm = it },
         onOpenDeclareProject = { project ->
-            val c = client ?: return@SecondClassActivityCenterScreen
-            if (project.closed) {
+            val c = client
+            if (c == null) {
+                GlassToaster.show("请先绑定第二课堂")
+            } else if (project.closed) {
                 GlassToaster.show(project.closeApplyRemark.ifBlank { "该项目申报已截止" })
-                return@SecondClassActivityCenterScreen
+            } else {
+                declareForm = com.hnnujw.course.ui.screen.SecondClassDeclareFormUi(
+                    project = project,
+                    loadingDetail = true,
+                )
+                scope.launch {
+                    try {
+                        val token = SecondClassroomStore.token(context, accountKey)
+                        val detail = withContext(Dispatchers.IO) { c.declareProjectDetail(token, project.id) }
+                        declareForm = declareForm?.copy(loadingDetail = false, detail = detail)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        val message = SecondClassroomStore.handleFailure(context, accountKey, e)
+                        declareForm = declareForm?.copy(loadingDetail = false, error = message)
+                    }
+                }
             }
-            declareForm = com.hnnujw.course.ui.screen.SecondClassDeclareFormUi(
-                project = project,
-                loadingDetail = true,
-            )
-            scope.launch {
-                try {
-                    val token = SecondClassroomStore.token(context, accountKey)
-                    val detail = withContext(Dispatchers.IO) { c.declareProjectDetail(token, project.id) }
-                    declareForm = declareForm?.copy(loadingDetail = false, detail = detail)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    val message = SecondClassroomStore.handleFailure(context, accountKey, e)
-                    declareForm = declareForm?.copy(loadingDetail = false, error = message)
+        },
+        onRetryDeclareDetail = { state ->
+            val c = client
+            if (c == null) {
+                GlassToaster.show("请先绑定第二课堂")
+            } else {
+                scope.launch {
+                    declareForm = state.copy(loadingDetail = true, error = "")
+                    try {
+                        val token = SecondClassroomStore.token(context, accountKey)
+                        val detail = withContext(Dispatchers.IO) { c.declareProjectDetail(token, state.project.id) }
+                        declareForm = declareForm?.copy(loadingDetail = false, detail = detail)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        val message = SecondClassroomStore.handleFailure(context, accountKey, e)
+                        declareForm = declareForm?.copy(loadingDetail = false, error = message)
+                    }
                 }
             }
         },

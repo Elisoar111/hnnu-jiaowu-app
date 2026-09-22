@@ -53,8 +53,8 @@ data class XuegongLeaveRecord(
 /**
  * 日常请假页：记录 + 校方给的申请开关。
  *
- * 本应用**只展示**这份开关状态，不提供任何提交入口
- * （用户明确要求只读；请假仍需回到学工系统官方页面操作）。
+ * 校方允许申请时，页面提供「写请假」在线填表提交（1.2.4 起）；
+ * 开关本身只读展示，是否开放由学工系统说了算。
  */
 data class XuegongLeavePage(
     val page: XuegongPage<XuegongLeaveRecord>,
@@ -430,6 +430,32 @@ data class XuegongWhereaboutsDraft(
     }
 
     var outGoOptions: List<XuegongDictOption> = emptyList()
+
+    /**
+     * 按上一次登记记录回填「记忆字段」（去向类型、交通方式、地点、联系人、电话等）。
+     *
+     * 只填草稿里还空着的字段（去向类型与交通方式除外 —— 站点骨架里它们通常是空的，
+     * 而用户明确要求按上次登记自动填写），**时间一律不回填**：每个批次的登记窗口不同，
+     * 照抄上一次的时间几乎必然错。回填后仍需用户检查、手动提交。
+     */
+    fun applyMemory(record: XuegongWhereaboutsRecord) {
+        when {
+            record.leaveType == "2" || record.leaveType.contains("留校") -> leaveType = "2"
+            record.leaveType == "1" || record.leaveType.contains("离校") -> leaveType = "1"
+        }
+        if (record.vehicle.isNotBlank() && outGoVehicle.isBlank()) {
+            outGoOptions.firstOrNull { it.text == record.vehicle || it.label == record.vehicle }?.let {
+                outGoVehicle = it.value
+                outGoVehicleText = it.label
+            }
+        }
+        if (comeWhere.isBlank()) comeWhere = record.destination.ifBlank { record.homePlace }
+        if (reason.isBlank()) reason = record.reason
+        if (outContacts.isBlank()) outContacts = record.contactName
+        if (outContactsRelationship.isBlank()) outContactsRelationship = record.contactRelation
+        if (outContactsTel.isBlank()) outContactsTel = record.contactTel
+        if (stuMoveTel.isBlank()) stuMoveTel = record.studentTel
+    }
 
     /** 覆盖编辑字段后的 `ApplyInfo`。 */
     fun toApplyInfo(): JSONObject {

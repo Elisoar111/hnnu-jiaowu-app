@@ -242,6 +242,15 @@ fun SecondClassActivityCenterScreen(
     onRemoveDeclareMaterial: (String) -> Unit = {},
     /** 关联活动搜索（弹窗里输入关键词）。 */
     onSearchRelateActivity: (String) -> Unit = {},
+    /**
+     * 「申报 · 填报页」状态，**状态提升到 Route**（提交/上传/详情拉取都在 Route 发请求，
+     * 状态必须与请求方同层 —— 之前 Screen 里自己 remember 一份、Route 改的是自己那份，
+     * 两边永不相等，点「立即申请」就永远打不开填报页）。
+     */
+    declareForm: SecondClassDeclareFormUi? = null,
+    onDeclareFormChange: (SecondClassDeclareFormUi?) -> Unit = {},
+    /** 详情拉取失败后的重试（只重拉 detail，不动已上传的材料）。 */
+    onRetryDeclareDetail: (SecondClassDeclareFormUi) -> Unit = {},
     /** 提交申报。 */
     onSubmitDeclare: () -> Unit = {},
     coverBase: String = "",
@@ -286,8 +295,7 @@ fun SecondClassActivityCenterScreen(
     var applicationDetail by remember {
         mutableStateOf<com.hnnujw.course.secondclass.SecondClassApplication?>(null)
     }
-    /** 「申报 · 填报页」：点项目行的「立即申请」进入。 */
-    var declareForm by remember { mutableStateOf<SecondClassDeclareFormUi?>(null) }
+    // declareForm（申报填报页）状态提升在 Route，经参数传入 —— 这里不再自己 remember
 
     GlassPageScaffold(
         title = when {
@@ -311,7 +319,7 @@ fun SecondClassActivityCenterScreen(
         onBack = when {
             currentDetail != null -> ({ onCloseDetail() })
             applicationDetail != null -> ({ applicationDetail = null })
-            declareForm != null -> ({ declareForm = null })
+            declareForm != null -> ({ onDeclareFormChange(null) })
             else -> onClose
         },
         actions = {
@@ -384,10 +392,11 @@ fun SecondClassActivityCenterScreen(
             } else if (openDeclareForm != null) {
                 DeclareFormBody(
                     state = openDeclareForm,
-                    onState = { declareForm = it },
+                    onState = onDeclareFormChange,
                     onPickMaterial = onPickDeclareMaterial,
                     onRemoveMaterial = onRemoveDeclareMaterial,
                     onSearchRelate = onSearchRelateActivity,
+                    onRetryDetail = { onRetryDeclareDetail(openDeclareForm) },
                     onSubmit = onSubmitDeclare,
                 )
             } else {
@@ -431,7 +440,7 @@ fun SecondClassActivityCenterScreen(
     }
     // 申报填报页：返回键先回申报列表
     BackHandler(enabled = declareForm != null) {
-        declareForm = null
+        onDeclareFormChange(null)
     }
 
     // 扫码方式选择：相机扫码 / 从相册识别（合并成一个入口后的二级选择）
@@ -1522,6 +1531,7 @@ private fun DeclareFormBody(
     onPickMaterial: () -> Unit,
     onRemoveMaterial: (String) -> Unit,
     onSearchRelate: (String) -> Unit,
+    onRetryDetail: () -> Unit,
     onSubmit: () -> Unit,
 ) {
     val detail = state.detail
@@ -1554,10 +1564,11 @@ private fun DeclareFormBody(
         }
         InsetGroupedSection(header = "认定档位与时间") {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                // 奖项名称（档位）：站点是 picker，这里是玻璃滚轮弹窗
+                // 奖项名称（档位）：站点是 picker，这里是玻璃滚轮弹窗；
+                // 详情没拉到时点这一行改为触发重试，绝不让用户停在死路上
                 Row(
-                    Modifier.fillMaxWidth().clickable(enabled = !state.loadingDetail && !detail?.options.isNullOrEmpty()) {
-                        picker = "option"
+                    Modifier.fillMaxWidth().clickable(enabled = !state.loadingDetail) {
+                        if (detail == null) onRetryDetail() else picker = "option"
                     },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1571,7 +1582,7 @@ private fun DeclareFormBody(
                     Text(
                         text = when {
                             state.loadingDetail -> "正在读取档位…"
-                            detail == null -> "加载失败，返回重试"
+                            detail == null -> "档位读取失败，点按重试"
                             detail.options.isEmpty() -> "该项目暂无可选档位"
                             else -> state.selectedOption?.label ?: "请选择奖项名称"
                         },

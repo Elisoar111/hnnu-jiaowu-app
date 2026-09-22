@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -144,8 +145,11 @@ fun XuegongScreen(onBack: () -> Unit) {
     // ── 提交表单（1.2.5）─────────────────────────────────────────────────
     /** 正在拉取表单骨架（点「写请假」/ 点开放批次后的一瞬间）。 */
     var formLoading by remember { mutableStateOf(false) }
-    var leaveForm by remember { mutableStateOf<XuegongLeaveFormUi?>(null) }
-    var whereaboutsForm by remember { mutableStateOf<XuegongWhereaboutsFormUi?>(null) }
+    // ⚠️ 必须用 neverEqualPolicy：草稿是有 var 字段的可变对象，编辑是「原地改 + copy 回填」，
+    // 改完的新旧 FormUi 结构相等，默认的 structuralEqualityPolicy 会把这次赋值当成"没变"
+    // 而不触发重组 —— 症状就是去向类型/请假类型选不动、时间选完不显示（1.2.4 实测踩坑）。
+    var leaveForm by remember { mutableStateOf<XuegongLeaveFormUi?>(null, neverEqualPolicy()) }
+    var whereaboutsForm by remember { mutableStateOf<XuegongWhereaboutsFormUi?>(null, neverEqualPolicy()) }
 
     val detailOpen = leaveDetail != null || whereaboutsDetail != null ||
         leaveForm != null || whereaboutsForm != null
@@ -196,7 +200,12 @@ fun XuegongScreen(onBack: () -> Unit) {
         }
     }
 
-    /** 点开一个去向登记批次：未登记且开放 → 表单；已登记 → 详情；其余由调用方判定。 */
+    /**
+     * 点开一个去向登记批次：开放中 → 表单；已登记 → 详情（由调用方按批次状态分发）。
+     *
+     * 表单打开后按**上一次登记记录**自动回填记忆字段（去向类型、交通方式、地点、
+     * 联系人、电话等），但**绝不自动提交** —— 用户检查、修改确认后手动点提交。
+     */
     fun openWhereaboutsForm(batch: XuegongHolidayBatch) {
         if (formLoading || token.isBlank()) return
         formLoading = true
@@ -206,7 +215,14 @@ fun XuegongScreen(onBack: () -> Unit) {
                 val form = withContext(Dispatchers.IO) {
                     client.whereaboutsForm(token, configId = batch.id)
                 }
-                whereaboutsForm = XuegongWhereaboutsFormUi(draft = XuegongWhereaboutsDraft.of(form), batch = batch)
+                val draft = XuegongWhereaboutsDraft.of(form)
+                val memory = whereaboutsPage?.page?.items?.firstOrNull()
+                if (memory != null) draft.applyMemory(memory)
+                whereaboutsForm = XuegongWhereaboutsFormUi(
+                    draft = draft,
+                    batch = batch,
+                    prefilled = memory != null,
+                )
             } catch (e: Exception) {
                 loadError = XuegongStore.handleFailure(context, accountKey, e)
                 GlassToaster.show("登记表单加载失败")
@@ -491,21 +507,11 @@ fun XuegongScreen(onBack: () -> Unit) {
                             page = whereaboutsPage,
                             formLoading = formLoading,
                             onOpen = { whereaboutsDetail = it },
-                            onOpenBatch = { batch ->
-                                // 单列表：已登记 → 看详情；开放中 → 填表提交
-                                val record = whereaboutsPage?.page?.items?.firstOrNull { record ->
-                                    (record.holidayId.isNotBlank() && record.holidayId == batch.id) ||
-                                        record.holidayName == batch.name
-                                }
-                                when {
-                                    record != null -> whereaboutsDetail = record
-                                    batch.open -> openWhereaboutsForm(batch)
-                                    else -> GlassToaster.show("该批次暂未开放登记")
-                                }
-                            },
+                            // 批次的「已登记 → 详情 / 开放中 → 填表」分发在 WhereaboutsTab 内部做，
+                            // 这里只负责打开表单
+                            onOpenBatch = { openWhereaboutsForm(it) },
                         )
                     }
-                    ReadOnlyNotice()
                     Spacer(Modifier.height(8.dp))
                 }
             }
@@ -988,7 +994,6 @@ private fun LeaveDetailView(record: XuegongLeaveRecord) {
             }
         }
         ExtraFieldsCard(record.extras)
-        ReadOnlyNotice()
         Spacer(Modifier.height(8.dp))
     }
 }
@@ -996,10 +1001,12 @@ private fun LeaveDetailView(record: XuegongLeaveRecord) {
 // ── 节假日去向登记 ──────────────────────────────────────────────────────
 
 /**
- * 去向登记 Tab：**一个列表承载查看与提交**。
+ * 去向登记 Tab：批次列表只保留**有操作意义**的批次。
  *
- * 每个批次就是一行：已登记 → 点开看登记详情；开放中 → 点开填表提交；
- * 未开放 → 原样展示状态。不再拆"登记入口"和"记录列表"两份 UI。
+ * ・登记中（open）的批次：未登记 → 点开填表提交；已登记 → 点开看详情。
+ * ・已结束的批次：**登记过的**保留（点开看详情），没登记过的直接不显示 ——
+ *   看不了也报不了名的历史批次堆在界面上只会干扰（用户点名要求删掉）。
+ * ・下方不再重复列出已登记记录：登记内容统一从批次行进详情。
  */
 @Composable
 private fun WhereaboutsTab(
@@ -1012,8 +1019,15 @@ private fun WhereaboutsTab(
         SystemEmptyState(title = "暂无数据", message = "没有读到去向登记信息。")
         return
     }
+    fun recordOf(batch: XuegongHolidayBatch): XuegongWhereaboutsRecord? =
+        page.page.items.firstOrNull { record ->
+            (record.holidayId.isNotBlank() && record.holidayId == batch.id) ||
+                record.holidayName == batch.name
+        }
+    // 已结束且没登记过的批次：不展示（用户点名要求删掉这一段）
+    val visibleBatches = page.batches.filter { it.open || recordOf(it) != null }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (page.batches.isEmpty()) {
+        if (visibleBatches.isEmpty()) {
             SystemEmptyState(
                 title = "没有登记批次",
                 message = "学校还没有发布节假日去向登记批次，开放后这里会出现入口。"
@@ -1021,30 +1035,41 @@ private fun WhereaboutsTab(
         } else {
             InsetGroupedSection(Modifier.moduleEntrance(2), header = "登记批次") {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    page.batches.forEach { batch ->
-                        HolidayBatchRow(batch = batch, loading = formLoading, onClick = { onOpenBatch(batch) })
+                    visibleBatches.forEach { batch ->
+                        val record = recordOf(batch)
+                        HolidayBatchRow(
+                            batch = batch,
+                            loading = formLoading,
+                            // 已登记 → 看详情；开放中未登记 → 填表；其余（已结束没登记）根本不会出现在列表里
+                            enabled = record != null || batch.open,
+                            registered = record != null,
+                            onClick = {
+                                if (record != null) onOpen(record) else onOpenBatch(batch)
+                            },
+                        )
                     }
                 }
             }
         }
-        if (page.page.items.isNotEmpty()) {
-            page.page.items.forEach { record ->
-                WhereaboutsRow(record) { onOpen(record) }
-            }
-            PagingHint(page.page.total, page.page.items.size)
-        }
     }
 }
 
-/** 批次行：显示假期 / 登记时间与状态；整行可点（点开看详情或填表）。 */
+/**
+ * 批次行：显示假期 / 登记时间与状态。
+ *
+ * [enabled] 为假时不响应点击（纯信息展示）；[registered] 为真时行尾注明
+ * 「已登记 · 点按查看详情」，开放中的批次则是「点按填写登记」。
+ */
 @Composable
 private fun HolidayBatchRow(
     batch: XuegongHolidayBatch,
     loading: Boolean,
+    enabled: Boolean,
+    registered: Boolean,
     onClick: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -1089,75 +1114,22 @@ private fun HolidayBatchRow(
                     lineHeight = 18.sp
                 )
             }
+            Text(
+                text = when {
+                    loading -> "正在打开…"
+                    registered -> "已登记 · 点按查看详情"
+                    else -> "点按填写登记"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 0.9f else 0.5f)
+            )
         }
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = if (loading) "正在打开" else "打开",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp)
-        )
-    }
-}
-
-@Composable
-private fun WhereaboutsRow(record: XuegongWhereaboutsRecord, onClick: () -> Unit) {
-    SystemCard(
-        Modifier.fillMaxWidth().moduleEntrance(2),
-        onClick = onClick
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            RowIconChip(icon = Icons.Outlined.Public, tint = Color(0xFF30B0C7))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = record.title,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (record.leaveType.isNotBlank()) {
-                        SystemStatusBadge(text = record.leaveType, tone = SystemTone.Info)
-                    }
-                }
-                if (record.beginTime.isNotBlank() || record.endTime.isNotBlank()) {
-                    Text(
-                        text = "${record.beginTime.ifBlank { "—" }} → ${record.endTime.ifBlank { "—" }}" +
-                            (if (record.days.isNotBlank()) " · ${record.days} 天" else ""),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (record.destination.isNotBlank()) {
-                    Text(
-                        text = "去向：${record.destination}" +
-                            (if (record.vehicle.isNotBlank()) " · ${record.vehicle}" else ""),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                if (record.registered.isNotBlank()) {
-                    Text(
-                        text = "登记状态：${record.registered}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
+        if (enabled) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
+                contentDescription = if (loading) "正在打开" else "打开",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp).padding(top = 10.dp)
+                modifier = Modifier.size(20.dp)
             )
         }
     }
@@ -1209,7 +1181,6 @@ private fun WhereaboutsDetailView(record: XuegongWhereaboutsRecord) {
             }
         }
         ExtraFieldsCard(record.extras)
-        ReadOnlyNotice()
         Spacer(Modifier.height(8.dp))
     }
 }
@@ -1418,16 +1389,6 @@ private fun ExtraFieldsCard(extras: List<Pair<String, String>>) {
     }
 }
 
-/** 页脚固定提示：提交入口的范围说明。 */
-@Composable
-private fun ReadOnlyNotice() {
-    Text(
-        text = "本应用提供日常请假与去向登记的填写提交，销假、审批、撤销等仍需在学工系统官方页面办理；提交结果以校方审批为准。",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        lineHeight = 18.sp
-    )
-}
 
 /** 列表只取了第一页时，如实告诉用户一共多少条。 */
 @Composable
@@ -1530,6 +1491,8 @@ data class XuegongLeaveFormUi(
 data class XuegongWhereaboutsFormUi(
     val draft: XuegongWhereaboutsDraft,
     val batch: XuegongHolidayBatch? = null,
+    /** true = 已按上一次登记记录自动回填，用户需核对后手动提交。 */
+    val prefilled: Boolean = false,
     val submitting: Boolean = false,
     val error: String = "",
 )
@@ -1594,7 +1557,7 @@ private fun LeaveFormView(
                 FormTextField(
                     label = "本人移动电话",
                     value = draft.stuMoveTel,
-                    placeholder = "选填",
+                    placeholder = "",
                     keyboardType = KeyboardType.Phone,
                     onValueChange = { draft.stuMoveTel = it; onDraft(draft) },
                 )
@@ -1641,7 +1604,7 @@ private fun LeaveFormView(
                     FormTextField(
                         label = "详细地址",
                         value = draft.outAddressStreet,
-                        placeholder = "选填",
+                        placeholder = "",
                         onValueChange = { draft.outAddressStreet = it; onDraft(draft) },
                     )
                 }
@@ -1693,13 +1656,13 @@ private fun LeaveFormView(
                     FormTextField(
                         label = "与本人关系",
                         value = draft.companionRelationship,
-                        placeholder = "选填",
+                        placeholder = "",
                         onValueChange = { draft.companionRelationship = it; onDraft(draft) },
                     )
                     FormTextField(
                         label = "联系电话",
                         value = draft.companionTel,
-                        placeholder = "选填",
+                        placeholder = "",
                         keyboardType = KeyboardType.Phone,
                         onValueChange = { draft.companionTel = it; onDraft(draft) },
                     )
@@ -1707,13 +1670,13 @@ private fun LeaveFormView(
                 FormTextField(
                     label = "家长姓名",
                     value = draft.outContacts,
-                    placeholder = "选填",
+                    placeholder = "",
                     onValueChange = { draft.outContacts = it; onDraft(draft) },
                 )
                 FormTextField(
                     label = "家长电话",
                     value = draft.outContactsTel,
-                    placeholder = "选填",
+                    placeholder = "",
                     keyboardType = KeyboardType.Phone,
                     onValueChange = { draft.outContactsTel = it; onDraft(draft) },
                 )
@@ -1878,6 +1841,9 @@ private fun WhereaboutsFormView(
                 )
             }
         }
+        if (state.prefilled) {
+            InlineWarning("已按你上一次的登记自动填写，请逐项核对后再提交。")
+        }
         if (error.isNotBlank()) InlineWarning(error)
 
         InsetGroupedSection(header = "登记信息") {
@@ -1912,13 +1878,13 @@ private fun WhereaboutsFormView(
                     FormTextField(
                         label = "详细地址",
                         value = draft.outAddressStreet,
-                        placeholder = "选填",
+                        placeholder = "",
                         onValueChange = { draft.outAddressStreet = it; onDraft(draft) },
                     )
                     FormTextField(
                         label = "同行人数",
                         value = draft.outNumber,
-                        placeholder = "选填",
+                        placeholder = "",
                         keyboardType = KeyboardType.Number,
                         onValueChange = { draft.outNumber = it; onDraft(draft) },
                     )
@@ -1937,46 +1903,46 @@ private fun WhereaboutsFormView(
                 FormTextField(
                     label = "去向事由",
                     value = draft.reason,
-                    placeholder = "选填",
+                    placeholder = "",
                     onValueChange = { draft.reason = it; onDraft(draft) },
                 )
                 FormTextField(
                     label = "联系人姓名",
                     value = draft.outContacts,
-                    placeholder = "选填",
+                    placeholder = "",
                     onValueChange = { draft.outContacts = it; onDraft(draft) },
                 )
                 FormTextField(
                     label = "与本人关系",
                     value = draft.outContactsRelationship,
-                    placeholder = "选填",
+                    placeholder = "",
                     onValueChange = { draft.outContactsRelationship = it; onDraft(draft) },
                 )
                 FormTextField(
                     label = "联系人手机",
                     value = draft.outContactsMoveTel,
-                    placeholder = "选填",
+                    placeholder = "",
                     keyboardType = KeyboardType.Phone,
                     onValueChange = { draft.outContactsMoveTel = it; onDraft(draft) },
                 )
                 FormTextField(
                     label = "联系人电话",
                     value = draft.outContactsTel,
-                    placeholder = "选填",
+                    placeholder = "",
                     keyboardType = KeyboardType.Phone,
                     onValueChange = { draft.outContactsTel = it; onDraft(draft) },
                 )
                 FormTextField(
                     label = "本人移动电话",
                     value = draft.stuMoveTel,
-                    placeholder = "选填",
+                    placeholder = "",
                     keyboardType = KeyboardType.Phone,
                     onValueChange = { draft.stuMoveTel = it; onDraft(draft) },
                 )
                 FormTextField(
                     label = "其他联系方式",
                     value = draft.stuTel,
-                    placeholder = "选填",
+                    placeholder = "",
                     onValueChange = { draft.stuTel = it; onDraft(draft) },
                 )
             }
