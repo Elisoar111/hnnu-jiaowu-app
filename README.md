@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="96" alt="教务助理图标"/>
+  <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="96" alt="校园助理图标"/>
 </p>
 
-<h1 align="center">教务助理</h1>
+<h1 align="center">校园助理</h1>
 
 <p align="center">
   <strong>开源 · 免费 · 安全</strong><br/>

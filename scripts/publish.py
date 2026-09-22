@@ -837,7 +837,7 @@ def main(argv=None):
                    or local_properties().get("GITEE_USER", ""))
     platforms = {"gitee": {"gitee"}, "github": {"github"}, "both": {"gitee", "github"}}[args.only]
 
-    say("=== 发布教务助理 ===")
+    say("=== 发布校园助理 ===")
     if DRY:
         say("(dry-run：只打印动作，不改任何远端)")
     say(f"    Gitee  {GITEE_REPO}  {'有令牌' if TOKEN else '缺令牌'}")

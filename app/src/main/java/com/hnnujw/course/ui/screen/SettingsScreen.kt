@@ -402,7 +402,7 @@ fun SettingsScreen(
             }
 
             Text(
-                text = "教务助理 · $currentVersion",
+                text = "校园助理 · $currentVersion",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.align(Alignment.CenterHorizontally)

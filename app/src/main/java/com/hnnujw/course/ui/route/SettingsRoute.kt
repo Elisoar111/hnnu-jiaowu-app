@@ -234,7 +234,7 @@ fun SettingsRoute(
     }
 
     fun shareAppToClassmates() {
-        val text = "教务助理 · 开源免费的高校教务客户端（课表 / 选课 / 成绩 / 第二课堂）\n" +
+        val text = "校园助理 · 开源免费的高校教务客户端（课表 / 选课 / 成绩 / 第二课堂）\n" +
             "GitHub：https://github.com/Elisoar111/hnnu-jiaowu-app\n" +
             "Gitee：https://gitee.com/Elisoar/hnnu-jiaowu-app"
         val send = Intent(Intent.ACTION_SEND).apply {
@@ -742,7 +742,7 @@ fun SettingsRoute(
                             showContactDialog = false
                             val mail = Intent(Intent.ACTION_SENDTO).apply {
                                 data = Uri.parse("mailto:elisoar@qq.com")
-                                putExtra(Intent.EXTRA_SUBJECT, "教务助理反馈")
+                                putExtra(Intent.EXTRA_SUBJECT, "校园助理反馈")
                             }
                             runCatching { context.startActivity(mail) }
                                 .onFailure { GlassToaster.show("未找到可以发送邮件的应用") }
@@ -786,7 +786,7 @@ fun SettingsRoute(
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "教务助理 · v$currentVersion",
+                        text = "校园助理 · v$currentVersion",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center

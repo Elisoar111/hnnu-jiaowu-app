@@ -101,7 +101,7 @@ fun OnboardingDialog(
                     modifier = Modifier.size(44.dp)
                 )
                 Text(
-                    text = "欢迎使用教务助理",
+                    text = "欢迎使用校园助理",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,

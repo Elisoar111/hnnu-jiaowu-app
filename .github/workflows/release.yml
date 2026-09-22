@@ -276,7 +276,7 @@ jobs:
           prerelease: false
           name: Release ${{ steps.target.outputs.tag }}
           body: |
-            感谢使用教务助理！
+            感谢使用校园助理！
 
             **更新日志：**
             ${{ steps.notes.outputs.release_notes }}
