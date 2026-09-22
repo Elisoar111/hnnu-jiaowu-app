@@ -324,15 +324,18 @@ data class XuegongLeaveDraft(
             val begin = parseSiteTime(beginTime) ?: return ""
             val end = parseSiteTime(endTime) ?: return ""
             if (end <= begin) return ""
-            val hours = (end - begin) / 3600000.0
-            val days = hours.toInt()
-            val rest = hours - days
+            // 站点口径：整小时计，满 24 折天（71 小时 = 2 天 23 小时）。
+            // 旧实现 days = hours.toInt() 把总小时数当成了天数（71 小时显示成「71天」）。
+            val totalMinutes = (end - begin) / 60000
+            val wholeHours = totalMinutes / 60
+            val days = wholeHours / 24
+            val restHours = (wholeHours % 24).toDouble()
             return when {
-                hours < 24.0 -> "${trimHours(hours)}小时"
-                else -> buildString {
-                    append(days).append("天")
-                    if (rest > 0) append(trimHours(rest)).append("小时")
+                days > 0 -> buildString {
+                    append(days).append(" 天")
+                    if (restHours > 0) append(" ").append(trimHours(restHours)).append(" 小时")
                 }
+                else -> "${trimHours(wholeHours.toDouble())} 小时"
             }
         }
 
@@ -341,10 +344,11 @@ data class XuegongLeaveDraft(
         beginTime.isBlank() -> "请选择请假开始时间"
         endTime.isBlank() -> "请选择请假结束时间"
         parseSiteTime(beginTime) == null || parseSiteTime(endTime) == null ->
-            "请假时间格式不正确（应为 年/月/日 时:00）"
+            "请假时间格式不正确，请重新选择"
         (parseSiteTime(endTime) ?: 0L) <= (parseSiteTime(beginTime) ?: 0L) -> "请假结束时间必须大于开始时间"
         reason.isBlank() -> "请选择请假原因"
         reasonDetail.isBlank() -> "请填写详细说明"
+        stuMoveTel.isBlank() -> "请填写本人移动电话"
         isTellGuarder == "1" && guarderTel.isBlank() -> "已告知监护人时请填写监护人电话"
         isOut == "1" && outAddress.isBlank() -> "离校时请填写外出地点"
         isOut == "1" && outGoTime.isBlank() -> "离校时请选择外出开始时间"
@@ -498,37 +502,63 @@ data class XuegongWhereaboutsDraft(
             val begin = parseSiteTime(if (leaveType == "2") stayBeginTime else beginTime)
             val end = parseSiteTime(if (leaveType == "2") stayEndTime else endTime)
             if (begin == null || end == null || end <= begin) return ""
-            val hours = (end - begin) / 3600000.0
-            val days = hours.toInt()
-            val rest = hours - days
+            // 站点口径：整小时计，满 24 折天（71 小时 = 2 天 23 小时）。
+            // 旧实现 days = hours.toInt() 把总小时数当成了天数（71 小时显示成「71天」）。
+            val totalMinutes = (end - begin) / 60000
+            val wholeHours = totalMinutes / 60
+            val days = wholeHours / 24
+            val restHours = (wholeHours % 24).toDouble()
             return when {
-                hours < 24.0 -> "${trimHours(hours)}小时"
-                else -> buildString {
-                    append(days).append("天")
-                    if (rest > 0) append(trimHours(rest)).append("小时")
+                days > 0 -> buildString {
+                    append(days).append(" 天")
+                    if (restHours > 0) append(" ").append(trimHours(restHours)).append(" 小时")
                 }
+                else -> "${trimHours(wholeHours.toDouble())} 小时"
             }
         }
 
-    /** 离校去向的本地校验（留校只查时间段）。 */
+    /** 离校去向的本地校验（留校只查时间段与本人电话）；必填口径照站点截图。 */
     fun validate(): String? = when {
-        leaveType == "1" && comeWhere.isBlank() -> "请填写外出地点"
-        leaveType == "1" && outGoVehicle.isBlank() -> "请选择交通方式"
         leaveType == "1" && beginTime.isBlank() -> "请选择离校开始时间"
         leaveType == "1" && endTime.isBlank() -> "请选择离校结束时间"
+        leaveType == "1" && reason.isBlank() -> "请填写去向事由"
+        leaveType == "1" && reason.length > 400 -> "去向事由不能超过 400 字"
+        leaveType == "1" && outGoVehicle.isBlank() -> "请选择交通方式"
+        leaveType == "1" && comeWhere.isBlank() -> "请填写外出地点"
+        leaveType == "1" && outContacts.isBlank() -> "请填写联系人姓名"
+        leaveType == "1" && outContactsRelationship.isBlank() -> "请填写与本人关系"
+        leaveType == "1" && outContactsMoveTel.isBlank() -> "请填写联系人移动电话"
         leaveType == "2" && stayBeginTime.isBlank() -> "请选择留校开始时间"
         leaveType == "2" && stayEndTime.isBlank() -> "请选择留校结束时间"
+        stuMoveTel.isBlank() -> "请填写本人移动电话"
         else -> null
     }
 }
 
-/** 站点时间 `2026/10/01 08:00` → 毫秒；解析不了返回 null。 */
+/**
+ * 站点时间 → 毫秒；解析不了返回 null。
+ *
+ * 站点不同构建出现过两种写法：H5 旧版 `2026/10/01 08:00`（斜杠），
+ * 现行 PC/H5 `2026-10-01 08`（横杠、整点、无分钟）。表单骨架 GET 下发的是后者，
+ * 之前只认斜杠格式导致默认时间解析失败、「共计」算不出来。
+ */
 fun parseSiteTime(value: String): Long? {
     val trimmed = value.trim()
     if (trimmed.isBlank()) return null
-    return runCatching {
-        java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.CHINA).parse(trimmed)?.time
-    }.getOrNull()
+    val formats = arrayOf(
+        "yyyy-MM-dd HH:mm", "yyyy-MM-dd HH", "yyyy-MM-dd",
+        "yyyy/MM/dd HH:mm", "yyyy/MM/dd HH", "yyyy/MM/dd",
+        "yyyy-MM-dd HH:mm:ss",
+    )
+    for (pattern in formats) {
+        val parsed = runCatching {
+            val format = java.text.SimpleDateFormat(pattern, java.util.Locale.CHINA)
+            format.isLenient = false
+            format.parse(trimmed)?.time
+        }.getOrNull()
+        if (parsed != null) return parsed
+    }
+    return null
 }
 
 /** `5.0 → "5"`、`2.5 → "2.5"`。 */

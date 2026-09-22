@@ -54,6 +54,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hnnujw.course.manager.UserManager
@@ -1497,9 +1498,9 @@ data class XuegongWhereaboutsFormUi(
     val error: String = "",
 )
 
-/** 站点时间格式：`2026/10/01 08:00`（H5 固定整点，分钟恒为 00）。 */
+/** 站点时间格式：`2026-09-25 00`（现行 PC/H5 口径：横杠 + 整点小时，无分钟）。 */
 private fun formatSiteTime(millis: Long): String =
-    java.text.SimpleDateFormat("yyyy/MM/dd HH':00'", java.util.Locale.CHINA).format(java.util.Date(millis))
+    java.text.SimpleDateFormat("yyyy-MM-dd HH", java.util.Locale.CHINA).format(java.util.Date(millis))
 
 private fun queryDisplayName(context: android.content.Context, uri: android.net.Uri): String? =
     runCatching {
@@ -1556,8 +1557,9 @@ private fun LeaveFormView(
                 )
                 FormTextField(
                     label = "本人移动电话",
+                    required = true,
                     value = draft.stuMoveTel,
-                    placeholder = "",
+                    placeholder = "请填写本人移动电话",
                     keyboardType = KeyboardType.Phone,
                     onValueChange = { draft.stuMoveTel = it; onDraft(draft) },
                 )
@@ -1632,7 +1634,7 @@ private fun LeaveFormView(
                     FormTextField(
                         label = "监护人电话",
                         value = draft.guarderTel,
-                        placeholder = "请填写监护人电话",
+                        placeholder = "例：028-12345678或手机号",
                         keyboardType = KeyboardType.Phone,
                         onValueChange = { draft.guarderTel = it; onDraft(draft) },
                     )
@@ -1656,13 +1658,13 @@ private fun LeaveFormView(
                     FormTextField(
                         label = "与本人关系",
                         value = draft.companionRelationship,
-                        placeholder = "",
+                        placeholder = "请填写与本人关系",
                         onValueChange = { draft.companionRelationship = it; onDraft(draft) },
                     )
                     FormTextField(
                         label = "联系电话",
                         value = draft.companionTel,
-                        placeholder = "",
+                        placeholder = "例：028-12345678或手机号",
                         keyboardType = KeyboardType.Phone,
                         onValueChange = { draft.companionTel = it; onDraft(draft) },
                     )
@@ -1670,13 +1672,19 @@ private fun LeaveFormView(
                 FormTextField(
                     label = "家长姓名",
                     value = draft.outContacts,
-                    placeholder = "",
+                    placeholder = "请填写家长姓名",
                     onValueChange = { draft.outContacts = it; onDraft(draft) },
                 )
                 FormTextField(
-                    label = "家长电话",
+                    label = "与本人关系",
+                    value = draft.outContactsRelationship,
+                    placeholder = "例：父子 / 母子 / 父女",
+                    onValueChange = { draft.outContactsRelationship = it; onDraft(draft) },
+                )
+                FormTextField(
+                    label = "家长联系电话",
                     value = draft.outContactsTel,
-                    placeholder = "",
+                    placeholder = "例：028-12345678或手机号",
                     keyboardType = KeyboardType.Phone,
                     onValueChange = { draft.outContactsTel = it; onDraft(draft) },
                 )
@@ -1860,6 +1868,32 @@ private fun WhereaboutsFormView(
                 if (leaving) {
                     FormTimeField("离校开始时间", required = true, value = draft.beginTime) { picker = "begin" }
                     FormTimeField("离校结束时间", required = true, value = draft.endTime) { picker = "end" }
+                } else {
+                    FormTimeField("留校开始时间", required = true, value = draft.stayBeginTime) { picker = "stayBegin" }
+                    FormTimeField("留校结束时间", required = true, value = draft.stayEndTime) { picker = "stayEnd" }
+                }
+                if (draft.durationText.isNotBlank()) {
+                    InfoLine("共计", draft.durationText)
+                }
+            }
+        }
+
+        // ── 离校才填的部分（站点：去向事由 / 交通方式 / 外出地点 / 同行人数）──
+        if (leaving) {
+            InsetGroupedSection(
+                header = "去向信息",
+                footer = "去向事由要求 1 ~ 400 字，请详细注明离校时间、去向与随行人员等信息。",
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    FormTextField(
+                        label = "去向事由",
+                        required = true,
+                        value = draft.reason,
+                        placeholder = "请填写去向事由",
+                        singleLine = false,
+                        minHeight = 96.dp,
+                        onValueChange = { draft.reason = it; onDraft(draft) },
+                    )
                     FormPickField(
                         label = "交通方式",
                         required = true,
@@ -1878,71 +1912,68 @@ private fun WhereaboutsFormView(
                     FormTextField(
                         label = "详细地址",
                         value = draft.outAddressStreet,
-                        placeholder = "",
+                        placeholder = "请填写详细地址",
                         onValueChange = { draft.outAddressStreet = it; onDraft(draft) },
                     )
                     FormTextField(
                         label = "同行人数",
                         value = draft.outNumber,
-                        placeholder = "",
+                        placeholder = "例：1",
                         keyboardType = KeyboardType.Number,
                         onValueChange = { draft.outNumber = it; onDraft(draft) },
                     )
-                } else {
-                    FormTimeField("留校开始时间", required = true, value = draft.stayBeginTime) { picker = "stayBegin" }
-                    FormTimeField("留校结束时间", required = true, value = draft.stayEndTime) { picker = "stayEnd" }
                 }
-                if (draft.durationText.isNotBlank()) {
-                    InfoLine("共计", draft.durationText)
+            }
+
+            InsetGroupedSection(header = "外出联系信息") {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    FormTextField(
+                        label = "联系人姓名",
+                        required = true,
+                        value = draft.outContacts,
+                        placeholder = "请填写联系人姓名",
+                        onValueChange = { draft.outContacts = it; onDraft(draft) },
+                    )
+                    FormTextField(
+                        label = "与本人关系",
+                        required = true,
+                        value = draft.outContactsRelationship,
+                        placeholder = "请填写与本人关系",
+                        onValueChange = { draft.outContactsRelationship = it; onDraft(draft) },
+                    )
+                    FormTextField(
+                        label = "移动电话",
+                        required = true,
+                        value = draft.outContactsMoveTel,
+                        placeholder = "请输入手机号码",
+                        keyboardType = KeyboardType.Phone,
+                        onValueChange = { draft.outContactsMoveTel = it; onDraft(draft) },
+                    )
+                    FormTextField(
+                        label = "固定电话",
+                        value = draft.outContactsTel,
+                        placeholder = "例：028-12345678",
+                        keyboardType = KeyboardType.Phone,
+                        onValueChange = { draft.outContactsTel = it; onDraft(draft) },
+                    )
                 }
             }
         }
 
-        InsetGroupedSection(header = "联系信息") {
+        InsetGroupedSection(header = "本人联系方式") {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 FormTextField(
-                    label = "去向事由",
-                    value = draft.reason,
-                    placeholder = "",
-                    onValueChange = { draft.reason = it; onDraft(draft) },
-                )
-                FormTextField(
-                    label = "联系人姓名",
-                    value = draft.outContacts,
-                    placeholder = "",
-                    onValueChange = { draft.outContacts = it; onDraft(draft) },
-                )
-                FormTextField(
-                    label = "与本人关系",
-                    value = draft.outContactsRelationship,
-                    placeholder = "",
-                    onValueChange = { draft.outContactsRelationship = it; onDraft(draft) },
-                )
-                FormTextField(
-                    label = "联系人手机",
-                    value = draft.outContactsMoveTel,
-                    placeholder = "",
-                    keyboardType = KeyboardType.Phone,
-                    onValueChange = { draft.outContactsMoveTel = it; onDraft(draft) },
-                )
-                FormTextField(
-                    label = "联系人电话",
-                    value = draft.outContactsTel,
-                    placeholder = "",
-                    keyboardType = KeyboardType.Phone,
-                    onValueChange = { draft.outContactsTel = it; onDraft(draft) },
-                )
-                FormTextField(
                     label = "本人移动电话",
+                    required = true,
                     value = draft.stuMoveTel,
-                    placeholder = "",
+                    placeholder = "请填写本人移动电话",
                     keyboardType = KeyboardType.Phone,
                     onValueChange = { draft.stuMoveTel = it; onDraft(draft) },
                 )
                 FormTextField(
                     label = "其他联系方式",
                     value = draft.stuTel,
-                    placeholder = "",
+                    placeholder = "请填写其他联系方式",
                     onValueChange = { draft.stuTel = it; onDraft(draft) },
                 )
             }
@@ -2121,6 +2152,9 @@ private fun FormTextField(
     onValueChange: (String) -> Unit,
     required: Boolean = false,
     keyboardType: KeyboardType = KeyboardType.Text,
+    /** false = 多行（去向事由这类长文本）。 */
+    singleLine: Boolean = true,
+    minHeight: Dp = 48.dp,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
@@ -2133,7 +2167,8 @@ private fun FormTextField(
             onValueChange = onValueChange,
             modifier = Modifier.fillMaxWidth(),
             placeholder = placeholder,
-            singleLine = true,
+            singleLine = singleLine,
+            minHeight = minHeight,
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         )
     }
