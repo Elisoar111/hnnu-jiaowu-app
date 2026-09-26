@@ -35,7 +35,7 @@ class LiquidInteractionDeviceTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     private val destinations = listOf(
-        BottomNavItem.SecondClass, BottomNavItem.Schedule, BottomNavItem.Grab,
+        BottomNavItem.SecondClass, BottomNavItem.Schedule, BottomNavItem.Xuegong,
         BottomNavItem.Grades, BottomNavItem.Settings
     )
 

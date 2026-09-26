@@ -80,6 +80,19 @@ GITEE_API = f"https://gitee.com/api/v5/repos/{GITEE_REPO}"
 
 EXPECTED_PACKAGE = "com.hnnujw.course"
 
+# 发布包必须由这把正式密钥签名，证书 SHA-256 不匹配就拒绝上传。
+#
+# 为什么不能只校验"有没有签名"：debug keystore（CN=Android Debug）签出来的包同样能通过
+# apksigner verify，但它在用户端装不上——Android 要求覆盖升级的签名一致。2026-09-24 审计时
+# 实测发现 Gitee 上 v1.2.4 / v1.2.5 的 app-release.apk 与本机 ~/.android/debug.keystore
+# 证书相同，即此前线上包全是 debug 签名的：当时 app/release-key.jks 不存在、
+# local.properties 也没有三个口令，build.gradle 静默走了「缺正式签名就退回 debug keystore」
+# 的兜底，而这串 sha256 只被打印成一行 "已签名（证书 …）"，没人会去比对。
+# 现在把期望值钉在这里，兜底签的包会被当场拦下。
+#
+# 取值：keytool -list -v -keystore app/release-key.jks -alias hnnujw-release | grep SHA256
+EXPECTED_CERT_SHA256 = "4a02c49c06fb4acd9091fcc0c747bf5b9b2d61a79aed00adab828701394875d4"
+
 # 上传到两端 Release 时统一用这个名字：应用挑资产是按后缀 .apk 找第一个，
 # Gitee 还会自动挂上 <tag>.zip / <tag>.tar.gz 两个**源码包**，所以自己的安装包
 # 必须是一个明确的 .apk 名字，别让用户和程序都去猜。
@@ -318,14 +331,15 @@ def release_notes_for(tag):
     extracted = in_bash('extract_notes "$2"', notes_file)
     if extracted.returncode != 0:
         die(f"抽取 {notes_file.name} 的 '## notes' 失败：{redact(extracted.stderr.strip())}")
-    # 这段文本会被应用当纯文本逐行显示，顺手把 CRLF 收敛掉。
+    # 这段文本会被应用里的 MarkdownText 按 Markdown 渲染，顺手把 CRLF 收敛掉。
     notes = extracted.stdout.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
     if not notes.strip():
         die(f"{notes_file.name} 的 '## notes' 区块是空的")
 
     violations = in_bash('extract_notes "$2" | notes_violations', notes_file).stdout.strip()
     if violations:
-        die("'## notes' 里有 Markdown 标记（# * - 或反引号），会原样显示在应用内的更新弹窗里：\n       "
+        die("'## notes' 里有行首 `#` 或反引号：前者会让 notes 区块在抽取时被截断，"
+            "后者会原样显示在应用内的更新弹窗里：\n       "
             + "\n       ".join(violations.splitlines()))
     return notes
 
@@ -477,14 +491,36 @@ def step_verify_apk(version, code):
     ok(f"包名 {EXPECTED_PACKAGE}，versionCode {code} / versionName {version}")
 
     # 签名：没签名的包用户装不上，而且这个问题只在下载完之后才暴露。
+    # 但 apksigner verify 通过只说明"签了"，不说明"签对了"——debug keystore 签的包也能过，
+    # 而那种包用户覆盖安装会失败（签名不一致）。所以这里必须比对证书指纹本身。
     signed = subprocess.run(
         [exe_in(tools, "apksigner"), "verify", "--print-certs", str(apk)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if signed.returncode != 0:
         die("APK 签名校验未通过：" + redact((signed.stdout + signed.stderr).strip()[:300]))
-    cert = re.search(r"SHA-256 digest: ([0-9a-f]+)", signed.stdout + signed.stderr)
-    ok(f"已签名（证书 {cert.group(1)[:16] + '…' if cert else '未知'}）")
+    # 锚定 "certificate SHA-256 digest"，避开 apksigner 同时打印的
+    # "public key SHA-256 digest"（那是公钥而不是证书，值不同）。
+    digest = re.search(
+        r"certificate SHA-256 digest:\s*([0-9a-f:]+)",
+        signed.stdout + signed.stderr,
+        re.IGNORECASE,
+    )
+    if not digest:
+        die("解析不出证书 SHA-256（apksigner 输出格式变了？）："
+            + redact((signed.stdout + signed.stderr).strip()[:300]))
+    fingerprint = digest.group(1).replace(":", "").lower()
+    if fingerprint != EXPECTED_CERT_SHA256:
+        die(
+            f"APK 签名证书不对：期望 {EXPECTED_CERT_SHA256[:16]}…，实际 {fingerprint[:16]}…。\n"
+            "     若实际证书是 CN=Android Debug 的那把，说明这次构建走了 app/build.gradle 的\n"
+            "     「缺正式签名就退回 debug keystore」兜底（release-key.jks 不在 app/ 下，或\n"
+            "     local.properties 里没有 RELEASE_STORE_PASSWORD / RELEASE_KEY_ALIAS /\n"
+            "     RELEASE_KEY_PASSWORD）。这种包能让新用户装上，但老用户覆盖升级会失败，不能发布。\n"
+            "     若确实是换了新密钥：同步更新本地凭据、CI 的 KEYSTORE_BASE64 与三个 secret，\n"
+            "     然后把本文件里的 EXPECTED_CERT_SHA256 改成新值。"
+        )
+    ok(f"已签名（证书 {fingerprint[:16]}…，与 EXPECTED_CERT_SHA256 一致）")
 
     # 内置资产：公告跟代码同一次构建，"这一版必须带公告"由单测
     # （AnnouncementLogicTest）守；这里只确认它真的被打进了包。

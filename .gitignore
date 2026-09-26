@@ -27,6 +27,9 @@ bin/
 gen/
 out/
 
+# 排版预览页（scripts/format_release.py 生成的临时产物，只给人看，不入库）
+/release-notes/preview/
+
 # Firebase
 .google_services.json
 google-services.json
@@ -50,8 +53,9 @@ secret.properties
 service-account*.json
 credentials*.json
 
-# Proguard
-proguard-rules.pro
+# Proguard 规则必须入库，不要在这里加 proguard-rules.pro
+# app/build.gradle 引用了 app/proguard-rules.pro；它一旦被忽略，干净 checkout 就会
+# 退化成「空规则混淆」，规则既无从 review 也无从复现（这正是它消失多年的原因）。
 
 # Python
 __pycache__/

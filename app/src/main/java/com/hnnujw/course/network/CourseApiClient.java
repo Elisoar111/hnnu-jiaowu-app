@@ -273,9 +273,6 @@ public class CourseApiClient {
                                 .tag(SessionToken.class, account.equals(token.getAccountStorageKey()) ? token : null);
         }
 
-        private String displayParamsCacheKey(String xkkzId) {
-                return getCurrentAccountStorageKeySafely() + "::" + (xkkzId != null ? xkkzId : "");
-        }
 
         public void notifyCookieExpired(SessionToken token) {
                 if (appContext == null || token == null) return;
@@ -312,15 +309,7 @@ public class CourseApiClient {
                         && token.getGeneration() == intent.getLongExtra(EXTRA_SESSION_GENERATION, -1);
         }
 
-        // ============= Display参数缓存方法 =============
-        public Map<String, String> getDisplayParamsFromCache(String xkkz_id) {
-                return displayParamsCache.get(displayParamsCacheKey(xkkz_id));
-        }
 
-        public void setDisplayParamsCache(String xkkz_id, Map<String, String> params) {
-                displayParamsCache.put(displayParamsCacheKey(xkkz_id), new HashMap<>(params));
-                Log.d(TAG, "Cached display params for xkkz_id=" + xkkz_id + ", count=" + params.size());
-        }
 
         public void clearDisplayParamsCache() {
                 String prefix = getCurrentAccountStorageKeySafely() + "::";
@@ -439,323 +428,26 @@ public class CourseApiClient {
                 });
         }
 
-        // 获取选课页面参数 (Index页面) - 强制网络刷新
-        public void fetchCourseParams(SchoolConfig school, Callback callback) {
-                String url = school.getCourseSelectionParamsUrl();
-                Log.d(TAG, "Fetching course params from: " + url);
 
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .cacheControl(okhttp3.CacheControl.FORCE_NETWORK) // Prevent caching
-                                .build();
-                client.newCall(request).enqueue(sessionBound(callback));
-        }
 
-        public void fetchCourseParams(SchoolConfig school, String accountStorageKey, Callback callback) {
-                runWithAccount(accountStorageKey, () -> {
-                        fetchCourseParams(school, callback);
-                        return null;
-                });
-        }
 
-        // 获取完整参数 (Display页面) - Web版本的 getCompleteParameters
-        public void fetchCourseDisplayParams(SchoolConfig school, String xkkz_id, String kklxdm,
-                        String njdm_id, String zyh_id, Callback callback) {
-                fetchCourseDisplayParamsInternal(school, xkkz_id, kklxdm, njdm_id, zyh_id, "xkkz_id", callback);
-        }
 
-        // 🔧 xkkz 参数名自适应版本：xkkzKey 为 "xkkz_id"（旧版）或 "xkkz_xh"（正方 V9）
-        // 注意：Java 重载无法与 accountStorageKey 版本区分（同为 String），故用独立方法名
-        public void fetchCourseDisplayParamsWithKey(SchoolConfig school, String xkkzValue, String kklxdm,
-                        String njdm_id, String zyh_id, String xkkzKey, Callback callback) {
-                fetchCourseDisplayParamsInternal(school, xkkzValue, kklxdm, njdm_id, zyh_id, xkkzKey, callback);
-        }
 
-        public void fetchCourseDisplayParamsWithKey(SchoolConfig school, String xkkzValue, String kklxdm,
-                        String njdm_id, String zyh_id, String xkkzKey, String accountStorageKey, Callback callback) {
-                runWithAccount(accountStorageKey, () -> {
-                        fetchCourseDisplayParamsInternal(school, xkkzValue, kklxdm, njdm_id, zyh_id, xkkzKey, callback);
-                        return null;
-                });
-        }
 
-        private void fetchCourseDisplayParamsInternal(SchoolConfig school, String xkkzValue, String kklxdm,
-                        String njdm_id, String zyh_id, String xkkzKey, Callback callback) {
-                // URL: zzxkyzb_cxZzxkYzbDisplay.html
-                String url = school.getFullBasePath() + school.courseDisplayPath + "?gnmkdm=" + school.courseGnmkdm;
-                Log.d(TAG, "Fetching display params from: " + url);
 
-                // 构建POST参数 (与Web版相同)；xkkz 参数名按学校自适应
-                if (xkkzKey == null || xkkzKey.isEmpty()) xkkzKey = "xkkz_id";
-                String postBody = xkkzKey + "=" + (xkkzValue != null ? xkkzValue : "") +
-                                "&kklxdm=" + (kklxdm != null ? kklxdm : "01") +
-                                "&xszxzt=1" +
-                                "&njdm_id=" + (njdm_id != null ? njdm_id : "2024") +
-                                "&zyh_id=" + (zyh_id != null ? zyh_id : "") +
-                                "&kspage=0" +
-                                "&jspage=0";
 
-                Log.d(TAG, "Display POST body: " + postBody);
 
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .post(okhttp3.RequestBody.create(postBody,
-                                                okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
-                                .build();
-                client.newCall(request).enqueue(sessionBound(callback));
-        }
 
-        public void fetchCourseDisplayParams(SchoolConfig school, String xkkz_id, String kklxdm,
-                        String njdm_id, String zyh_id, String accountStorageKey, Callback callback) {
-                runWithAccount(accountStorageKey, () -> {
-                        fetchCourseDisplayParamsInternal(school, xkkz_id, kklxdm, njdm_id, zyh_id, "xkkz_id", callback);
-                        return null;
-                });
-        }
 
-        public String fetchCourseDisplayParamsSync(SchoolConfig school, String xkkz_id, String kklxdm,
-                        String njdm_id, String zyh_id) {
-                return fetchCourseDisplayParamsSyncWithKey(school, xkkz_id, kklxdm, njdm_id, zyh_id, "xkkz_id");
-        }
 
-        // 🔧 xkkz 参数名自适应版本（同步）
-        public String fetchCourseDisplayParamsSyncWithKey(SchoolConfig school, String xkkzValue, String kklxdm,
-                        String njdm_id, String zyh_id, String xkkzKey) {
-                String url = school.getFullBasePath() + school.courseDisplayPath + "?gnmkdm=" + school.courseGnmkdm;
-                if (xkkzKey == null || xkkzKey.isEmpty()) xkkzKey = "xkkz_id";
-                String postBody = xkkzKey + "=" + (xkkzValue != null ? xkkzValue : "") +
-                                "&kklxdm=" + (kklxdm != null ? kklxdm : "01") +
-                                "&xszxzt=1" +
-                                "&njdm_id=" + (njdm_id != null ? njdm_id : "2024") +
-                                "&zyh_id=" + (zyh_id != null ? zyh_id : "") +
-                                "&kspage=0" +
-                                "&jspage=0";
 
-                Log.d(TAG, "Sync fetching display params from: " + url);
-                Log.d(TAG, "Sync display POST body: " + postBody);
 
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .post(okhttp3.RequestBody.create(postBody,
-                                                okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
-                                .build();
 
-                try (okhttp3.Response response = client.newCall(request).execute()) {
-                        if (response.body() != null) {
-                                return response.body().string();
-                        }
-                } catch (Exception e) {
-                        Log.e(TAG, "fetchCourseDisplayParamsSync error: " + e.getMessage());
-                }
-                return null;
-        }
 
-        // 获取可选课程列表
-        public void fetchAvailableCourses(SchoolConfig school, String postBody, Callback callback) {
-                String url = school.getAvailableCoursesUrl();
-                Log.d(TAG, "Fetching available courses from: " + url);
 
-                Request.Builder builder = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest");
 
-                if (postBody != null && !postBody.isEmpty()) {
-                        builder.post(okhttp3.RequestBody.create(postBody,
-                                        okhttp3.MediaType.parse("application/x-www-form-urlencoded")));
-                }
 
-                client.newCall(builder.build()).enqueue(sessionBound(callback));
-        }
 
-        public String fetchAvailableCoursesSync(SchoolConfig school, String postBody) {
-                String url = school.getAvailableCoursesUrl();
-                Log.d(TAG, "Sync fetching available courses from: " + url);
-                Log.d(TAG, "Sync available courses POST body: " + postBody);
-
-                Request.Builder builder = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest");
-
-                if (postBody != null && !postBody.isEmpty()) {
-                        builder.post(okhttp3.RequestBody.create(postBody,
-                                        okhttp3.MediaType.parse("application/x-www-form-urlencoded")));
-                }
-
-                try (okhttp3.Response response = client.newCall(builder.build()).execute()) {
-                        if (response.body() != null) {
-                                return response.body().string();
-                        }
-                } catch (Exception e) {
-                        Log.e(TAG, "fetchAvailableCoursesSync error: " + e.getMessage());
-                }
-                return null;
-        }
-
-        public String fetchCourseFilterDataSync(SchoolConfig school, String pathOrUrl) {
-                String url = buildAbsoluteCourseUrl(school, pathOrUrl);
-                Log.d(TAG, "Sync fetching course filter data from: " + url);
-
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .header("Accept", "application/json, text/javascript, */*; q=0.01")
-                                .header("X-Requested-With", "XMLHttpRequest")
-                                .get()
-                                .build();
-
-                try (okhttp3.Response response = client.newCall(request).execute()) {
-                        if (!response.isSuccessful()) {
-                                Log.w(TAG, "Course filter data request failed: code=" + response.code() + ", url=" + url);
-                        }
-                        if (response.body() != null) {
-                                return response.body().string();
-                        }
-                } catch (Exception e) {
-                        Log.e(TAG, "fetchCourseFilterDataSync error: " + e.getMessage());
-                }
-                return null;
-        }
-
-        private String buildAbsoluteCourseUrl(SchoolConfig school, String pathOrUrl) {
-                if (pathOrUrl == null || pathOrUrl.isEmpty()) {
-                        return school.getFullBasePath();
-                }
-                if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
-                        return pathOrUrl;
-                }
-                if (pathOrUrl.startsWith(school.basePath + "/")) {
-                        return school.getBaseUrl() + pathOrUrl;
-                }
-                if (pathOrUrl.startsWith("/")) {
-                        return school.getFullBasePath() + pathOrUrl;
-                }
-                return school.getFullBasePath() + "/" + pathOrUrl;
-        }
-
-        /**
-         * 带筛选条件获取可选课程列表。
-         * 与页面查询一致：筛选数组字段放在基础参数前。
-         */
-        public void fetchFilteredCourses(SchoolConfig school, String baseParams,
-                        com.hnnujw.course.model.CourseFilter filter, Callback callback) {
-                String filterParams = filter.toPostParams();
-                String postBody = baseParams;
-                if (filterParams != null && !filterParams.isEmpty()) {
-                        postBody = filterParams + "&" + baseParams;
-                }
-                Log.d(TAG, "Fetching filtered courses, filter: " + filterParams);
-                fetchAvailableCourses(school, postBody, callback);
-        }
-
-        // 获取已选课程列表
-        public void fetchSelectedCourses(SchoolConfig school, String postBody, Callback callback) {
-                String url = school.getSelectedCoursesUrl();
-                Log.d(TAG, "Fetching selected courses from: " + url);
-
-                Request.Builder builder = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest");
-
-                if (postBody != null && !postBody.isEmpty()) {
-                        builder.post(okhttp3.RequestBody.create(postBody,
-                                        okhttp3.MediaType.parse("application/x-www-form-urlencoded")));
-                }
-
-                client.newCall(builder.build()).enqueue(sessionBound(callback));
-        }
-
-        public void fetchAvailableCourses(SchoolConfig school, String postBody, String accountStorageKey, Callback callback) {
-                runWithAccount(accountStorageKey, () -> {
-                        fetchAvailableCourses(school, postBody, callback);
-                        return null;
-                });
-        }
-
-        // 执行选课 (Step 3: 使用加密的jxb_ids)
-        public void selectCourse(SchoolConfig school, String postBody, Callback callback) {
-                String url = school.getSelectCourseUrl();
-                Log.d(TAG, "Selecting course at: " + url);
-                Log.d(TAG, "POST body: " + postBody);
-
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest")
-                                .header("Accept", "application/json, text/javascript, */*; q=0.01")
-                                .post(okhttp3.RequestBody.create(postBody,
-                                                okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
-                                .build();
-
-                client.newCall(request).enqueue(sessionBound(callback));
-        }
-
-        public void selectCourse(SchoolConfig school, String postBody, String accountStorageKey, Callback callback) {
-                runWithAccount(accountStorageKey, () -> {
-                        selectCourse(school, postBody, callback);
-                        return null;
-                });
-        }
-
-        // 获取选课详情 (Step 2: 获取加密的do_jxb_id) - 完整参数版本
-        public void fetchCourseSelectionDetails(SchoolConfig school, String postBody, Callback callback) {
-                String url = school.getCourseSelectionDetailsUrl();
-                Log.d(TAG, "Fetching course selection details from: " + url);
-                Log.d(TAG, "Details POST body: " + postBody);
-
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest")
-                                .header("Accept", "application/json, text/javascript, */*; q=0.01")
-                                .post(okhttp3.RequestBody.create(postBody,
-                                                okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
-                                .build();
-
-                client.newCall(request).enqueue(sessionBound(callback));
-        }
-
-        public void fetchCourseSelectionDetails(SchoolConfig school, String postBody, String accountStorageKey, Callback callback) {
-                runWithAccount(accountStorageKey, () -> {
-                        fetchCourseSelectionDetails(school, postBody, callback);
-                        return null;
-                });
-        }
-
-        // 获取选课详情 (Step 2: 获取加密的do_jxb_id) - 简化参数版本 (旧版兼容)
-        public void fetchCourseSelectionDetails(SchoolConfig school, String kch_id, String xkkz_id,
-                        String njdm_id, String zyh_id, String kklxdm, String xqh_id, String jg_id,
-                        String rwlx, String xklc, Callback callback) {
-                String url = school.getCourseSelectionDetailsUrl();
-                Log.d(TAG, "Fetching course selection details from: " + url);
-
-                // 构建POST参数
-                String postBody = "kch_id=" + kch_id +
-                                "&xkkz_id=" + (xkkz_id != null ? xkkz_id : "") +
-                                "&njdm_id=" + (njdm_id != null ? njdm_id : "2024") +
-                                "&zyh_id=" + (zyh_id != null ? zyh_id : "") +
-                                "&kklxdm=" + (kklxdm != null ? kklxdm : "01") +
-                                "&xqh_id=" + (xqh_id != null ? xqh_id : "") +
-                                "&jg_id=" + (jg_id != null ? jg_id : "") +
-                                "&rwlx=" + (rwlx != null ? rwlx : "1") +
-                                "&xklc=" + (xklc != null ? xklc : "2");
-
-                Log.d(TAG, "Details POST body: " + postBody);
-
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest")
-                                .header("Accept", "application/json, text/javascript, */*; q=0.01")
-                                .post(okhttp3.RequestBody.create(postBody,
-                                                okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
-                                .build();
-
-                client.newCall(request).enqueue(sessionBound(callback));
-        }
 
         // 获取课表 (POST with xnm/xqm params)
         public void fetchSchedule(SchoolConfig school, String postBody, Callback callback) {
@@ -858,15 +550,6 @@ public class CourseApiClient {
                 client.newCall(request).enqueue(sessionBound(callback));
         }
 
-        // 旧的接口 - 兼容性 (已弃用)
-        public void fetchCourses(String baseUrl, String studentId, String name, Callback callback) {
-                Log.d(TAG, "Fetching courses for: " + studentId);
-                Request request = accountAwareRequestBuilder()
-                                .url(baseUrl + "/jwglxt/xsxk/zzxkyzb_cxZzxkYzbIndex.html?gnmkdm=N253512")
-                                .header("User-Agent", "Mozilla/5.0")
-                                .build();
-                client.newCall(request).enqueue(sessionBound(callback));
-        }
 
         // 内部类 CookieJar (线程安全版)
         private static class CookieJarImpl implements CookieJar {
@@ -980,93 +663,8 @@ public class CourseApiClient {
         // 同步方法（用于批量选课）
         // ============================================
 
-        // 同步获取选课详情 - 完整参数版本
-        public String fetchCourseSelectionDetailsSync(SchoolConfig school, String postBody) {
-                String url = school.getCourseSelectionDetailsUrl();
-                Log.d(TAG, "Sync fetching course selection details from: " + url);
-                Log.d(TAG, "Details POST body: " + postBody);
 
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest")
-                                .header("Accept", "application/json, text/javascript, */*; q=0.01")
-                                .post(okhttp3.RequestBody.create(postBody,
-                                                okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
-                                .build();
 
-                try {
-                        okhttp3.Response response = client.newCall(request).execute();
-                        if (response.body() != null) {
-                                return response.body().string();
-                        }
-                } catch (Exception e) {
-                        Log.e(TAG, "fetchCourseSelectionDetailsSync error: " + e.getMessage());
-                }
-                return null;
-        }
-
-        // 同步获取选课详情 - 简化参数版本 (旧版兼容)
-        public String fetchCourseSelectionDetailsSync(SchoolConfig school, String kch_id, String xkkz_id,
-                        String njdm_id, String zyh_id, String kklxdm, String xqh_id, String jg_id,
-                        String rwlx, String xklc) {
-                String url = school.getCourseSelectionDetailsUrl();
-                Log.d(TAG, "Sync fetching course selection details from: " + url);
-
-                String postBody = "kch_id=" + kch_id +
-                                "&xkkz_id=" + (xkkz_id != null ? xkkz_id : "") +
-                                "&njdm_id=" + (njdm_id != null ? njdm_id : "2024") +
-                                "&zyh_id=" + (zyh_id != null ? zyh_id : "") +
-                                "&kklxdm=" + (kklxdm != null ? kklxdm : "01") +
-                                "&xqh_id=" + (xqh_id != null ? xqh_id : "") +
-                                "&jg_id=" + (jg_id != null ? jg_id : "") +
-                                "&rwlx=" + (rwlx != null ? rwlx : "1") +
-                                "&xklc=" + (xklc != null ? xklc : "2");
-
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest")
-                                .header("Accept", "application/json, text/javascript, */*; q=0.01")
-                                .post(okhttp3.RequestBody.create(postBody,
-                                                okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
-                                .build();
-
-                try {
-                        okhttp3.Response response = client.newCall(request).execute();
-                        if (response.body() != null) {
-                                return response.body().string();
-                        }
-                } catch (Exception e) {
-                        Log.e(TAG, "fetchCourseSelectionDetailsSync error: " + e.getMessage());
-                }
-                return null;
-        }
-
-        // 同步执行选课
-        public String selectCourseSync(SchoolConfig school, String postBody) {
-                String url = school.getSelectCourseUrl();
-                Log.d(TAG, "Sync selecting course at: " + url);
-
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest")
-                                .header("Accept", "application/json, text/javascript, */*; q=0.01")
-                                .post(okhttp3.RequestBody.create(postBody,
-                                                okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
-                                .build();
-
-                try {
-                        okhttp3.Response response = client.newCall(request).execute();
-                        if (response.body() != null) {
-                                return response.body().string();
-                        }
-                } catch (Exception e) {
-                        Log.e(TAG, "selectCourseSync error: " + e.getMessage());
-                }
-                return null;
-        }
 
         // ============================================
         // Web版兼容方法 - 获取页面隐藏参数和验证选课
@@ -1098,71 +696,8 @@ public class CourseApiClient {
                 return runWithAccount(accountStorageKey, () -> fetchPageHiddenParamsSync(school));
         }
 
-        // 同步获取已选课程 (用于验证选课是否成功)
-        public String fetchSelectedCoursesSync(SchoolConfig school, String postBody) {
-                String url = school.getSelectedCoursesUrl();
-                Log.d(TAG, "Sync fetching selected courses from: " + url);
 
-                Request.Builder builder = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest")
-                                .header("Accept", "application/json, text/javascript, */*; q=0.01");
 
-                if (postBody != null && !postBody.isEmpty()) {
-                        builder.post(okhttp3.RequestBody.create(postBody,
-                                        okhttp3.MediaType.parse("application/x-www-form-urlencoded")));
-                } else {
-                        builder.get();
-                }
-
-                try {
-                        okhttp3.Response response = client.newCall(builder.build()).execute();
-                        if (response.body() != null) {
-                                return response.body().string();
-                        }
-                } catch (Exception e) {
-                        Log.e(TAG, "fetchSelectedCoursesSync error: " + e.getMessage());
-                }
-                return null;
-        }
-
-        public String fetchSelectedCoursesSync(SchoolConfig school, String postBody, String accountStorageKey) {
-                return runWithAccount(accountStorageKey, () -> fetchSelectedCoursesSync(school, postBody));
-        }
-
-        // 同步退课 (Drop course synchronously)
-        public String dropCourseSync(SchoolConfig school, String kchId, String jxbIds, String xkxnm, String xkxqm) {
-                // URL: /xsxk/zzxkyzb_tuikBcZzxkYzb.html?gnmkdm=N253512
-                String url = school.getFullBasePath() + "/xsxk/zzxkyzb_tuikBcZzxkYzb.html?gnmkdm="
-                                + school.courseGnmkdm;
-                Log.d(TAG, "Dropping course at: " + url);
-
-                String postBody = "kch_id=" + kchId + "&jxb_ids=" + jxbIds + "&xkxnm=" + xkxnm + "&xkxqm=" + xkxqm
-                                + "&txbsfrl=0";
-                Log.d(TAG, "Drop course POST body: " + postBody);
-
-                Request request = createRequestBuilder(school)
-                                .url(url)
-                                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-                                .header("X-Requested-With", "XMLHttpRequest")
-                                .header("Accept", "application/json, text/javascript, */*; q=0.01")
-                                .post(okhttp3.RequestBody.create(postBody,
-                                                okhttp3.MediaType.parse("application/x-www-form-urlencoded")))
-                                .build();
-
-                try {
-                        okhttp3.Response response = client.newCall(request).execute();
-                        if (response.body() != null) {
-                                String result = response.body().string();
-                                Log.d(TAG, "Drop course response: " + result);
-                                return result;
-                        }
-                } catch (Exception e) {
-                        Log.e(TAG, "dropCourseSync error: " + e.getMessage());
-                }
-                return null;
-        }
 
         // ============================================
         // 密码登录相关方法

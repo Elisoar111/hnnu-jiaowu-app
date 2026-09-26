@@ -176,7 +176,7 @@ class GlassLensContinuityDeviceTest {
     @Test fun settledNavigationReplaysWithoutWaitingForBackdropReadback() {
         val selected = mutableIntStateOf(3)
         val destinations = listOf(BottomNavItem.SecondClass, BottomNavItem.Schedule,
-            BottomNavItem.Grab, BottomNavItem.Grades, BottomNavItem.Settings)
+            BottomNavItem.Xuegong, BottomNavItem.Grades, BottomNavItem.Settings)
         compose.setContent {
             CourseSelectorTheme {
                 val backdrop = rememberLayerBackdrop()

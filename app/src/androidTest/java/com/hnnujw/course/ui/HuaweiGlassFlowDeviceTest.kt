@@ -15,65 +15,11 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
-import com.hnnujw.course.ui.system.glass.GlassLensCaptureObserver
 
 /** Real scrolling/collapsing headers; a restored page must recover the same optical pixels. */
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = 31, maxSdkVersion = 32)
 class HuaweiGlassFlowDeviceTest {
-    @Test fun scrollingKeepsTheMatchingLabelAndNavigationSampleVisible() {
-        val captures = java.util.concurrent.ConcurrentHashMap<String, Pair<Bitmap, String>>()
-        val samples = java.util.concurrent.ConcurrentHashMap<String, String>()
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        instrumentation.runOnMainSync {
-            GlassLensCaptureObserver.onCaptured = { tag, frame, bitmap ->
-                captures[tag] = bitmap to "${frame.generation}: ${frame.geometry}"
-            }
-            GlassLensCaptureObserver.onSampled = { tag, size, origin, axes, generation ->
-                samples[tag] = "$generation: $size origin=$origin axes=$axes"
-            }
-        }
-        try {
-            DemoUiDriver().use { ui ->
-                val activity = requireNotNull(ui.main)
-                val prefix = InstrumentationRegistry.getArguments().getString("capturePrefix") ?: "scroll"
-                val directory = File(activity.getExternalFilesDir(null), "flow-validation").apply { mkdirs() }
-                val display = activity.display!!.displayId
-                val width = activity.window.decorView.width
-                val height = activity.window.decorView.height
-                fun capture(step: String) {
-                    ui.screenshot("$prefix-$step")
-                    captures.forEach { (tag, captured) ->
-                        if (tag == "navbar" || tag.startsWith("seg-") || tag == "grab-controls") {
-                            File(directory, "$prefix-$step-source-$tag.png").outputStream().use {
-                                captured.first.compress(Bitmap.CompressFormat.PNG, 100, it)
-                            }
-                            File(directory, "$prefix-$step-source-$tag.txt").writeText(captured.second + "\n" + samples[tag])
-                        }
-                    }
-                }
-                repeat(3) { round ->
-                    ui.navigate("选课")
-                    capture("matching-fresh-$round")
-                    repeat(2) {
-                        ui.shell("input -d $display swipe ${width / 2} ${height * 3 / 4} ${width / 2} ${height / 3} 350")
-                    }
-                    ui.shell("input -d $display swipe ${width / 2} ${height / 2} ${width / 2} ${height * 3 / 4} 300")
-                    capture("matching-scroll-$round")
-                    SystemClock.sleep(800)
-                    capture("matching-settled-$round")
-                    ui.navigate("课程")
-                    ui.navigate("成绩")
-                }
-            }
-        } finally {
-            instrumentation.runOnMainSync {
-                GlassLensCaptureObserver.onCaptured = null
-                GlassLensCaptureObserver.onSampled = null
-            }
-        }
-    }
-
     @Test fun gradesHeaderRestoresItsPixelsAfterScrolledTabChanges() {
         DemoUiDriver().use { ui ->
             val activity = requireNotNull(ui.main)
@@ -132,14 +78,6 @@ class HuaweiGlassFlowDeviceTest {
                 restored.recycle()
             }
             expected.recycle()
-            ui.navigate("选课")
-            ui.screenshot("$prefix-start-rest")
-            ui.longClick("开始执行")
-            ui.waitText("关闭操作菜单")
-            ui.screenshot("$prefix-start-fan")
-            ui.back()
-            ui.waitText("关闭操作菜单", false)
-            ui.screenshot("$prefix-start-restored")
         }
     }
 }

@@ -107,12 +107,6 @@ public class Course {
         return !normalizedTeachingClassFilter().isEmpty();
     }
 
-    /** 手动教学班任务匹配后教师、时间和课程 ID 会变化，状态仍绑定原队列项。 */
-    public String getQueueStatusKey() {
-        if (hasTeachingClassFilter()) return "teaching-class:" + getUuid();
-        return (name == null ? "" : name) + "_" + (teacher == null ? "" : teacher)
-                + "_" + (time == null ? "" : time);
-    }
 
     // 🔧 唯一标识符 (用于 UI 动画)
     // 默认直接初始化，确保新创建的对象立即拥有稳定 ID

@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -126,7 +127,31 @@ fun ScheduleSettingsScreen(
     /** true = 课表用「紧凑」显示密度（节次行高 ×0.78）。 */
     displayCompact: Boolean = false,
     /** 切换显示密度；持久化由调用方负责。 */
-    onDisplayCompactChange: (Boolean) -> Unit = {}
+    onDisplayCompactChange: (Boolean) -> Unit = {},
+    /** true = 周视图画周六/周日（默认）；false = 只画周一至周五。 */
+    showWeekend: Boolean = true,
+    /**
+     * 切换是否显示周末；持久化由调用方负责。
+     * 只影响周视图 —— 日视图恒显示 7 天，否则周末的课将无处可看。
+     */
+    onShowWeekendChange: (Boolean) -> Unit = {},
+    /**
+     * 补课入口。为 null 时本行不出现（本页不支持补课）。
+     *
+     * **是否显示这一行由本页的「显示周末」本地状态决定，不看这个回调是否为空**：
+     * 周末那两格不画了，日期条上点六/日的入口随之消失，补课就改从这里进；
+     * 「显示周末」时一切照旧（点日期条的六/日即可），这一行不出现。
+     * 补出来的课落在周六/周日，可在日视图查看。
+     */
+    onMakeUpCourse: (() -> Unit)? = null,
+    /**
+     * 「课程提醒」下级页入口。为 null 时本行不出现（本页不支持提醒设置）。
+     *
+     * [reminderSummary] 由调用方给出当前状态文案（如「已开启 · 提前 15 分钟」）——
+     * 本页不持有提醒调度器，所以不在这里读提醒偏好。
+     */
+    onOpenReminderSettings: (() -> Unit)? = null,
+    reminderSummary: String? = null
 ) {
     var periodCount by remember { mutableStateOf(manager.periodCount) }
     var storedPeriodTimes by remember { mutableStateOf(periodTimesOverride ?: manager.getPeriodTimes()) }
@@ -139,6 +164,19 @@ fun ScheduleSettingsScreen(
     var editingPeriod by remember { mutableStateOf<PeriodTime?>(null) }
     /** 待确认删除的自定义课程 id；null = 没有待删项。 */
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
+    // 【展示偏好用本地态，不要直接用参数】。
+    //
+    // 本页跑在**独立的 Dialog 窗口**里（见 ScheduleRoute），参数是外层值穿过窗口边界
+    // 传进来的。若控件的显示完全依赖参数，那么"在页内改了开关 → 外层状态变了 →
+    // 新参数传进来"这一圈必须先走通，UI 才会更新；一旦这一圈没走通，
+    // 表现就是"选了没反应 / 该出现的行不出现"。
+    //
+    // 本文件其余设置项（periodCount / fontScale / semesterStartDate）都是这个写法：
+    // 本地 remember 立即反映点击，同时把意图通知给调用方落盘。
+    var displayCompactLocal by remember { mutableStateOf(displayCompact) }
+    var showWeekendLocal by remember { mutableStateOf(showWeekend) }
+    LaunchedEffect(displayCompact) { displayCompactLocal = displayCompact }
+    LaunchedEffect(showWeekend) { showWeekendLocal = showWeekend }
 
     val dateFormat = remember { SimpleDateFormat("yyyy年M月d日", Locale.CHINA) }
     val dateText = if (semesterStartDate > 0) dateFormat.format(Date(semesterStartDate)) else "未设置"
@@ -239,6 +277,19 @@ fun ScheduleSettingsScreen(
                             }
                         ) {
                             InsetGroupedRow(title = "添加课程", subtitle = "课程只保存在当前账号", onClick = onAddCustomCourse)
+                            // 隐藏周末时补课的**唯一**入口（周末两格不画了，日期条上
+                            // 点六/日的入口随之消失）。放在「自定义课程」里而不是别处：
+                            // 补课生成的就是自定义课程，下面这段列表的脚注已经这么写了。
+                            //
+                            // 条件读的是本页的 showWeekendLocal 而不是外层参数 ——
+                            // 拨到「隐藏」时这一行要**立刻**出现，不能等外层状态绕一圈回来。
+                            if (!showWeekendLocal && onMakeUpCourse != null) {
+                                InsetGroupedRow(
+                                    title = "补课",
+                                    subtitle = "把某一周的某天课程整体搬到周六或周日，补完可在日视图查看",
+                                    onClick = onMakeUpCourse
+                                )
+                            }
                             customCourses.forEachIndexed { index, course ->
                                 InsetGroupedRow(
                                     title = course.name.ifBlank { "未命名课程" },
@@ -275,6 +326,21 @@ fun ScheduleSettingsScreen(
                             }
                         }
                     }
+                    // 「提醒」入口。提醒的设置在单独一页（总开关 / 提前量 / 权限自检），
+                    // 这一行只负责把它导出来 —— 放在「课表显示」之前，因为提醒是比显示密度
+                    // 更容易出问题、也更容易被找的东西（提醒不响时用户会先来这里找）。
+                    if (onOpenReminderSettings != null) {
+                        InsetGroupedSection(header = "提醒") {
+                            InsetGroupedRow(
+                                icon = Icons.Outlined.NotificationsActive,
+                                iconTint = Color(0xFF0A84FF),
+                                title = "课程提醒",
+                                subtitle = reminderSummary ?: "总开关、提前时间与权限自检",
+                                showDivider = false,
+                                onClick = onOpenReminderSettings
+                            )
+                        }
+                    }
                     // 「课表显示」分区（参考项目同款）：显示密度 + 课表字号，
                     // 都用 SystemPicker 内联选择，改动即时生效。
                     InsetGroupedSection(header = "课表显示") {
@@ -284,8 +350,30 @@ fun ScheduleSettingsScreen(
                             trailing = {
                                 SystemPicker(
                                     options = listOf("标准", "紧凑"),
-                                    selectedIndex = if (displayCompact) 1 else 0,
-                                    onSelect = { onDisplayCompactChange(it == 1) },
+                                    selectedIndex = if (displayCompactLocal) 1 else 0,
+                                    onSelect = {
+                                        displayCompactLocal = it == 1
+                                        onDisplayCompactChange(it == 1)
+                                    },
+                                    modifier = Modifier.width(104.dp)
+                                )
+                            },
+                            showDivider = true
+                        )
+                        // 显示周末：关掉后周视图只画周一至周五，五列比七列宽约 40%，
+                        // 课程卡片随之变宽 —— 没有周末课的账号能换到更大的可读面积。
+                        // 日视图不受影响：那是周末课程唯一的展示位置。
+                        InsetGroupedRow(
+                            title = "显示周末",
+                            subtitle = "隐藏后周视图只显示周一至周五；周末课程仍可在日视图查看",
+                            trailing = {
+                                SystemPicker(
+                                    options = listOf("显示", "隐藏"),
+                                    selectedIndex = if (showWeekendLocal) 0 else 1,
+                                    onSelect = {
+                                        showWeekendLocal = it == 0
+                                        onShowWeekendChange(it == 0)
+                                    },
                                     modifier = Modifier.width(104.dp)
                                 )
                             },

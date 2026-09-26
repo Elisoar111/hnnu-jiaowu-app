@@ -1,8 +1,11 @@
 package com.hnnujw.course.network
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -34,6 +37,14 @@ import kotlin.coroutines.coroutineContext
  * `getExternalFilesDir("Download")` 对应 `res/xml/file_paths.xml` 里已有的
  * `<external-files-path name="downloads" path="Download/" />`，所以 FileProvider
  * 能直接把这个文件授权给系统安装器，不需要任何存储权限。
+ *
+ * ## 为什么还要往公共「下载」目录写一份（[publishToPublicDownloads]）
+ *
+ * 私有目录里的文件**会在卸载时被系统一并删除**。正常升级是覆盖安装、安装器读私有
+ * 目录里的文件即可，所以这件事一直不是问题；但 v1.2.6 换了发布签名：新旧包签名不
+ * 一致，覆盖安装必定失败，用户必须先卸载旧版 —— 那一刻私有目录里的安装包就没了，
+ * 「下载 → 卸载 → 安装」这条链正好断在最后一步。因此下载成功后额外写一份到系统
+ * 「下载」目录（不随卸载消失），用户卸载完从「文件管理 → 下载」点它即可安装。
  */
 object AppDownloader {
 
@@ -49,6 +60,15 @@ object AppDownloader {
     private val ZIP_MAGIC = byteArrayOf(0x50, 0x4B, 0x03, 0x04)
 
     private const val APK_MIME = "application/vnd.android.package-archive"
+
+    /**
+     * 公共「下载」目录里那份备份的文件名前缀。
+     *
+     * 与私有目录里的 `hnnu-jiaowu-v<版本>.apk` 同名，用户一眼就知道是自己刚下的
+     * 更新包；同时用它做前缀清理，保证「下载」目录里只留最新的一份、不随版本堆积。
+     * 改这里要连着 [apkFileName] 一起看。
+     */
+    private const val PUBLIC_COPY_PREFIX = "hnnu-jiaowu-v"
 
     /** Gitee/镜像站对裸请求体不太友好，带上 UA 与下载站常见身份。 */
     private val USER_AGENT =
@@ -205,6 +225,9 @@ object AppDownloader {
                 if (!isValidApk(target)) {
                     return@withContext fail("下载到的安装包已损坏，请重新下载")
                 }
+                // 再往公共「下载」目录留一份：换签名的版本必须先卸载旧版才能装，
+                // 而私有目录里的文件会被卸载一并删掉（详见文件头注释）。
+                publishToPublicDownloads(app, target)
                 state = State.Done(target)
                 target
             } catch (e: Exception) {
@@ -239,6 +262,64 @@ object AppDownloader {
     private fun looksLikeZip(buffer: ByteArray, length: Int): Boolean {
         if (length < ZIP_MAGIC.size) return false
         return ZIP_MAGIC.indices.all { buffer[it] == ZIP_MAGIC[it] }
+    }
+
+    /**
+     * 把刚落盘的安装包再往系统公共「下载」目录写一份（best-effort，失败不影响下载结果）。
+     *
+     * 为什么不能只靠私有目录那一份：私有目录（`getExternalFilesDir` / `filesDir`）里的
+     * 文件会在**卸载时被系统一并删除**，而换发布签名的版本必须先卸载旧版才能覆盖安装 ——
+     * 用户卸载的那一刻，安装包就没了。写一份到公共「下载」目录后，文件不随卸载消失，
+     * 卸载完从「文件管理 → 下载」点它即可安装。
+     *
+     * 权限分级：Android 10（API 29）起 `MediaStore.Downloads` 免存储权限即可写公共目录；
+     * API 29 以下写公共目录需要 `WRITE_EXTERNAL_STORAGE`，本项目刻意不申请任何存储权限，
+     * 因此那些设备直接跳过（这条路上仍用"浏览器到发布页下载"的老办法）。
+     *
+     * 只用 `IS_PENDING` 做原子落盘：先占位、写完再置 0，避免用户在写一半时从下载目录里
+     * 点到半截文件。清理与写入都包在 runCatching 里 —— 这里任何一步失败都不该让用户
+     * 重新下一遍，安装用的始终是私有目录里那份。
+     */
+    private fun publishToPublicDownloads(context: Context, file: File) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val resolver = context.contentResolver
+        val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+
+        // 先清掉以前留下的备份：否则每升一次版本就在「下载」目录里多堆一个 27MB 的包。
+        // 只删得到本应用自己创建的条目（别家的行会抛 SecurityException），所以包一层。
+        runCatching {
+            resolver.delete(
+                collection,
+                "${MediaStore.Downloads.DISPLAY_NAME} LIKE ?",
+                arrayOf("$PUBLIC_COPY_PREFIX%")
+            )
+        }.onFailure { Log.w(TAG, "clean previous public copy failed", it) }
+
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, file.name)
+            put(MediaStore.Downloads.MIME_TYPE, APK_MIME)
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = runCatching { resolver.insert(collection, values) }
+            .onFailure { Log.w(TAG, "reserve public download slot failed", it) }
+            .getOrNull() ?: return
+
+        runCatching {
+            val output = resolver.openOutputStream(uri) ?: error("openOutputStream 返回 null")
+            output.use { out -> file.inputStream().use { input -> input.copyTo(out) } }
+            resolver.update(
+                uri,
+                ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) },
+                null,
+                null
+            )
+            Log.i(TAG, "published a copy to public Downloads: ${file.name}")
+        }.onFailure {
+            Log.w(TAG, "publish to public Downloads failed", it)
+            // 半截文件不能留在「下载」里：用户点它会看到"解析软件包时出现问题"。
+            runCatching { resolver.delete(uri, null, null) }
+        }
     }
 
     /**

@@ -26,7 +26,7 @@ fun SessionExpiryPrompt(hasCachedContent: Boolean, onLater: () -> Unit, onLogin:
     ) {
         Column(Modifier.testTag("session-expiry-prompt"), verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-            Text("登录状态已过期，重新登录后可继续查询和选课。", fontSize = 15.sp, lineHeight = 23.sp, textAlign = TextAlign.Center)
+            Text("登录状态已过期，重新登录后可继续查询课表与成绩。", fontSize = 15.sp, lineHeight = 23.sp, textAlign = TextAlign.Center)
             if (hasCachedContent) Text("已加载的内容仍可查看", fontSize = 13.sp, lineHeight = 19.sp, textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

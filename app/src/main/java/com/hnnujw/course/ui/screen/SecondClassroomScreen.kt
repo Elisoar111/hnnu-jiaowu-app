@@ -27,6 +27,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hnnujw.course.secondclass.SecondClassExtraScore
 import com.hnnujw.course.secondclass.SecondClassModule
+import com.hnnujw.course.secondclass.SecondClassPointLedger
 import com.hnnujw.course.secondclass.SecondClassProfile
 import com.hnnujw.course.secondclass.SecondClassRankEntry
 import com.hnnujw.course.secondclass.SecondClassRankLevel
@@ -81,7 +83,24 @@ data class SecondClassroomUi(
     val boardError: String = "",
     /** 设置页的「显示班级同学排名」开关。关掉后班级榜单只留"我的排名"。 */
     val showClassRank: Boolean = true,
+    /**
+     * 成绩单内部的二级分段：0 = 总览（表头 + 模块 + 排行榜）/ 1 = 分类与学期统计。
+     *
+     * 为什么要分段而不是并成一个长页：「总览」是"我现在多少分"，「统计」是
+     * "这些分从哪来"。两者信息密度都高，一路往下滚会让"我的排名"被埋在明细后面。
+     *
+     * ⚠️ 这个下标由 Route 持有（[SecondClassroomRoute] 的 `transcriptSegment`），
+     * 因为"统计"这一段要按需联网拉明细 —— 状态在谁手上，加载 effect 就该在谁那儿。
+     */
+    val transcriptSegment: Int = 0,
+    /** 积分明细（分类 + 学期）。0 条 = 还没拉或该校没数据。 */
+    val pointLedger: SecondClassPointLedger = SecondClassPointLedger(),
+    val pointLoading: Boolean = false,
+    val pointError: String = "",
 )
+
+/** 成绩单内部的分段标签。下标有语义，见 [SecondClassroomUi.transcriptSegment]。 */
+val TRANSCRIPT_SEGMENTS: List<String> = listOf("总览", "分类与学期统计")
 
 @Composable
 fun SecondClassTranscriptScreen(
@@ -92,6 +111,15 @@ fun SecondClassTranscriptScreen(
     onShowClassRankChange: (Boolean) -> Unit,
     onClose: (() -> Unit)? = null,
     /**
+     * 切换到成绩单内部的某个分段（0 总览 / 1 分类与学期统计）。
+     * 切到 1 时 Route 会去拉积分明细。
+     */
+    onSegmentSelect: (Int) -> Unit = {},
+    /** 「分类与学期统计」的重试 / 刷新。 */
+    onPointsRefresh: () -> Unit = {},
+    /** 「分类与学期统计」里凭据失效时的重新绑定。 */
+    onPointsBind: () -> Unit = onBind,
+    /**
      * true = 作为别页的 Tab 内容嵌入（如「二课 → 成绩单」）：
      * 不画自己的顶栏、不吃窗口内边距 —— 否则会出现两条标题、两段顶部留白。
      */
@@ -101,6 +129,8 @@ fun SecondClassTranscriptScreen(
     val headerCollapse by remember {
         derivedStateOf { (scrollState.value / 96f).coerceIn(0f, 1f) }
     }
+    // 切分段时把滚动位置归零：从统计的中间位置切回总览会停在半空，很怪。
+    LaunchedEffect(ui.transcriptSegment) { scrollState.scrollTo(0) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -163,18 +193,46 @@ fun SecondClassTranscriptScreen(
                     if (ui.error.isNotBlank()) {
                         NoticeCard(text = ui.error, tone = NoticeTone.Danger, modifier = Modifier.moduleEntrance(1))
                     }
-                    ProfileHeader(
-                        profile = ui.snapshot.profile,
-                        modules = ui.snapshot.modules,
-                        modifier = Modifier.moduleEntrance(1)
+                    // 二级分段：总览 / 分类与学期统计。
+                    // 放在表头**下面**而不是顶栏里 —— 底面是"二课 → 成绩单"，
+                    // 顶上已经有一层 Tab（活动/已报/申报/消息/成绩单），再往顶栏塞
+                    // 会变成三层嵌套，没人看得懂自己在第几层。
+                    SystemSegmentedControl(
+                        options = TRANSCRIPT_SEGMENTS,
+                        selectedIndex = ui.transcriptSegment.coerceIn(0, TRANSCRIPT_SEGMENTS.lastIndex),
+                        onSelect = onSegmentSelect,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .moduleEntrance(1),
+                        height = 44.dp,
                     )
-                    ModulesSection(ui.snapshot.modules, ui.snapshot.profile, modifier = Modifier.moduleEntrance(2))
-                    RankSection(
-                        ui = ui,
-                        modifier = Modifier.moduleEntrance(3),
-                        onLevelSelect = onLevelSelect,
-                        onShowClassRankChange = onShowClassRankChange
-                    )
+                    if (ui.transcriptSegment == 1) {
+                        SecondClassPointStatsContent(
+                            ledger = ui.pointLedger,
+                            profile = ui.snapshot.profile,
+                            loading = ui.pointLoading,
+                            error = ui.pointError,
+                            onRefresh = onPointsRefresh,
+                            modifier = Modifier.moduleEntrance(2),
+                        )
+                    } else {
+                        ProfileHeader(
+                            profile = ui.snapshot.profile,
+                            modules = ui.snapshot.modules,
+                            modifier = Modifier.moduleEntrance(2)
+                        )
+                        ModulesSection(
+                            ui.snapshot.modules,
+                            ui.snapshot.profile,
+                            modifier = Modifier.moduleEntrance(3)
+                        )
+                        RankSection(
+                            ui = ui,
+                            modifier = Modifier.moduleEntrance(4),
+                            onLevelSelect = onLevelSelect,
+                            onShowClassRankChange = onShowClassRankChange
+                        )
+                    }
                     if (ui.refreshing) {
                         Text(
                             text = "正在刷新…",

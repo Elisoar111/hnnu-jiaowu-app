@@ -30,19 +30,21 @@ public class SchoolConfig {
     public String courseGnmkdm = "N253512";
     public String scheduleGnmkdm = "N253508";
 
+    // 空闲场地查询（cdjy/cdjy_cxKxcdlb.html）。只读查询，不涉及场地借用申请。
+    public String emptyRoomGnmkdm = "N2155";
+    // 查询网格的 remoteParams.zd_fzdm —— 由页面里的 kxcdlb.js 固定下发，
+    // 网页端每次查询都会带上它。缺失时服务端可能按"无字典"处理，故一并配置化。
+    public String emptyRoomRemoteParam = "N211205-kxcdlb";
+
     // URL 路径模板 (可自定义) - 默认为正方教务系统标准路径
     public String basePath = "/jwglxt"; // 基础路径，如 /jwglxt 或 /jwxt
     public String studentInfoPath = "/xtgl/index_cxYhxxIndex.html";
     public String courseIndexPath = "/xsxk/zzxkyzb_cxZzxkYzbIndex.html";
-    public String courseDisplayPath = "/xsxk/zzxkyzb_cxZzxkYzbDisplay.html";
-    public String courseListPath = "/xsxk/zzxkyzb_cxZzxkYzbPartDisplay.html";
-    public String selectedCoursesPath = "/xsxk/zzxkyzb_cxZzxkYzbChoosedDisplay.html";
-    public String selectCoursePath = "/xsxk/zzxkyzbjk_xkBcZyZzxkYzb.html";
-    public String courseDetailsPath = "/xsxk/zzxkyzbjk_cxJxbWithKchZzxkYzb.html";
     public String schedulePath = "/kbcx/xskbcx_cxXsKb.html";
     // 课表首页（用于读取可选学期）；部分学校的学期下拉只在这个入口页上
     public String scheduleIndexPath = "/kbcx/xskbcx_cxXsKb.html";
     public String gradesPath = "/cjcx/cjcx_cxDgXscj.html";
+    public String emptyRoomPath = "/cdjy/cdjy_cxKxcdlb.html";
     public String overallGradesIndexPath = "/xsxy/xsxyqk_cxXsxyqkIndex.html";
     public String overallGradesDataPath = "/xsxy/xsxyqk_cxJxzxjhxfyqKcxx.html";
 
@@ -109,25 +111,9 @@ public class SchoolConfig {
         return getFullBasePath() + courseIndexPath + "?gnmkdm=" + courseGnmkdm + "&layout=default&su=" + domain;
     }
 
-    // 生成可选课程列表URL
-    public String getAvailableCoursesUrl() {
-        return getFullBasePath() + courseListPath + "?gnmkdm=" + courseGnmkdm;
-    }
 
-    // 生成已选课程列表URL
-    public String getSelectedCoursesUrl() {
-        return getFullBasePath() + selectedCoursesPath + "?gnmkdm=" + courseGnmkdm;
-    }
 
-    // 生成选课执行URL
-    public String getSelectCourseUrl() {
-        return getFullBasePath() + selectCoursePath + "?gnmkdm=" + courseGnmkdm;
-    }
 
-    // 生成选课详情URL
-    public String getCourseSelectionDetailsUrl() {
-        return getFullBasePath() + courseDetailsPath + "?gnmkdm=" + courseGnmkdm;
-    }
 
     // 生成Referer头
     public String getCourseReferer() {
@@ -210,16 +196,14 @@ public class SchoolConfig {
             json.put("gradeGnmkdm", gradeGnmkdm);
             json.put("courseGnmkdm", courseGnmkdm);
             json.put("scheduleGnmkdm", scheduleGnmkdm);
+            json.put("emptyRoomGnmkdm", emptyRoomGnmkdm);
+            json.put("emptyRoomRemoteParam", emptyRoomRemoteParam);
             json.put("studentInfoPath", studentInfoPath);
             json.put("courseIndexPath", courseIndexPath);
-            json.put("courseDisplayPath", courseDisplayPath);
-            json.put("courseListPath", courseListPath);
-            json.put("selectedCoursesPath", selectedCoursesPath);
-            json.put("selectCoursePath", selectCoursePath);
-            json.put("courseDetailsPath", courseDetailsPath);
             json.put("schedulePath", schedulePath);
             json.put("scheduleIndexPath", scheduleIndexPath);
             json.put("gradesPath", gradesPath);
+            json.put("emptyRoomPath", emptyRoomPath);
             json.put("overallGradesIndexPath", overallGradesIndexPath);
             json.put("overallGradesDataPath", overallGradesDataPath);
             json.put("captchaPath", captchaPath);
@@ -262,18 +246,15 @@ public class SchoolConfig {
             config.gradeGnmkdm = json.optString("gradeGnmkdm", "N305005");
             config.courseGnmkdm = json.optString("courseGnmkdm", "N253512");
             config.scheduleGnmkdm = json.optString("scheduleGnmkdm", "N253508");
+            config.emptyRoomGnmkdm = json.optString("emptyRoomGnmkdm", "N2155");
+            config.emptyRoomRemoteParam = json.optString("emptyRoomRemoteParam", "N211205-kxcdlb");
             config.studentInfoPath = json.optString("studentInfoPath", "/xtgl/index_cxYhxxIndex.html");
             config.courseIndexPath = json.optString("courseIndexPath", "/xsxk/zzxkyzb_cxZzxkYzbIndex.html");
-            config.courseDisplayPath = json.optString("courseDisplayPath", "/xsxk/zzxkyzb_cxZzxkYzbDisplay.html");
-            config.courseListPath = json.optString("courseListPath", "/xsxk/zzxkyzb_cxZzxkYzbPartDisplay.html");
-            config.selectedCoursesPath = json.optString("selectedCoursesPath",
-                    "/xsxk/zzxkyzb_cxZzxkYzbChoosedDisplay.html");
-            config.selectCoursePath = json.optString("selectCoursePath", "/xsxk/zzxkyzbjk_xkBcZyZzxkYzb.html");
-            config.courseDetailsPath = json.optString("courseDetailsPath", "/xsxk/zzxkyzbjk_cxJxbWithKchZzxkYzb.html");
             config.schedulePath = json.optString("schedulePath", "/kbcx/xskbcx_cxXsKb.html");
             config.scheduleIndexPath = json.optString("scheduleIndexPath",
                     json.optString("schedulePath", "/kbcx/xskbcx_cxXsKb.html"));
             config.gradesPath = json.optString("gradesPath", "/cjcx/cjcx_cxDgXscj.html");
+            config.emptyRoomPath = json.optString("emptyRoomPath", "/cdjy/cdjy_cxKxcdlb.html");
             config.overallGradesIndexPath = json.optString("overallGradesIndexPath", "/xsxy/xsxyqk_cxXsxyqkIndex.html");
             config.overallGradesDataPath = json.optString("overallGradesDataPath",
                     "/xsxy/xsxyqk_cxJxzxjhxfyqKcxx.html");

@@ -5,7 +5,6 @@ import com.hnnujw.course.ui.theme.moduleEntrance
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.LocalIndication
@@ -32,7 +31,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -40,8 +38,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -147,7 +145,6 @@ import com.hnnujw.course.ui.system.glass.resolvePhysicalLens
 import com.hnnujw.course.ui.system.rememberGlassAccessibilityMode
 import com.hnnujw.course.ui.system.reportNoticeAnchor
 
-import com.hnnujw.course.ui.theme.MotionSpring
 import com.hnnujw.course.ui.theme.NeuDivider
 import com.hnnujw.course.ui.theme.NeuPrimary
 import com.hnnujw.course.ui.theme.NeuSurface
@@ -177,13 +174,27 @@ private val HeaderTopPadCollapsed = 6.dp
 private val HeaderActionRowExpanded = 58.dp
 private val HeaderActionRowCollapsed = 48.dp
 private val HeaderTitleGap = 6.dp
-// 星期行必须同时装下「星期」+「日期」两行文字（见 CompactWeekdayLabel 的行高注释）：
-// 两行字号一致，展开 34+6+34 = 74px = 37dp，折叠 30+4+30 = 64px = 32dp；各留一点余量，
-// 免得字号/字体度量稍有出入又把日期挤到"一行都排不下"。
+// 星期行必须同时装下「星期」+「日期」+「今天圆点」三行内容（见 WeekHeaderCompact
+// 里日期格的行高注释）：星期与日期字号一致，展开 34+34+圆点 ≈ 74px = 37dp，
+// 折叠 30+30+圆点 ≈ 64px = 32dp；各留一点余量，免得字号/字体度量稍有出入
+// 又把日期挤到"一行都排不下"。
 private val HeaderWeekRowExpanded = 40.dp
 private val HeaderWeekRowCollapsed = 34.dp
 private val HeaderBottomPadExpanded = 8.dp
 private val HeaderBottomPadCollapsed = 4.dp
+
+/**
+ * 星期条的标签（单个汉字），顺序即星期 1..7。
+ *
+ * 「显示周末」关闭时靠 `take(5)` 截到周五 —— 截取而不是另建一张 5 元素表，
+ * 是为了让"第 N 个格 = 星期 N"这个不变量只有一处定义，
+ * 下标换算（日期、今天圆点、无障碍播报）全部照旧。
+ *
+ * 汉字本身取自 [com.hnnujw.course.schedule.scheduleWeekdayChar]：
+ * 星期条只画一个字，补课弹窗画"周六"、正文画"星期六"，三处共用同一张映射表。
+ */
+private val WeekdayShortLabels =
+    (1..7).map { com.hnnujw.course.schedule.scheduleWeekdayChar(it).toString() }
 
 /**
  * 顶栏两态高度。**短屏只压展开态的空白**——折叠态与玻璃条几何一律不动，
@@ -330,10 +341,15 @@ fun ScheduleScreen(
     onSyncClick: () -> Unit = {},
     /** 右上角更多菜单：添加自定义课程。 */
     onAddClick: () -> Unit = {},
-    /** 右上角更多菜单：添加桌面小组件。 */
-    onWidgetClick: () -> Unit = {},
+    /** 右上角更多菜单：打开 App 内组件工作台（桌面卡片也从这里加到手机桌面）。 */
+    onWidgetBoardClick: () -> Unit = {},
     /** true = 紧凑显示密度（节次行高 ×0.78，参考项目同款）。持久化在 Route。 */
     compact: Boolean = false,
+    /**
+     * true = 周视图显示周六/周日（默认）；false = 只画周一至周五。
+     * 只影响**周视图**；日视图恒 7 天（见 [scheduleVisibleDays]）。持久化在 Route。
+     */
+    showWeekend: Boolean = true,
     /**
      * 「回到今天」请求计数器：Route 每发一次跳转请求就 +1（桌面组件点按等）。
      * 0 = 无请求。用 nonce 而不是布尔，连续两次点按也能各跳一次。
@@ -344,7 +360,7 @@ fun ScheduleScreen(
     firstWeekDate: String? = null,
     weekRequestKey: String? = null
 ) {
-    // 课表字号：只给课表网格用（成绩 / 选课 / 二课不读这个值）。
+    // 课表字号：只给课表网格用（成绩 / 二课不读这个值）。
     // key 带上 revision —— 设置页改完字号后 revision++，这里立刻拿到新值重组。
     val scheduleSettings = com.hnnujw.course.manager.ScheduleSettingsManager.getInstance()
     val scheduleFontScale = remember(scheduleSettings.revision) { scheduleSettings.scheduleFontScale }
@@ -530,10 +546,19 @@ fun ScheduleScreen(
                     onMakeUpFromWeekday = onMakeUpFromWeekday,
                     dayView = dayView,
                     onDayViewChange = onDayViewChange,
+                    showWeekend = showWeekend,
                     selectedDay = shownDay,
                     onDayClick = { day ->
-                        // 点星期条跳到本周那一天（日视图）；周视图的周末点击仍走补课。
-                        moveUnit((shownWeek - 1) * 7 + day - (pagerState.currentPage + 1))
+                        // 点星期条跳到那一天。
+                        // 日视图：页单元就是"周*7+天"，直接按天算 delta 翻页。
+                        // 周视图：页单元是"周次"，按天算 delta 会跳飞 —— 改为切到日视图
+                        // 并把它定位到这一天（切视图时 pager 会用 selectedDayState 重建）。
+                        if (dayView) {
+                            moveUnit((shownWeek - 1) * 7 + day - (pagerState.currentPage + 1))
+                        } else {
+                            selectedDayState = day
+                            onDayViewChange(true)
+                        }
                     },
                     onTodayClick = {
                         if (actualWeek != null) {
@@ -545,7 +570,7 @@ fun ScheduleScreen(
                         shownWeek != actualWeek || (dayView && shownDay != todayDay)),
                     onSyncClick = onSyncClick,
                     onAddClick = onAddClick,
-                    onWidgetClick = onWidgetClick,
+                    onWidgetBoardClick = onWidgetBoardClick,
                     collapseFraction = headerCollapse,
                     sampleBackdrop = headerSampleBackdrop
                 )
@@ -658,6 +683,8 @@ fun ScheduleScreen(
                             scrollState = gridScrollState,
                             // 紧凑显示密度：节次行高 ×0.78，一屏能看到更多节次。
                             compact = compact,
+                            // 周视图的可见天数：隐藏周末时只画 5 列。
+                            showWeekend = showWeekend,
                             // 【常量】而不是 paddingValues.calculateTopPadding()：后者随顶栏
                             // 一起收缩，而它施加在 verticalScroll 内部，于是顶栏每缩 1dp
                             // 内容就被额外上提 1dp——手指走 60dp、内容走 120dp。
@@ -690,6 +717,11 @@ fun WeekHeaderCompact(
     /** true = 日视图：标题副行带星期、星期条可点跳日、时间列给「今天」按钮。 */
     dayView: Boolean = false,
     onDayViewChange: (Boolean) -> Unit = {},
+    /**
+     * true = 星期条画到周日；false = 只到周五。
+     * 日视图下即使为 false 也画满 7 格（见 [scheduleVisibleDays]）。
+     */
+    showWeekend: Boolean = true,
     /** 日视图当前浏览的星期（1..7），用于星期条高亮与副行标注。 */
     selectedDay: Int = 1,
     /** 日视图点星期条跳到本周那一天。 */
@@ -698,10 +730,10 @@ fun WeekHeaderCompact(
     onTodayClick: () -> Unit = {},
     /** 是否显示「今天」快捷按钮（仅在日视图且当前不在今天时为真）。 */
     showTodayButton: Boolean = false,
-    /** 右上角更多菜单：同步课表 / 添加课程 / 桌面组件。 */
+    /** 右上角更多菜单：同步课表 / 添加课程 / 组件工作台。 */
     onSyncClick: () -> Unit = {},
     onAddClick: () -> Unit = {},
-    onWidgetClick: () -> Unit = {}
+    onWidgetBoardClick: () -> Unit = {}
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
     val calendar = Calendar.getInstance()
@@ -712,7 +744,12 @@ fun WeekHeaderCompact(
         onDispose { focusRegistry?.remove("header", headerFocus) }
     }
     val currentDayOfWeek = (calendar.get(Calendar.DAY_OF_WEEK) + 5) % 7 + 1
-    val weekLabels = listOf("一", "二", "三", "四", "五", "六", "日")
+    // 日期条画几天：日视图恒 7（周末的课只能在这里翻到），周视图跟随「显示周末」。
+    // 日期格里的下标换算全部照用 1..7 的星期序号，所以只是"少画两格"，
+    // 不涉及任何偏移重算。
+    val weekLabels = WeekdayShortLabels.take(
+        com.hnnujw.course.schedule.scheduleVisibleDays(dayView, showWeekend)
+    )
     // 「是否本周」只有一个判据：第一周日期已知，且当前页就是它所在的那一周。
     val isCurrentWeek = actualWeek != null && currentWeek == actualWeek
     // 标题旁的注解：只有翻到别的周才标注（非本周）；本周不再重复写「周X」。
@@ -845,7 +882,13 @@ fun WeekHeaderCompact(
                         // 可用宽度被挤压时后缀会被裁成"(非本"（真机实测复现）；
                         // 日期行本身很短，拼在这里永远能完整显示。
                         // 日视图再拼上「· 周X」：这一行是当前浏览日期的完整坐标。
-                        val daySuffix = if (dayView) "  周${weekLabels[selectedDay - 1]}" else null
+                        // getOrNull 而不是下标：日视图下 weekLabels 恒为 7（见 scheduleVisibleDays），
+                        // 但"隐藏周末"开关让这个长度变成了变量，下标越界会直接崩在标题行上。
+                        val daySuffix = if (dayView) {
+                            weekLabels.getOrNull(selectedDay - 1)?.let { "  周$it" }
+                        } else {
+                            null
+                        }
                         Text(
                             text = listOfNotNull(todayLabel, daySuffix, weekSuffix).joinToString("  "),
                             fontSize = lerpSp(13f, 11f, collapse),
@@ -889,14 +932,14 @@ fun WeekHeaderCompact(
                             }
                         }
                         // 右上角更多菜单（参考项目的做法）：同步 / 导出 / 添加课程 /
-                        // 桌面组件 / 课表设置 收进一个入口，动作行不再被 4 个图标挤满。
+                        // 组件工作台 / 课表设置 收进一个入口，动作行不再被一堆图标挤满。
                         SystemActionMenu(
                             description = "更多课表操作",
                             actions = listOf(
                                 SystemMenuAction("同步课表", Icons.Outlined.Refresh, onSyncClick),
                                 SystemMenuAction("导出课表", Icons.Filled.Share, onExportClick),
                                 SystemMenuAction("添加课程", Icons.Outlined.Add, onAddClick),
-                                SystemMenuAction("桌面组件", Icons.Outlined.Widgets, onWidgetClick),
+                                SystemMenuAction("组件工作台", Icons.Outlined.Dashboard, onWidgetBoardClick),
                                 SystemMenuAction("课表设置", Icons.Filled.Settings, onSettingsClick)
                             ),
                             modifier = Modifier.testTag("schedule-more"),
@@ -923,16 +966,17 @@ fun WeekHeaderCompact(
 
                 Spacer(Modifier.height(lerpDp(headerMetrics.titleGap, 0.dp, collapse)))
 
+                // 星期条的行高：Row 与条内的 LiquidSegmentedControl 必须用**同一个值**，
+                // 否则控件会按自己的默认高（52dp）撑开，整行比网格宽一截。
+                val weekRowHeight = lerpDp(
+                    headerMetrics.weekRowExpanded,
+                    maxOf(HeaderWeekRowCollapsed, 26.dp * LocalDensity.current.fontScale),
+                    collapse
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(
-                            lerpDp(
-                                headerMetrics.weekRowExpanded,
-                                maxOf(HeaderWeekRowCollapsed, 26.dp * LocalDensity.current.fontScale),
-                                collapse
-                            )
-                        )
+                        .height(weekRowHeight)
                         .padding(horizontal = scheduleGridPadding()),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -995,31 +1039,112 @@ fun WeekHeaderCompact(
                             )
                         }
                     }
-                    weekLabels.forEachIndexed { index, day ->
-                        // 与参考图一致：本周高亮今天；翻到别的周时高亮该周第一天，
-                        // 于是「当前在看哪一周」始终有一个锚点。
+                    // 星期条 = 液态分段控件：滑块（圆圈）只在**有"当日"可言**时出现。
+                    // 日视图的 pager 是逐日翻页的，shownDay 随 currentPage 变化，
+                    // 滑块就跟着滑 —— 滑到哪天，日期行上就有一格被圈出来；
+                    // 周视图里它只标今天；翻到别的周时今天不在这周，整条就不给滑块。
+                    //
+                    // 三处几何必须和下方网格对齐（见 scheduleGridPadding 的注释）：
+                    // edgePadding = 0.dp（默认的 3/5dp 会让整条相对网格偏移）、
+                    // showTrack = false（只留滑块，壁纸从格间透上来）、
+                    // restingRefraction = 0f（这一格是「星期 + 日期 + 圆点」三行密排文字，
+                    // 静止态折射会把字拉糊）。
+                    // 滑块落点由纯函数决定（三条规则的优先级见
+                    // [scheduleDateStripSelection] 的文档，那里有单测钉住）。
+                    val indicatorIndex = scheduleDateStripSelection(
+                        dayView = dayView,
+                        selectedDay = selectedDay,
+                        isCurrentWeek = isCurrentWeek,
+                        currentDayOfWeek = currentDayOfWeek,
+                        dayCount = weekLabels.size
+                    )
+                    LiquidSegmentedControl(
+                        options = weekLabels,
+                        // 非本周时 indicatorIndex 为 null（没有"当日"）：滑块与选中文字
+                        // 一起收掉，见 showIndicator 的说明。这里给 0 只是占位 ——
+                        // showIndicator = false 时控件不会把它当成选中项。
+                        selectedIndex = indicatorIndex ?: 0,
+                        showIndicator = indicatorIndex != null,
+                        onSelect = { index ->
+                            // 周视图的「六 / 日」仍是补课入口（见 [MakeUpCourseDialog]）：
+                            // 用户点的是"这一周的周六"这一格，所以补课要带周次。
+                            // 日视图下七个格子一律是"跳到那天"，否则滑不到周末。
+                            if (!dayView && index >= 5 && onMakeUpFromWeekday != {}) {
+                                onMakeUpFromWeekday(index + 1)
+                            } else {
+                                onDayClick(index + 1)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        height = weekRowHeight,
+                        edgePadding = 0.dp,
+                        // verticalInset = 0.dp 是必须的：控件会给标签内容加 verticalPadding 内缩，
+                        // 而这一行只有 40dp。留 2dp 的话内容区只剩 36dp，装不下
+                        // 「星期 + 日期 + 圆点」37dp，日期会被裁掉一截。
+                        // 内缩为 0 时内容区 = 整行高，与改造前那张纯 Column 的布局完全等价；
+                        // 同时滑块变成近乎正方（≈46dp 宽 × 40dp 高），正是参考项目里那个"圆圈"。
+                        verticalInset = 0.dp,
+                        restingRefraction = 0f,
+                        showTrack = false
+                    ) { index, selection, color ->
                         val isRealToday = isCurrentWeek && index + 1 == currentDayOfWeek
-                        val highlighted = isRealToday || (actualWeek != null && !isCurrentWeek && index == 0)
                         // 用 weekdayDate（永不返回 null）：拿不到就按"本周周一 + 周次偏移"兜底，
                         // 星期条永远显示日期，不再退回占位小圆点。
                         val date = com.hnnujw.course.schedule.ScheduleDates.weekdayDate(
                             firstWeekDate, currentWeek, index + 1
                         )
-                        // 点击「六/日」= 补课入口。补课弹窗要带**周次**：用户点的是
-                        // 「第四周的周六」这一格，而不是笼统的"周六"，见 [MakeUpCourseDialog]。
-                        val clickable = index >= 5 && onMakeUpFromWeekday != {}
-                        CompactWeekdayLabel(
-                            modifier = Modifier.weight(1f).testTag("schedule-weekday-${index + 1}")
-                                .let { m -> if (clickable) m.clickable { onMakeUpFromWeekday(index + 1) } else m },
-                            day = day,
-                            isToday = highlighted,
-                            collapse = collapse,
-                            date = date.get(Calendar.DAY_OF_MONTH).toString(),
-                            // date 恒非空（见 ScheduleDates.weekdayDate）。下面那个小圆点
-                            // 分支理论上走不到了，保留它只是防止将来有人改坏上游。
-                            semanticLabel = "今天".takeIf { isRealToday },
-                            weekOffset = weekOffset
-                        )
+                        // 选中态（滑块所在格）与今天都用主色：前者回答"你在看哪天"，
+                        // 后者是绝对坐标。两者可能重合，也可能分开（翻到别的周时）。
+                        val emphasized = isRealToday || selection >= 0.5f
+                        val dateAlpha = (1f - kotlin.math.abs(weekOffset) * 2f).coerceIn(0.35f, 1f)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("schedule-weekday-${index + 1}")
+                                .semantics { if (isRealToday) stateDescription = "今天" },
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            // 【两个 Text 都必须显式写 lineHeight】。
+                            //
+                            // 不写时它们继承 MaterialTheme.typography.bodyLarge 的 lineHeight = 24.sp
+                            // （320dpi 上 = 48px），与 13sp / 11.5sp 的字号完全无关。星期行的固定高度
+                            // 只有 34dp（68px），星期那行先吃掉 48px，剩下 20px 给日期 —— 比一行的行高
+                            // 还矮，Compose 的排版结果是"一行都排不下"，于是**节点照常测量、文字一个
+                            // 像素都不画**。表现就是：UI 层级里能看到 "14" "15"… 这些节点，屏幕上却
+                            // 什么都没有。紧凑行高后：星期 17sp(34px) + 日期 17sp(34px) + 圆点 ≈ 68px，
+                            // 正好装进行高。
+                            Text(
+                                text = weekLabels[index],
+                                fontSize = lerpSp(13f, 11.5f, collapse),
+                                lineHeight = lerpSp(17f, 15f, collapse),
+                                fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Medium,
+                                color = color,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = date.get(Calendar.DAY_OF_MONTH).toString(),
+                                fontSize = lerpSp(13f, 11.5f, collapse),
+                                lineHeight = lerpSp(17f, 15f, collapse),
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (emphasized) MaterialTheme.colorScheme.primary else NeuPrimary,
+                                maxLines = 1,
+                                modifier = Modifier.graphicsLayer { alpha = dateAlpha }
+                            )
+                            // 今天的圆点。**每一格都占同样大小的位置**（非今天画透明），
+                            // 否则有/无圆点的两格文字基线会差一个点高。
+                            //
+                            // 刻意不额外加 padding：两行文字行高 17dp + 17dp + 圆点 3dp = 37dp，
+                            // 与改造前那张纯 Column 的内容高度一模一样，行高余量不变。
+                            Box(
+                                modifier = Modifier
+                                    .size(3.dp)
+                                    .background(
+                                        color = if (isRealToday) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        shape = RoundedCornerShape(2.dp)
+                                    )
+                            )
+                        }
                     }
                 }
             }
@@ -1050,146 +1175,92 @@ private fun ScheduleHeaderActionLayout(stacked: Boolean, modifier: Modifier, con
     }
 }
 
-@Composable
-private fun CompactWeekdayLabel(
-    modifier: Modifier = Modifier,
-    day: String,
-    isToday: Boolean,
-    collapse: Float = 0f,
-    date: String? = null,
-    /** 无障碍播报，只有真正的「今天」才有；浏览其它周时的高亮只是锚点。 */
-    semanticLabel: String? = null,
-    weekOffset: Float = 0f
-) {
-    val textColor by animateColorAsState(
-        targetValue = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        label = "weekdayColor"
-    )
-    val dotScale by animateFloatAsState(
-        targetValue = if (isToday) 1f else 0.65f,
-        animationSpec = MotionSpring.gentle(),
-        label = "weekdayDotScale"
-    )
-    // 折叠后只留今天那一点——"只留必要信息"落到最小的一处。
-    // 非今天也必须用看得见的颜色：学期起始日没配置时，这个点是该行唯一的占位，
-    // 沿用分隔线色（alpha 极低）会让整行看起来是空的。
-    val dotColor = if (isToday) {
-        NeuPrimary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f * (1f - collapse))
-    }
-
-    // 【两个 Text 都必须显式写 lineHeight】。
-    //
-    // 不写时它们继承 MaterialTheme.typography.bodyLarge 的 lineHeight = 24.sp（320dpi 上 = 48px），
-    // 与 13sp / 11sp 的字号完全无关。星期行的固定高度只有 34dp（68px），
-    // 星期那行先吃掉 48px + 6px 间距，剩下 14px 给日期 —— 比一行的行高还矮，
-    // Compose 的排版结果是"一行都排不下"，于是**节点照常测量、文字一个像素都不画**。
-    // 表现就是：UI 层级里能看到 "14" "15"… 这些节点，屏幕上却什么都没有。
-    //
-    // 紧凑行高后：星期 17sp(34px) + 间距 3dp(6px) + 日期 14sp(28px) = 68px，正好装进行高，
-    // 折叠态 15sp(30px) + 2dp(4px) + 13sp(26px) = 60px（HeaderWeekRowCollapsed = 32dp = 64px）。
-    Column(
-        modifier = modifier
-            .semantics(mergeDescendants = true) {
-                semanticLabel?.let { stateDescription = it }
-            },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(lerpDp(3.dp, 2.dp, collapse))
-    ) {
-        Text(
-            text = day,
-            fontSize = lerpSp(13f, 11.5f, collapse),
-            lineHeight = lerpSp(17f, 15f, collapse),
-            fontWeight = if (isToday) FontWeight.SemiBold else FontWeight.Medium,
-            color = textColor,
-            maxLines = 1
-        )
-        if (date != null) {
-            val dateColor = if (isToday) textColor else NeuPrimary
-            // alpha 下限 0.35f：原来 coerceIn(0f, 1f) 在切周过程中（|weekOffset| >= 0.5）
-            // 会把日期整行抹成全透明，节点还在、像素没了 —— 用户看到的就是"日期不显示"。
-            val dateAlpha = (1f - kotlin.math.abs(weekOffset) * 2f).coerceIn(0.35f, 1f)
-            // 字号与上方的星期文字完全一致：日期是同一条星期条里的信息，
-            // 比星期小一号会显得像次要标注，用户扫一眼容易漏掉。
-            Text(
-                text = date,
-                fontSize = lerpSp(13f, 11.5f, collapse),
-                lineHeight = lerpSp(17f, 15f, collapse),
-                fontWeight = FontWeight.SemiBold,
-                color = dateColor,
-                maxLines = 1,
-                modifier = Modifier.graphicsLayer { alpha = dateAlpha }
-            )
-        }
-        else Box(
-            modifier = Modifier
-                .scale(dotScale)
-                .size(lerpDp(5.dp, 4.dp, collapse))
-                .background(color = dotColor, shape = CircleShape)
-        )
-    }
-}
-
 /**
- * 补课入口：点击课表顶部的「六 / 日」星期条弹出。
+ * 补课弹窗：把某一周的某一天的课**整体**搬到某一周的某一天。
  *
- * ## 语义（这一版按用户的实际心智重写）
+ * ## 语义
  *
- * 用户在**某一周的周六/周日那一格**上点击，意味着"我要给这一周的这一天上点课"。
- * 所以弹窗里选的是「**补第几周、星期几的课**」——选中的那一天、那一周的**每一门课**
- * 都会按各自的原时段落到用户点的那一格：
+ * 「在**第几周的周几**补课」= 源的「周 + 天」和目标的「周 + 天」**四个都由用户选**：
  *
  * ```
- * 在第 4 周的周六格上点击 → 弹窗里选「第 3 周 · 星期三」
- *                        → 第 3 周星期三的 3 门课渲染到「第 4 周 · 周六」的网格里
+ * 弹窗里选「第 3 周 · 星期三」的课，补到「第 8 周 · 周六」
+ *   → 第 3 周星期三的 3 门课渲染到「第 8 周 · 周六」的网格里
  * ```
+ *
+ * 源那一天、那一周的**每一门课**都会按各自的原时段落到目标那一格。
+ *
+ * 调用方给的两个值（[initialTargetDay] / [initialTargetWeek]）都只是**初值** ——
+ * 用户点周六那一格进来就是"第 N 周周六"，但他完全可以把课补到别的周。
+ * 初值必须快照：弹窗开着时底下的 pager 还能被手势翻动，
+ * 届时"第 4 周"会悄悄变成"第 9 周"（见 `ScheduleRoute.makeUpWeek`）。
  *
  * 因此：
  * - **不需要挑具体课程**（用户明确要求）——整天的课一起补，符合"这一天被调过来了"的现实；
  * - 周次与星期都用**折叠选择器**（收起时只显示当前选择，点开才铺出可选项），
  *   而不是旧版那种一屏铺满的加减按钮 + 方块阵；
- * - 目标格子由调用方（`makeUpDay` + 当前周次）决定，这里只负责"源是哪一周哪一天"。
+ * - 目标周 / 目标天**都由用户在弹窗里决定**，并通过 [onConfirm] 回传给调用方。
+ *   调用方不能拿自己传进去的初值当答案（那是"默认决定了"的旧行为）。
  *
  * 视觉材质交给 [SystemDialog] —— 主站登录页那套液态玻璃模态（blur → lens → vibrancy）。
  */
 @Composable
 fun MakeUpCourseDialog(
-    /** 用户点击的目标星期：6 = 周六，7 = 周日。 */
-    weekendDay: Int,
-    /** 用户点击时正在浏览的周次，即课程要**落进去**的那一周。 */
-    targetWeek: Int,
+    /**
+     * 目标星期（1..7）的**初始值**：从周六 / 周日那一格点进来就是那一格，
+     * 从课表设置进来是周六。用户可以在弹窗里改成任意一天（见 [FoldPanel.TargetDay]）。
+     */
+    initialTargetDay: Int,
+    /**
+     * 目标周次的**初始值**：用户点击那一刻正在浏览的周次。
+     * 用户可以在弹窗里改成任意一周（见 [FoldPanel.TargetWeek]）。
+     */
+    initialTargetWeek: Int,
     courses: List<ScheduleCourseUi>,
     firstWeekDate: String? = null,
     onDismiss: () -> Unit,
-    /** 确认补课：([源星期 1..7], [源周次])。由调用方搬到 [targetWeek] 的 [weekendDay]。 */
-    onConfirm: (weekday: Int, week: Int) -> Unit
+    /**
+     * 确认补课：([来源星期 1..7], [来源周次], [目标星期 1..7], [目标周次])。
+     * 四个值全部由弹窗内的选择决定，调用方照单执行即可。
+     */
+    onConfirm: (sourceDay: Int, sourceWeek: Int, targetDay: Int, targetWeek: Int) -> Unit
 ) {
     val maxWeeks = com.hnnujw.course.schedule.ScheduleMaxWeeks
-    val weekdayLabels = "一二三四五六日"
-    // 源默认取同一天（周六点进来默认补周六的课），这是最常见的一种调休
-    var weekday by remember { mutableIntStateOf(weekendDay.coerceIn(1, 7)) }
-    var week by remember { mutableIntStateOf(targetWeek.coerceIn(1, maxWeeks)) }
-    // 两个面板同一时刻只展开一个：都摊开时弹窗会顶到屏幕上下缘
+    // 调用方给的两个初值：夹到合法区间，后面"改回第 N 周 / 周X"的回退按钮也用它们。
+    val initialWeek = initialTargetWeek.coerceIn(1, maxWeeks)
+    val initialDay = initialTargetDay.coerceIn(1, 7)
+    // 目标星期：初值来自调用方（点哪一格就是哪一格），但用户可以改。
+    // 改目标天是本次新增的能力 —— 原来它写死在调用方，用户只能改"源"。
+    var targetDay by remember { mutableIntStateOf(initialDay) }
+    // 目标周次：同样只是初值。以前它被写死成"点进来的那一周"，
+    // 于是想把课补到第 8 周就只能先翻到第 8 周再点进来 —— 现在四个值都能改。
+    var targetWeek by remember { mutableIntStateOf(initialWeek) }
+    // 源默认取同一天同一周（周六点进来默认补本周周六的课），这是最常见的一种调休
+    var weekday by remember { mutableIntStateOf(initialDay) }
+    var week by remember { mutableIntStateOf(initialWeek) }
+    // 四个面板同一时刻只展开一个：都摊开时弹窗会顶到屏幕上下缘
     var expanded by remember { mutableStateOf(FoldPanel.None) }
 
-    val targetName = if (weekendDay == 7) "周日" else "周六"
-    val sourceLabel = "星期${weekdayLabels.getOrElse(weekday - 1) { '?' }}"
-    // 目标格子在课表上的完整坐标，用于标题与结果预览（"补到第 4 周周六"）
-    val targetDate = com.hnnujw.course.schedule.ScheduleDates.date(firstWeekDate, targetWeek, weekendDay)
+    val targetDayName = com.hnnujw.course.schedule.scheduleWeekdayShort(targetDay)
+    val sourceLabel = com.hnnujw.course.schedule.scheduleWeekdayLong(weekday)
+    // 目标格子在课表上的完整坐标，用于标题与结果预览（"补到第 8 周周六"）
+    val targetDate = com.hnnujw.course.schedule.ScheduleDates.date(firstWeekDate, targetWeek, targetDay)
         ?.let { "${it.get(Calendar.MONTH) + 1}/${it.get(Calendar.DAY_OF_MONTH)}" }
-    val targetLabel = "第 $targetWeek 周$targetName"
+    val targetLabel = "第 $targetWeek 周$targetDayName"
     // 预览用：该周该天到底有几门课会搬过来。0 的时候确认按钮直接禁用，
     // 免得用户点完才发现"这天没课"。
     val affected = remember(courses, weekday, week) {
         courses.count { !it.isCustom && it.day == weekday && isInWeek(it.weeks, week) }
     }
+    // 目标与源指到同一格 = 把课搬到自己身上：课表上会多出一张完全重叠的卡片，
+    // 看得见却点不中下面那张。以前目标天写死在周六 / 周日、而周末通常没课，
+    // 撞不上；现在目标的周和天都任选，这一格必须堵掉。
+    val isSameSlot = weekday == targetDay && week == targetWeek
 
     // 折叠面板开着时才渲染滚轮。滚轮的初始项由它自己的 remember 决定，
     // 收起再展开会重新从"当前选中值"起步 —— 这正是想要的语义。
     if (expanded == FoldPanel.Week) {
         com.hnnujw.course.ui.system.GlassOptionWheelDialog(
-            title = "补第几周",
+            title = "要补哪一周",
             options = (1..maxWeeks).map { "第 $it 周" },
             selectedIndex = (week - 1).coerceIn(0, maxWeeks - 1),
             onConfirm = { index ->
@@ -1201,11 +1272,39 @@ fun MakeUpCourseDialog(
     }
     if (expanded == FoldPanel.Weekday) {
         com.hnnujw.course.ui.system.GlassOptionWheelDialog(
-            title = "补星期几",
-            options = weekdayLabels.map { "星期$it" },
+            title = "要补哪一天",
+            options = (1..7).map { com.hnnujw.course.schedule.scheduleWeekdayLong(it) },
             selectedIndex = (weekday - 1).coerceIn(0, 6),
             onConfirm = { index ->
                 weekday = index + 1
+                expanded = FoldPanel.None
+            },
+            onDismiss = { expanded = FoldPanel.None }
+        )
+    }
+    if (expanded == FoldPanel.TargetWeek) {
+        // 全学期都给：调休补课常常补在好几周之后（比如假期前那个周末的课
+        // 顺延到假期后某一周），只给"本周"等于没给。
+        com.hnnujw.course.ui.system.GlassOptionWheelDialog(
+            title = "补到第几周",
+            options = (1..maxWeeks).map { "第 $it 周" },
+            selectedIndex = (targetWeek - 1).coerceIn(0, maxWeeks - 1),
+            onConfirm = { index ->
+                targetWeek = index + 1
+                expanded = FoldPanel.None
+            },
+            onDismiss = { expanded = FoldPanel.None }
+        )
+    }
+    if (expanded == FoldPanel.TargetDay) {
+        // 七天全给：补课在现实里确实会落到工作日（比如周一调休、课时顺延），
+        // 把可选项收成"周六 / 周日"只是把调用方的默认值再写死一遍。
+        com.hnnujw.course.ui.system.GlassOptionWheelDialog(
+            title = "补到哪一天",
+            options = (1..7).map { com.hnnujw.course.schedule.scheduleWeekdayShort(it) },
+            selectedIndex = (targetDay - 1).coerceIn(0, 6),
+            onConfirm = { index ->
+                targetDay = index + 1
                 expanded = FoldPanel.None
             },
             onDismiss = { expanded = FoldPanel.None }
@@ -1228,8 +1327,8 @@ fun MakeUpCourseDialog(
                     textAlign = TextAlign.Center
                 )
                 Text(
-                    text = if (targetDate != null) "落在 $targetDate 这一格 · 选要补哪一周的哪一天"
-                    else "选要补哪一周的哪一天，整天的课一起搬过来",
+                    text = if (targetDate != null) "先定补到哪一格（$targetDate）· 再选要补哪一周哪一天的课"
+                    else "先定补到第几周哪一天，再选要补哪一周哪一天的课，整天的课一起搬过来",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -1238,9 +1337,13 @@ fun MakeUpCourseDialog(
         },
         confirmButton = {
             SystemPrimaryButton(
-                text = if (affected > 0) "补到$targetLabel（$affected 门）" else "该周这天没有课",
-                onClick = { onConfirm(weekday, week) },
-                enabled = affected > 0,
+                text = when {
+                    isSameSlot -> "目标和来源是同一格"
+                    affected > 0 -> "补到$targetLabel（$affected 门）"
+                    else -> "该周这天没有课"
+                },
+                onClick = { onConfirm(weekday, week, targetDay, targetWeek) },
+                enabled = affected > 0 && !isSameSlot,
                 modifier = Modifier.fillMaxWidth()
             )
         },
@@ -1256,22 +1359,60 @@ fun MakeUpCourseDialog(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // 两项都点开滚轮（见上面两个 GlassOptionWheelDialog）。
+            // 四项都点开滚轮（见上面四个 GlassOptionWheelDialog）。
             // 原来这里是点击式网格：选"第几周"要在一堆方格里找，选"星期几"要在
             // 七个格子里瞄。换成滑轮后与课表设置里的日期/时间选择是同一套交互。
+            //
+            // 顺序刻意是"**先目标、后源**"，即用户心里的那句人话：
+            // 「我要在**第几周周几**补课」→「补的是**那周那天**的课」。
+            // 先定"补在哪一格"（这一格通常是用户点进来的那一格，往往不用改），
+            // 再定"补什么"。反过来（先源后目标）时用户会以为第一行是"要补的课在哪"，
+            // 结果第一行其实在决定课落到哪。
+            //
+            // ⚠️ 下面**预览行仍是"源 → 目标"**（`A 的课 → 落到 B`）。
+            // 选择和预览的语序不同是刻意的：选择按"提问顺序"，预览按"因果顺序"。
             FoldSetting(
-                label = "补第几周",
+                label = "补到第几周",
+                value = "第 $targetWeek 周",
+                expanded = expanded == FoldPanel.TargetWeek,
+                onToggle = {
+                    expanded = if (expanded == FoldPanel.TargetWeek) FoldPanel.None else FoldPanel.TargetWeek
+                },
+                // 只有"用户动过目标周"才给回退按钮：没动过时它就是初值，
+                // 挂一个"改回第 N 周"的按钮反而像是推荐。
+                summary = if (expanded != FoldPanel.TargetWeek && targetWeek != initialWeek) {
+                    "改回第 $initialWeek 周" to { targetWeek = initialWeek }
+                } else null
+            )
+            FoldSetting(
+                label = "补到哪一天",
+                value = targetDayName,
+                expanded = expanded == FoldPanel.TargetDay,
+                onToggle = {
+                    expanded = if (expanded == FoldPanel.TargetDay) FoldPanel.None else FoldPanel.TargetDay
+                },
+                // 只有"用户动过目标天"才给回退按钮：没动过时它就是初值，
+                // 挂一个"补回周六"的按钮反而像是推荐。
+                summary = if (expanded != FoldPanel.TargetDay && targetDay != initialDay) {
+                    "改回${com.hnnujw.course.schedule.scheduleWeekdayShort(initialDay)}" to {
+                        targetDay = initialDay
+                    }
+                } else null
+            )
+            FoldSetting(
+                label = "要补哪一周",
                 value = "第 $week 周",
                 expanded = expanded == FoldPanel.Week,
                 onToggle = {
                     expanded = if (expanded == FoldPanel.Week) FoldPanel.None else FoldPanel.Week
                 },
-                summary = if (expanded != FoldPanel.Week &&
-                    week != targetWeek.coerceIn(1, maxWeeks)
-                ) "补本周" to { week = targetWeek.coerceIn(1, maxWeeks) } else null
+                // 源的回退按钮写"补本周"：最常见的调休就是"把本周某天的课补到本周另一天"
+                summary = if (expanded != FoldPanel.Week && week != initialWeek) {
+                    "补本周" to { week = initialWeek }
+                } else null
             )
             FoldSetting(
-                label = "补星期几",
+                label = "要补哪一天",
                 value = sourceLabel,
                 expanded = expanded == FoldPanel.Weekday,
                 onToggle = {
@@ -1280,6 +1421,7 @@ fun MakeUpCourseDialog(
             )
 
             // 结果预览：说清"会发生什么"，而不是让用户自己推
+            val canConfirm = affected > 0 && !isSameSlot
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1290,18 +1432,19 @@ fun MakeUpCourseDialog(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Icon(
-                    imageVector = if (affected > 0) Icons.Filled.CheckCircle
+                    imageVector = if (canConfirm) Icons.Filled.CheckCircle
                     else Icons.Filled.Warning,
                     contentDescription = null,
-                    tint = if (affected > 0) MaterialTheme.colorScheme.primary
+                    tint = if (canConfirm) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
-                    text = if (affected > 0) {
-                        "第 $week 周 · $sourceLabel 的 $affected 门课 → 第 $targetWeek 周$targetName"
-                    } else {
-                        "第 $week 周 · $sourceLabel 没有课，换一天或换一周试试"
+                    text = when {
+                        isSameSlot -> "第 $week 周 · $sourceLabel 就是要补到的那一格，换一天或换一周"
+                        affected > 0 ->
+                            "第 $week 周 · $sourceLabel 的 $affected 门课 → 第 $targetWeek 周$targetDayName"
+                        else -> "第 $week 周 · $sourceLabel 没有课，换一天或换一周试试"
                     },
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -1313,7 +1456,7 @@ fun MakeUpCourseDialog(
 }
 
 /** 折叠面板的互斥状态。 */
-private enum class FoldPanel { None, Week, Weekday }
+private enum class FoldPanel { None, Week, Weekday, TargetWeek, TargetDay }
 
 /**
  * 选择器外壳：一行"标签 + 当前值 + 箭头"，点一下打开滚轮弹窗。
@@ -1401,7 +1544,15 @@ fun ScheduleGrid(
      * 加在容器上（`Modifier.padding(paddingValues)`）就成了"内容被推到顶栏下方"，
      * 芯片背后永远是空的。
      */
-    topInset: Dp = 0.dp
+    topInset: Dp = 0.dp,
+    /**
+     * true = 画周六/周日两列；false = 只画周一至周五。
+     *
+     * 隐藏周末时被挡住的课程**不再参与布局**（不是画出来再裁掉）：
+     * 列宽按可见天数均分，5 列比 7 列宽 40%，课程卡片也随之变宽，
+     * 这正是用户打开这个开关想要的收益。
+     */
+    showWeekend: Boolean = true
 ) {
     // 【课表字号】把渲染密度的 fontScale 乘上课表专属倍率后再下发给网格：
     // dp 几何（列宽、行高、留白）一个像素都不动，只有 sp 换算出的字号变大变小。
@@ -1417,16 +1568,25 @@ fun ScheduleGrid(
     val weeklyCourses = remember(courses, currentWeek) {
         courses.filter { isInWeek(it.weeks, currentWeek) }
     }
+    // ScheduleGrid 只服务周视图（日视图走 ScheduleDayList），所以这里恒按 dayView = false 取。
+    val visibleDays = com.hnnujw.course.schedule.scheduleVisibleDays(
+        dayView = false, showWeekend = showWeekend
+    )
+    // 只对"看得见的那几天"布局：隐藏周末时，周六的课既不占列、也不参与行高实测 ——
+    // 否则一节周六的课会把整周的节次行高顶高，而用户看到的是一片空白。
+    val visibleCourses = remember(weeklyCourses, visibleDays) {
+        weeklyCourses.filter { it.day in 1..visibleDays }
+    }
     val timeColumnWidth = scheduleTimeColumnWidth()
     val gridPadding = scheduleGridPadding()
     val dayColumnWidthPx = with(LocalDensity.current) {
         ((constraints.maxWidth - gridPadding.roundToPx() * 2 - timeColumnWidth.roundToPx() -
-            ScheduleTimeColumnShadowWidth.roundToPx()) / 7f).roundToInt()
+            ScheduleTimeColumnShadowWidth.roundToPx()) / visibleDays.toFloat()).roundToInt()
     }
     // 紧凑密度只压「最小行高」：实测文字仍可能把行撑高，字不会被裁。
     // 0.78 与参考项目一致 —— 一屏能多看约四分之一的节次。
     val periodHeight = rememberCoursePeriodHeight(
-        courses, dayColumnWidthPx,
+        visibleCourses, dayColumnWidthPx,
         schedulePeriodHeight() * if (compact) 0.78f else 1f
     )
     val totalHeight = periodHeight * periodCount
@@ -1536,16 +1696,20 @@ fun ScheduleGrid(
                 ) {
                     TimetableBackground(
                         periodCount = periodCount,
-                        periodHeight = periodHeight
+                        periodHeight = periodHeight,
+                        dayCount = visibleDays
                     )
                     TimetableLayout(
-                        courses = weeklyCourses,
+                        courses = visibleCourses,
                         periodCount = periodCount,
                         periodHeight = periodHeight,
+                        dayCount = visibleDays,
                         onCourseClick = onCourseClick
                     )
 
-                    if (weeklyCourses.isEmpty()) {
+                    // 空态按**看得见的课程**判断：只藏了周末课时，网格确实是空的，
+                    // 用户需要的是"为什么空"的线索 —— 由网格下方那条周末提示给出。
+                    if (visibleCourses.isEmpty()) {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
@@ -1577,6 +1741,20 @@ fun ScheduleGrid(
                     )
                 }
             }
+        }
+
+        // 隐藏周末时，把"看不见的课"明说出来。不说的话用户只会觉得"我的课少了两门"，
+        // 而不会想到是自己开的开关。计数为 0 时整条不出现 —— 空提示比没有提示更烦人。
+        val hiddenWeekendCourses = com.hnnujw.course.schedule.hiddenWeekendCourseCount(
+            weeklyCourses.map { it.day },
+            showWeekend
+        )
+        if (hiddenWeekendCourses > 0) {
+            Text(
+                text = "另有 $hiddenWeekendCourses 门周末课程，可在日视图查看",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
     }
@@ -1630,18 +1808,21 @@ private fun rememberCoursePeriodHeight(courses: List<ScheduleCourseUi>, columnWi
 @Composable
 private fun TimetableBackground(
     periodCount: Int,
-    periodHeight: Dp
+    periodHeight: Dp,
+    /** 画几列日列。5 = 隐藏周末，列宽随之变宽（由 Row 的 weight 均分）。 */
+    dayCount: Int = 7
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         // 去斑马纹：透明列 + 极淡分隔线，壁纸从网格间透出
         Row(modifier = Modifier.fillMaxSize()) {
-            repeat(7) { dayIndex ->
+            repeat(dayCount) { dayIndex ->
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
                 ) {
-                    if (dayIndex < 6) {
+                    // 最后一列不画右边界：那是网格卡片的边框，再画一条会变成双线。
+                    if (dayIndex < dayCount - 1) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.CenterEnd)
@@ -1679,6 +1860,8 @@ fun TimetableLayout(
     courses: List<ScheduleCourseUi>,
     periodCount: Int = 12,
     periodHeight: Dp = SchedulePeriodHeight,
+    /** 日列数。列宽 = 可用宽 / dayCount，课程卡片按星期落列。 */
+    dayCount: Int = 7,
     modifier: Modifier = Modifier,
     onCourseClick: (ScheduleCourseUi) -> Unit
 ) {
@@ -1691,7 +1874,7 @@ fun TimetableLayout(
         }
     ) { measurables, constraints ->
         val width = constraints.maxWidth
-        val columnWidth = width / 7f
+        val columnWidth = width / dayCount.toFloat()
         val cardInset = 1.dp.roundToPx()
         val pxPerPeriod = periodHeight.toPx()
 
@@ -1715,7 +1898,7 @@ fun TimetableLayout(
         layout(width, (periodCount * pxPerPeriod).roundToInt()) {
             placeables.forEachIndexed { index, placeable ->
                 val course = courses[index]
-                val dayIndex = (course.day - 1).coerceIn(0, 6)
+                val dayIndex = (course.day - 1).coerceIn(0, dayCount - 1)
                 val startPeriodIndex = (course.startPeriod - 1).coerceIn(0, periodCount - 1)
 
                 val x = (dayIndex * columnWidth).roundToInt() + cardInset

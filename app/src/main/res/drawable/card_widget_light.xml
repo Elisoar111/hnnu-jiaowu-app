@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面卡片的浅色底。
+
+  近乎不透明（#FA = 98%）是刻意的：桌面组件底下压着壁纸，而壁纸的颜色完全不可控 ——
+  半透明的底会让同一份文字在深色壁纸上读不清、在花壁纸上糊成一片。参考实现同样选了
+  98% 不透明 + 18dp 圆角、不描边，这里跟它保持一致。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FAF8FAFD" />
+    <corners android:radius="18dp" />
+</shape>

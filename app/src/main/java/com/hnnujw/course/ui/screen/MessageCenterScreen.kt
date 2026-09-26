@@ -177,7 +177,7 @@ fun MessageCenterScreen(
         actions = {
             if (detail == null) {
                 // 一键已读：把当前列表里的消息全部标为已读（本地），红点随之消失。
-                // 常显（同二课消息页 / 选课页 DoneAll 图标，仅点击无长按），无未读时点了只提示。
+                // 常显（同二课消息页的 DoneAll 图标，仅点击无长按），无未读时点了只提示。
                 SystemIconButton(Icons.Default.DoneAll, "一键已读", {
                     if (unread > 0) {
                         MessageCenterManager.markAllRead(context, accountKey, messages)

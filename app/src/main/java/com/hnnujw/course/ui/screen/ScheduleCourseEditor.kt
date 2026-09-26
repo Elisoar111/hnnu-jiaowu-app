@@ -55,7 +55,7 @@ fun ScheduleCourseEditor(initial: CustomCourse, existing: List<ScheduleCourseUi>
                 OutlinedTextField(end, { end = it }, label = { Text("结束节次") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
             }
-            OutlinedTextField(weeks, { weeks = it }, label = { Text("周次") }, supportingText = { Text("例如：1-16周(单),18周") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(weeks, { weeks = it }, label = { Text("周次") }, supportingText = { Text("例如：1-16周（单），18周") }, modifier = Modifier.fillMaxWidth())
             androidx.compose.animation.AnimatedVisibility(attempted && error != null) {
                 Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
             }

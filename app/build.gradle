@@ -88,8 +88,28 @@ android {
     // 本地出包兜底：没有正式签名配置时退回 debug keystore。
     // 否则 assembleRelease 只产出 app-release-unsigned.apk，装不上，
     // 每次都得手工补签（而且下一次 packageRelease 还会把它删掉）。
+    //
+    // ⚠️ 2026-09-24 审计结论：这条兜底曾经不是"本地便利"而是"线上现实"。
+    //    keytool -printcert 比对过：Gitee 上 v1.2.4 / v1.2.5 的 app-release.apk
+    //    与本机 ~/.android/debug.keystore 的证书 SHA-256 完全相同，
+    //    也就是说发到用户手机上的包其实全是 debug 密钥签的。
+    //    原因是 release-key.jks 一直不存在、local.properties 也没有三个口令，
+    //    hasReleaseSigning 恒为 false，于是下面第 66 行那道 GradleException 闸门
+    //    因 releaseKeystoreFile == null 而根本没机会触发，静默走了兜底。
+    //    另一层后果更麻烦：debug keystore 是每台机器各生成一把，换台机器构建就会
+    //    产出不同签名的包，用户无法覆盖安装。
+    //    现已改为真实密钥签名（app/release-key.jks + local.properties 三个键）。
+    //    这段兜底只保留为"确实没凭据时本地还能自测"的最后手段；
+    //    发布侧另有一道独立的闸门：scripts/publish.py 会校验包内证书指纹必须等于
+    //    EXPECTED_CERT_SHA256，debug 签名的包一律拒绝上传。
     def fallbackStore = file("${System.getProperty("user.home")}/.android/debug.keystore")
     def hasFallbackSigning = !hasReleaseSigning && fallbackStore.exists()
+
+    if (hasFallbackSigning) {
+        println "⚠️  未找到正式签名凭据：release 将由 debug keystore 签名（仅供本地自测，禁止发布）。"
+        println "    补凭据：把 release-key.jks 放到 app/ 下，并在 local.properties 填"
+        println "    RELEASE_STORE_PASSWORD / RELEASE_KEY_ALIAS / RELEASE_KEY_PASSWORD。"
+    }
 
     signingConfigs {
         // 内置 debug 签名也要 v1：Debug 包同样会被发给别人装，
@@ -140,6 +160,21 @@ android {
             signingConfig signingConfigs.debug
             buildConfigField "boolean", "UI_PREVIEW", "true"
         }
+        // 性能验证变体：与 release 同为 R8 优化产物，但独立包名、debug 签名、可 profile，
+        // 专门用来量「混淆+优化之后」的真实帧时间（release 包不可 profile，量不了）。
+        //
+        // 它没有默认执行者，必须显式指定，用法（2026-09-24 实测可用，
+        // assembleBenchmark 4m38s 出 app-benchmark.apk）：
+        //   ./gradlew :app:assembleBenchmark                     # 只出包
+        //   ./gradlew :app:assembleBenchmarkAndroidTest -PuiTestBuildType=benchmark
+        //                                                        # 用 release 优化产物跑仪器测试
+        // 为什么必须带 -PuiTestBuildType：testBuildType 默认是 debug（见下面 testBuildType），
+        // 而性能类仪器测试都带 assumeTrue(BuildConfig.UI_PREVIEW)，默认变体下会被整批跳过。
+        // buildType 里 UI_PREVIEW=true 就是为了让这批测试在 benchmark 变体下真的执行。
+        //
+        // 配套：app/benchmark-rules.pro 保住 androidx.tracing / Compose Recomposer，
+        // 否则 R8 会把仪器读帧/重组指标要用的类裁掉；app/src/benchmark/AndroidManifest.xml
+        // 声明 <profileable android:shell="true"/> 供 Perfetto/Macrobenchmark 采样。
         benchmark {
             initWith release
             proguardFile 'benchmark-rules.pro'
@@ -197,9 +232,16 @@ dependencies {
     implementation 'androidx.compose.material:material-icons-extended'
     implementation 'androidx.compose.foundation:foundation'
     
-    // Compose Navigation
-    implementation 'androidx.navigation:navigation-compose:2.7.7'
-    
+    // 这里原来有一行 `androidx.navigation:navigation-compose:2.7.7`，2026-09-24 删除。
+    // 依据：全仓 app/src 搜 NavHost / rememberNavController / androidx.navigation 零命中，
+    // dependencyInsight 显示没有任何其它库要求 navigation（那一行就是整棵依赖树的根），
+    // R8 早已把 androidx.navigation.* 全部裁掉（usage.txt 222 条、mapping.txt 0 条），
+    // 所以它对发布包体积零影响，占的只是 debug 包与编译 classpath。
+    // 之所以要删而不是留着：2.7.7 与 Compose BOM 2026.01（Compose 1.9 系）差两个大版本，
+    // 而 BOM 与 kotlin.plugin.compose 都不能降——哪天有人真写 NavHost，就会拿 2.7.7 的 API
+    // 去接 1.9 的 Compose。本项目导航靠 Activity + Tab 枚举，不需要导航库。
+    // 将来真要引入：直接上当前最新版，别把 2.7.7 捡回来。
+
     // Compose Debug Tools
     debugImplementation 'androidx.compose.ui:ui-tooling'
     debugImplementation 'androidx.compose.ui:ui-test-manifest'

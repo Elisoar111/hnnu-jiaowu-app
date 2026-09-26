@@ -47,13 +47,6 @@ class AcademicAuthenticatedDeviceTest {
             val login = adapter.validateSession()
             assertEquals("Session validation failed for $system", AcademicStatus.SUCCESS, login.status)
             assertTrue("No student identity for $system", login.studentId.isNotBlank())
-            println("Academic live stage: $system course context")
-            val courseContext = adapter.loadCourseContext()
-            println("Academic live stage: $system course list")
-            val courses = adapter.listCourses(courseContext, CourseQuery(pageSize = 100))
-            if (courses.isNotEmpty()) assertTrue(adapter.listSections(courses.first()).isNotEmpty())
-            println("Academic live stage: $system selected courses")
-            val selected = adapter.selected(courseContext)
             val study = AcademicGatewayFactory.createStudy(school, key)
             println("Academic live stage: $system study data")
             val catalog = study.catalog()
@@ -64,7 +57,7 @@ class AcademicAuthenticatedDeviceTest {
             assertTrue("Missing known grade history for $system", grades.isNotEmpty())
             assertTrue("Missing grade semesters for $system", grades.all { it.term.isNotBlank() })
             assertTrue(schedule.all { it.day in 1..7 && it.startPeriod <= it.endPeriod && it.weeks.isNotBlank() })
-            println("Device read-only $system: scopes=${courseContext.scopes.size}, courses=${courses.size}, selected=${selected.size}, schedule=${schedule.size}, grades=${grades.size}, exams=${exams.size}")
+            println("Device read-only $system: schedule=${schedule.size}, grades=${grades.size}, exams=${exams.size}")
             verified++
 
             if (args.getString("academicPrepareUi") == "true") {
@@ -103,11 +96,7 @@ class AcademicAuthenticatedDeviceTest {
                     }
                     assertEquals("Cookie-only login must not require a saved password", "", user.username)
                     val account = user.currentAccountStorageKey
-                    val appCourses = AcademicCourseBridge.listCourses(registered, account)
-                    val appSelected = AcademicCourseBridge.selectedCourses(registered, account)
                     val appStudy = AcademicStudyBridge.reader(registered, account)
-                    assertEquals(courses.size, appCourses.courses.size)
-                    assertEquals(selected.size, appSelected.size)
                     assertEquals(grades.size, appStudy.grades().grades.size)
                     println("Cookie-only app session prepared and read through UI bridges: $system")
                 } finally {

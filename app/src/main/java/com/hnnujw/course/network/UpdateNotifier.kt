@@ -66,13 +66,25 @@ object UpdateNotifier {
         )
 
         val summary = info.notes.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+        // 强制更新走另一套文案：后台通知是用户唯一能看到它的地方（他还没打开 App），
+        // 标题里必须自带"这条要当真"的信号，不能和普通版本更新长得一样。
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_course_reminder)
-            .setContentTitle("发现新版本 v${info.versionName}")
-            .setContentText(summary.ifBlank { "点击查看更新说明并下载安装包" })
+            .setContentTitle(
+                if (info.forceUpdate) "建议尽快更新到 v${info.versionName}"
+                else "发现新版本 v${info.versionName}"
+            )
+            .setContentText(
+                if (info.forceUpdate) "本次为强制更新，请更新后继续使用"
+                else summary.ifBlank { "点击查看更新说明并下载安装包" }
+            )
             .setStyle(
                 NotificationCompat.BigTextStyle()
-                    .bigText(info.notes.ifBlank { "点击下载最新版本" })
+                    .bigText(
+                        if (info.forceUpdate) "本次为强制更新，请更新后继续使用。\n\n" +
+                            info.notes.ifBlank { "点击下载最新版本" }
+                        else info.notes.ifBlank { "点击下载最新版本" }
+                    )
             )
             .setContentIntent(content)
             .setAutoCancel(true)

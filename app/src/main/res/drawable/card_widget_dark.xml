@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面卡片的深色底。与浅色版同一套口径：98% 不透明 + 18dp 圆角 + 不描边。
+  文字颜色在 CardWidgetRenderer 里同步换成浅色一套（那里读的是 Configuration.uiMode）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FA20262F" />
+    <corners android:radius="18dp" />
+</shape>

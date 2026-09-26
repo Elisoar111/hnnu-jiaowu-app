@@ -2,44 +2,31 @@ package com.hnnujw.course.demo
 
 import androidx.compose.ui.graphics.Color
 import com.hnnujw.course.model.Course
-import com.hnnujw.course.model.CourseFilter
 import com.hnnujw.course.model.SchoolConfig
 import com.hnnujw.course.ui.screen.ExamItemUi
 import com.hnnujw.course.ui.screen.GradeItemUi
 import com.hnnujw.course.ui.screen.OverallStatsUi
 import com.hnnujw.course.secondclass.SecondClassModule
+import com.hnnujw.course.secondclass.SecondClassPointGroup
+import com.hnnujw.course.secondclass.SecondClassPointLedger
+import com.hnnujw.course.secondclass.SecondClassPointRecord
 import com.hnnujw.course.secondclass.SecondClassProfile
 import com.hnnujw.course.secondclass.SecondClassRankBoard
 import com.hnnujw.course.secondclass.SecondClassRankEntry
 import com.hnnujw.course.secondclass.SecondClassRankLevel
 import com.hnnujw.course.secondclass.SecondClassSnapshot
 import com.hnnujw.course.ui.screen.ScheduleCourseUi
-import com.hnnujw.course.utils.CourseParser
 
 /**
  * 宣传片和首次体验共用的本地演示内容。
  *
- * 每个读取函数都返回新对象，因为 [Course] 是可变模型；页面中的选课等演示操作
- * 不应修改下一次进入演示模式时的基线数据。选课队列只记录当前演示会话的班级 ID。
+ * 每个读取函数都返回新对象，因为底层模型是可变的；页面中的演示操作
+ * 不应修改下一次进入演示模式时的基线数据。
  */
 object DemoData {
     const val SCHOOL_ID = "demo"
     const val ACCOUNT_KEY = "demo::preview"
     val currentTerm = com.hnnujw.course.academic.AcademicTerm("2025-2026-2")
-
-    private val defaultGrabClassIds = linkedSetOf("CS204-01", "AI310-01", "DES116-01", "PSY108-01", "PE087-01")
-    private var sessionGrabClassIds = defaultGrabClassIds.toMutableSet()
-
-    @Synchronized
-    fun resetSession() {
-        sessionGrabClassIds = defaultGrabClassIds.toMutableSet()
-    }
-
-    @Synchronized
-    fun addToGrabQueue(course: Course): Boolean {
-        val classId = course.classId.takeIf(String::isNotBlank) ?: return false
-        return sessionGrabClassIds.add(classId)
-    }
 
     fun school(): SchoolConfig = SchoolConfig(
         SCHOOL_ID,
@@ -47,30 +34,6 @@ object DemoData {
         "demo.invalid",
         "https"
     )
-
-    fun availableCourses(): List<Course> = listOf(
-        course("CS204", "CS204-01", "数据结构与算法", "陈思远", "周一 1-2节", "博学楼 A203", "3.5", 60, 54, "01"),
-        course("CS204", "CS204-02", "数据结构与算法", "周若琳", "周三 3-4节", "博学楼 A205", "3.5", 60, 60, "01"),
-        course("AI310", "AI310-01", "人工智能导论", "林予安", "周二 3-4节", "创新中心 302", "2.5", 48, 45, "01"),
-        course("WEB221", "WEB221-01", "Web 应用开发", "许知行", "周四 5-6节", "工训楼 B401", "3.0", 50, 39, "01"),
-        course("DES116", "DES116-01", "交互设计基础", "沈嘉禾", "周五 1-2节", "艺术楼 208", "2.0", 40, 40, "10"),
-        course("PSY108", "PSY108-01", "积极心理学", "顾清和", "周三 7-8节", "博雅楼 101", "1.5", 120, 118, "10"),
-        course("ART205", "ART205-01", "电影音乐赏析", "宋闻溪", "周二 9-10节", "大学生活动中心", "1.5", 100, 92, "10"),
-        course("ECO130", "ECO130-01", "经济学思维", "梁景明", "周四 1-2节", "博雅楼 305", "2.0", 80, 75, "10"),
-        course("PE087", "PE087-01", "羽毛球提高班", "方屿", "周五 5-6节", "东区体育馆", "1.0", 30, 29, "10"),
-        course("ENG240", "ENG240-01", "学术英语写作", "何沐言", "周一 7-8节", "博学楼 C206", "2.0", 36, 31, "10")
-    )
-
-    fun selectedCourses(): List<Course> = listOf(
-        course("MATH201", "MATH201-03", "概率论与数理统计", "唐亦辰", "周一 3-4节", "博学楼 B202", "3.0", 60, 58, "01", selected = true),
-        course("OS301", "OS301-01", "操作系统", "叶星河", "周二 5-6节", "信息楼 404", "3.5", 55, 52, "01", selected = true),
-        course("NET302", "NET302-02", "计算机网络", "陆明川", "周四 3-4节", "信息楼 406", "3.0", 55, 54, "01", selected = true)
-    )
-
-    @Synchronized
-    fun grabQueue(): List<Course> = availableCourses()
-        .filter { it.classId in sessionGrabClassIds }
-        .map(Course::copy)
 
     fun scheduleCourses(): List<ScheduleCourseUi> = listOf(
         schedule("数据结构", "陈思远", "博学楼 A203", 1, 1, 2, Color(0xFF5C6BC0)),
@@ -166,6 +129,115 @@ object DemoData {
         )
     }
 
+    /**
+     * 「分类与学期统计」的演示数据。
+     *
+     * 刻意构造成**账目完全对得上**（分类合计 = 学期合计 = 128.5，与小计一致），
+     * 让用户在演示模式看到的是"理想状态"；真实站点上常见的"有 N 分没有明细"
+     * 提示不必在这里演示 —— 那属于异常态，演示时反而让人以为应用坏了。
+     */
+    fun secondClassPointLedger(): SecondClassPointLedger {
+        fun rec(name: String, hours: Double, classify: String, time: Long, type: Int) =
+            SecondClassPointRecord(
+                name = name,
+                hours = hours,
+                classifyName = classify,
+                time = time,
+                sourceType = type,
+            )
+        val t2025 = 1_764_547_200_000L // 2025-12-01
+        val t2026 = 1_772_956_800_000L // 2026-03-15
+
+        return SecondClassPointLedger(
+            byClassify = listOf(
+                SecondClassPointGroup(
+                    name = "文体活动",
+                    siteTotal = 31.0,
+                    required = 20.0,
+                    records = listOf(
+                        rec("校园歌手大赛决赛", 18.0, "文体活动", t2026, 2),
+                        rec("春季运动会志愿服务", 13.0, "文体活动", t2025, 1),
+                    ),
+                ),
+                SecondClassPointGroup(
+                    name = "实践实习",
+                    siteTotal = 26.5,
+                    required = 20.0,
+                    records = listOf(
+                        rec("暑期社会实践（乡村振兴调研）", 20.0, "实践实习", t2025, 2),
+                        rec("专业认知实习", 6.5, "实践实习", t2026, 1),
+                    ),
+                ),
+                SecondClassPointGroup(
+                    name = "工作履历",
+                    siteTotal = 22.0,
+                    required = 18.0,
+                    records = listOf(
+                        rec("担任班级团支书", 12.0, "工作履历", t2025, 2),
+                        rec("院学生会宣传部干事", 10.0, "工作履历", t2026, 2),
+                    ),
+                ),
+                SecondClassPointGroup(
+                    name = "思想成长",
+                    siteTotal = 18.0,
+                    required = 12.0,
+                    records = listOf(
+                        rec("青年大学习（累计 12 期）", 12.0, "思想成长", t2025, 1),
+                        rec("主题团日活动", 6.0, "思想成长", t2026, 3),
+                    ),
+                ),
+                SecondClassPointGroup(
+                    name = "志愿公益",
+                    siteTotal = 14.0,
+                    required = 16.0,
+                    records = listOf(rec("社区敬老院志愿服务", 14.0, "志愿公益", t2026, 1)),
+                ),
+                SecondClassPointGroup(
+                    name = "创新创业",
+                    siteTotal = 9.0,
+                    required = 10.0,
+                    records = listOf(rec("互联网+创新创业大赛校级三等奖", 9.0, "创新创业", t2026, 2)),
+                ),
+                SecondClassPointGroup(
+                    name = "技能特长",
+                    siteTotal = 8.0,
+                    records = listOf(rec("普通话水平测试二级甲等", 8.0, "技能特长", t2025, 3)),
+                ),
+            ),
+            byTerm = listOf(
+                SecondClassPointGroup(
+                    name = "2025-2026-2",
+                    siteTotal = 47.5,
+                    termNumber = "4",
+                    unit = "积分",
+                    records = listOf(
+                        rec("校园歌手大赛决赛", 18.0, "文体活动", t2026, 2),
+                        rec("社区敬老院志愿服务", 14.0, "志愿公益", t2026, 1),
+                        rec("担任班级团支书", 6.5, "工作履历", t2026, 2),
+                        rec("互联网+创新创业大赛校级三等奖", 9.0, "创新创业", t2026, 2),
+                    ),
+                ),
+                SecondClassPointGroup(
+                    name = "2025-2026-1",
+                    siteTotal = 81.0,
+                    termNumber = "3",
+                    unit = "积分",
+                    records = listOf(
+                        rec("暑期社会实践（乡村振兴调研）", 20.0, "实践实习", t2025, 2),
+                        rec("春季运动会志愿服务", 13.0, "文体活动", t2025, 1),
+                        rec("担任班级团支书", 5.5, "工作履历", t2025, 2),
+                        rec("青年大学习（累计 12 期）", 12.0, "思想成长", t2025, 1),
+                        rec("专业认知实习", 6.5, "实践实习", t2025, 1),
+                        rec("院学生会宣传部干事", 10.0, "工作履历", t2025, 2),
+                        rec("主题团日活动", 6.0, "思想成长", t2025, 3),
+                        rec("普通话水平测试二级甲等", 8.0, "技能特长", t2025, 3),
+                    ),
+                ),
+            ),
+            profileScore = 128.5,
+        )
+    }
+
     fun semesterGrades(): List<GradeItemUi> = listOf(
         grade("数据结构与算法", "94", "3.5", "4.2", "专业必修", "CS204", "平时(30%): 96 | 期末(70%): 93"),
         grade("概率论与数理统计", "88", "3.0", "3.8", "专业必修", "MATH201", "平时(30%): 91 | 期末(70%): 87"),
@@ -198,62 +270,6 @@ object DemoData {
         ExamItemUi("概率论与数理统计", "2026-06-23 09:00-11:00", "博雅楼 201", "07", "期末考试", "唐亦辰"),
         ExamItemUi("人工智能导论", "2026-06-25 14:00-16:00", "创新中心 301", "15", "课程考核", "林予安")
     )
-
-    fun filterCategories(): List<CourseParser.FilterCategory> = listOf(
-        CourseParser.FilterCategory(
-            "课程类别",
-            "kclb_id_list",
-            listOf(
-                CourseParser.FilterOption("01", "专业课程"),
-                CourseParser.FilterOption("10", "通识选修")
-            )
-        ),
-        CourseParser.FilterCategory(
-            "上课星期",
-            "sksj_list",
-            listOf(
-                CourseParser.FilterOption("1", "周一"),
-                CourseParser.FilterOption("2", "周二"),
-                CourseParser.FilterOption("3", "周三"),
-                CourseParser.FilterOption("4", "周四"),
-                CourseParser.FilterOption("5", "周五")
-            )
-        ),
-        CourseParser.FilterCategory(
-            "有无余量",
-            "yl_list",
-            listOf(
-                CourseParser.FilterOption("1", "有余量"),
-                CourseParser.FilterOption("0", "已满")
-            )
-        )
-    )
-
-    fun filterCourses(courses: List<Course>, filter: CourseFilter): List<Course> {
-        val weekdayLabels = mapOf("1" to "周一", "2" to "周二", "3" to "周三", "4" to "周四", "5" to "周五")
-        return courses.filter { course ->
-            val categoryMatches = filter.kclbIdList.isNullOrEmpty() || course.kklxdm in filter.kclbIdList.orEmpty()
-            val weekdayMatches = filter.sksjList.isNullOrEmpty() || filter.sksjList.orEmpty().any { key ->
-                weekdayLabels[key]?.let(course.time::contains) == true
-            }
-            val availabilityMatches = filter.ylList.isNullOrEmpty() || filter.ylList.orEmpty().any { key ->
-                when (key) {
-                    "1" -> course.available > 0
-                    "0" -> course.available == 0
-                    else -> false
-                }
-            }
-            val classMatches = filter.jxbmcList.isNullOrEmpty() || filter.jxbmcList.orEmpty().any {
-                course.jxbmc.contains(it, ignoreCase = true)
-            }
-            val searchMatches = filter.searchInput.isNullOrBlank() || listOf(
-                course.name,
-                course.teacher,
-                course.courseId
-            ).any { it.contains(filter.searchInput.orEmpty(), ignoreCase = true) }
-            categoryMatches && weekdayMatches && availabilityMatches && classMatches && searchMatches
-        }
-    }
 
     // ── 第二课堂（演示）─────────────────────────────────────────────────
     // 演示模式专用的虚构数据，全部为编造，不含任何真实个人信息。

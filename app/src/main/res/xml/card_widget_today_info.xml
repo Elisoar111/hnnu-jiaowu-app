@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 今日课表：桌面卡片组件的声明。骨架与其它六种卡片共用 @layout/card_widget，
+     差别只在最小尺寸与选择器里的说明。updatePeriodMillis 只是兜底 —— 真正的
+     刷新靠 CardWidgetUpdater 的缓存监听与边界闹钟。 -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/card_widget_today_description"
+    android:initialLayout="@layout/card_widget"
+    android:minHeight="110dp"
+    android:minResizeHeight="110dp"
+    android:minResizeWidth="250dp"
+    android:minWidth="250dp"
+    android:previewLayout="@layout/card_widget"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="4"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

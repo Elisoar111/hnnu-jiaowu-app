@@ -199,6 +199,14 @@ object AppearanceSettingsManager {
     private const val KEY_GLASS_EFFECT = "glass_effect_enabled"
 
     /**
+     * 底部导航栏是否随滚动自动收起。
+     *
+     * 默认 **true**：向下浏览收起、向上浏览展开是本项目一直以来的行为，这个开关是
+     * "把已有行为变成可关掉的"，不能替老用户改默认值。
+     */
+    private const val KEY_NAV_BAR_AUTO_COLLAPSE = "nav_bar_auto_collapse_enabled"
+
+    /**
      * 是否在第二课堂页展示「班级同学的完整排名」。
      *
      * 与成绩/名次无关，纯粹是隐私观感：有人不想让自己的名次旁边整整齐齐列着
@@ -242,6 +250,15 @@ object AppearanceSettingsManager {
      * 不需要任何新的渲染代码。
      */
     var glassEffectEnabled by mutableStateOf(true)
+        private set
+
+    /**
+     * 底部导航栏是否随滚动自动收起（**默认开**）。
+     *
+     * 关掉之后底栏立即展开并一直保持展开 —— 判据落在 `MainActivity` 的
+     * `navBarScrollConnection` 里（见那里的注释），这里只负责存偏好。
+     */
+    var navBarAutoCollapseEnabled by mutableStateOf(true)
         private set
 
     /**
@@ -326,6 +343,7 @@ object AppearanceSettingsManager {
             ?.let { name -> runCatching { WallpaperPreset.valueOf(name) }.getOrNull() }
             ?: WallpaperPreset.Aurora
         glassEffectEnabled = prefs?.getBoolean(KEY_GLASS_EFFECT, true) ?: true
+        navBarAutoCollapseEnabled = prefs?.getBoolean(KEY_NAV_BAR_AUTO_COLLAPSE, true) ?: true
         showClassRank = prefs?.getBoolean(KEY_SHOW_CLASS_RANK, true) ?: true
         appFont = prefs?.getString(KEY_APP_FONT, null)
             ?.let { name -> runCatching { AppFontOption.valueOf(name) }.getOrNull() }
@@ -412,6 +430,18 @@ object AppearanceSettingsManager {
         if (showClassRank == enabled) return
         showClassRank = enabled
         prefs?.edit()?.putBoolean(KEY_SHOW_CLASS_RANK, enabled)?.apply()
+    }
+
+    /**
+     * 「底部导航栏自动收起」开关。同款写法：state 驱动 + 落盘持久化。
+     *
+     * 关掉时只写偏好 —— "立刻展开"由 `MainActivity` 的 `LaunchedEffect(..., enabled)`
+     * 负责（它同时清掉滚动方向的累计值），否则会留下"关了但底栏还是收着的"这一帧。
+     */
+    fun updateNavBarAutoCollapse(enabled: Boolean) {
+        if (navBarAutoCollapseEnabled == enabled) return
+        navBarAutoCollapseEnabled = enabled
+        prefs?.edit()?.putBoolean(KEY_NAV_BAR_AUTO_COLLAPSE, enabled)?.apply()
     }
 
     /**

@@ -5,9 +5,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     
-    <!-- 后台服务权限 -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 通知：课程提醒 / 考试提醒 / 消息中心 / 版本更新 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- 相册读取：只用于"用户自己挑一张图当头像"。
@@ -27,6 +25,20 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- 上课自动模式：切换勿扰需要"勿扰模式访问权限"。
+         这是**特殊权限**，只能由用户在系统设置里授予（ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS），
+         应用无法自行申请。没有它时 setInterruptionFilter 会抛 SecurityException，静默无效，
+         所以代码里是"没权限就绝不施加、施加了必须能还原"。
+         不需要 MODIFY_AUDIO_SETTINGS：从 Android N 起改响铃模式本身就等价于开勿扰、
+         且同样要求本权限，所以自动模式只走 setInterruptionFilter 一条路径。 -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
+    <!-- 后台电费巡检：申请加入"电池优化白名单"。
+         被优化掉的 App 在部分 ROM 上收不到 RTC_WAKEUP 闹钟，表现为"电费提醒时有时无"。
+         声明它只是让 ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 这个 Intent 可用，
+         是否加入仍由用户在系统弹窗里决定。 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     
     <!-- 应用更新权限 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -110,7 +122,6 @@
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
-        <activity android:name=".CourseDetailActivity" android:exported="false" android:configChanges="uiMode" />
 
         <!-- 扫码相机页强制竖屏：签到码二维码没有方向性，但取景框/提示文案是按竖屏
              设计的；zxing 库自己声明的 CaptureActivity 不锁方向，这里覆盖它。 -->
@@ -136,17 +147,46 @@
             android:configChanges="uiMode"
             android:exported="false"
             android:screenOrientation="portrait" />
-        <!-- 学工系统（xg.hnnu.edu.cn）：日常请假 + 节假日去向登记，只读展示。
-             该站只有 http，域名已登记在 network_security_config 的明文白名单里。 -->
-        <activity
-            android:name=".XuegongActivity"
-            android:configChanges="uiMode"
-            android:exported="false"
-            android:screenOrientation="portrait" />
 
         <!-- 教务系统「考级项目报名」：复用教务会话（jwgl https）；测试账号只读演示 -->
         <activity
             android:name=".KaojiActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- 教务系统「空闲教室查询」（cdjy/cdjy_cxKxcdlb.html，gnmkdm=N2155）：
+             复用教务会话，只发查询页 GET 与 doType=query 查询 POST。
+             不实现网页上的「场地借用申请」——那是向学校提交写请求。 -->
+        <activity
+            android:name=".EmptyRoomActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- 一卡通（yktapp.hnnu.edu.cn）：校园卡余额 + 宿舍电费查看，只读。
+             认证走独立的 synjones-auth 令牌，不复用教务会话。
+             不提供充值/支付：全站无支付接口，充值是远端子应用。 -->
+        <activity
+            android:name=".YktActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- 一卡通登录页：WebView 走学校统一身份认证（站点只有 sso，无账密接口），
+             从 Cookie 里接管 synjones-auth 令牌。独立存储目录，与教务 Cookie 隔离。
+             登录成功后令牌落盘，后台电费巡检据此工作。 -->
+        <activity
+            android:name=".YktLoginActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- 一卡通官方页面只读查看器（消费明细/账单等在服务端 jQuery 子应用里，
+             不带令牌直接访问 401，无法在客户端复刻，只能交给官方页面渲染）。
+             与登录页共用 ykt 存储目录以便免二次认证；本页不导出任何凭据。 -->
+        <activity
+            android:name=".YktWebActivity"
             android:configChanges="uiMode"
             android:exported="false"
             android:screenOrientation="portrait" />
@@ -160,11 +200,6 @@
             android:exported="false"
             android:screenOrientation="portrait" />
         
-        <!-- Background grab service -->
-        <service
-            android:name=".service.GrabService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
         
         <!-- Scheduled grab alarm receiver -->
         <receiver android:name=".schedule.CourseReminderReceiver" android:exported="false">
@@ -177,37 +212,67 @@
             </intent-filter>
         </receiver>
 
-        <!-- 桌面小组件（双课程卡片 / 简洁单课 / 今日时间轴）：只读本地课表缓存。
-             刷新依赖缓存变化监听 + 边界闹钟；开机 / 应用更新 / 改时间 / 改时区 / 改日期重画。 -->
-        <receiver android:name=".schedule.ScheduleWidgetProvider" android:exported="false" android:label="@string/schedule_widget_name">
+        <!-- 上课自动模式的上下课闹钟。只有显式 PendingIntent 会打到它，没有任何
+             intent-filter（开机/改时间的补偿走上面的 CourseReminderReceiver，它最后会
+             整轮 reconcile，自动模式的状态在那一轮里一并对齐）。 -->
+        <receiver android:name=".schedule.AutoModeReceiver" android:exported="false" />
+
+        <!-- 桌面小组件：组件工作台里的七种卡片各自一个（下一节课 / 今日课表 / 今日时间轴 /
+             考试倒计时 / 成绩概览 / 第二课堂积分 / 未读消息），只读本地缓存，不联网。
+             每个 receiver 都要 exported=false：系统发 APPWIDGET_UPDATE 用的是显式组件名，
+             外部应用无法伪造（这一点沿用旧课表组件的做法）。
+             刷新入口统一走 .widgetboard.CardWidgetUpdater，见下方 CardWidgetRefreshReceiver。 -->
+        <receiver android:name=".widgetboard.NextCourseCardWidget" android:exported="false" android:label="@string/card_widget_next_name">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/card_widget_next_info" />
+        </receiver>
+        <receiver android:name=".widgetboard.TodayScheduleCardWidget" android:exported="false" android:label="@string/card_widget_today_name">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/card_widget_today_info" />
+        </receiver>
+        <receiver android:name=".widgetboard.TodayTimelineCardWidget" android:exported="false" android:label="@string/card_widget_timeline_name">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/card_widget_timeline_info" />
+        </receiver>
+        <receiver android:name=".widgetboard.ExamCountdownCardWidget" android:exported="false" android:label="@string/card_widget_exam_name">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/card_widget_exam_info" />
+        </receiver>
+        <receiver android:name=".widgetboard.GradesOverviewCardWidget" android:exported="false" android:label="@string/card_widget_grades_name">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/card_widget_grades_info" />
+        </receiver>
+        <receiver android:name=".widgetboard.SecondClassOverviewCardWidget" android:exported="false" android:label="@string/card_widget_secondclass_name">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/card_widget_secondclass_info" />
+        </receiver>
+        <receiver android:name=".widgetboard.MessageUnreadCardWidget" android:exported="false" android:label="@string/card_widget_message_name">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/card_widget_message_info" />
+        </receiver>
+
+        <!-- 桌面卡片的非组件刷新入口：开机 / 应用更新 / 改时间时区日期都会让"正在上课"
+             这类判断失真，且系统会清空所有闹钟，需要重画并按新时间重排边界闹钟。
+             单独一个 receiver 而不是把这几条 action 挂到 7 个组件上 —— 否则开机时
+             会触发 7 次全量重画，而这 7 次做的事完全一样。 -->
+        <receiver android:name=".widgetboard.CardWidgetRefreshReceiver" android:exported="false">
             <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
                 <action android:name="android.intent.action.DATE_CHANGED" />
             </intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/schedule_widget_info" />
-        </receiver>
-        <receiver android:name=".schedule.ScheduleSingleWidgetProvider" android:label="@string/schedule_widget_single_name" android:exported="false">
-            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/schedule_widget_single_info" />
-        </receiver>
-        <receiver android:name=".schedule.ScheduleTimelineWidgetProvider" android:label="@string/schedule_widget_timeline_name" android:exported="false">
-            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/schedule_widget_timeline_info" />
         </receiver>
 
+        <!-- 电费余额巡检：每天一次，余额低于阈值就发系统通知。
+             开机 / 应用更新 / 改时间后闹钟会被系统清掉，靠这些广播重排。
+             只在用户曾打开过一卡通页面（本地有 synjones-auth 令牌）时才真正巡检。 -->
         <receiver
-            android:name=".receiver.GrabAlarmReceiver"
+            android:name=".ykt.YktAlertReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.hnnujw.course.action.SCHEDULED_GRAB" />
-            </intent-filter>
-            <!-- 重启 / 应用更新 / 改时间后系统会清空所有闹钟：选课定时任务需要据此重排，
-                 否则用户设好的任务会静默消失（此前只有课程提醒和消息巡检做了重排）。 -->
-            <intent-filter>
+                <action android:name="com.hnnujw.course.action.YKT_ALERT_CHECK" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.TIME_SET" />

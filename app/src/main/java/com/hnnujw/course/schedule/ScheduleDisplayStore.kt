@@ -12,6 +12,7 @@ object ScheduleDisplayStore {
     private const val PREFS_NAME = "schedule_display"
     private const val KEY_DAY_VIEW = "day_view"
     private const val KEY_COMPACT = "compact"
+    private const val KEY_SHOW_WEEKEND = "show_weekend"
 
     /** true = 日视图（按天翻页）；false = 周视图（按周翻页，默认）。 */
     fun dayView(context: Context): Boolean =
@@ -29,5 +30,20 @@ object ScheduleDisplayStore {
     fun setCompact(context: Context, value: Boolean) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_COMPACT, value).apply()
+    }
+
+    /**
+     * true = 周视图显示周六/周日（默认）；false = 只显示周一至周五。
+     *
+     * 默认 true 是刻意的：隐藏周末会让周末的课在周视图里看不见，
+     * 这是个"少看东西"的偏好，不能替用户默认打开。
+     * 日视图不受此开关影响（见 [scheduleVisibleDays]）——否则周末的课将无处可看。
+     */
+    fun showWeekend(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getBoolean(KEY_SHOW_WEEKEND, true)
+
+    fun setShowWeekend(context: Context, value: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_SHOW_WEEKEND, value).apply()
     }
 }

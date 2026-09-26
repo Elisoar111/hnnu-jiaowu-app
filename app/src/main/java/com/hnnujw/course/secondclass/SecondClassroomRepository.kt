@@ -42,6 +42,55 @@ object SecondClassroomRepository {
         total = 0,
     )
 
+    // ── 积分明细（「分类与学期统计」，1.2.6）──────────────────────────────
+
+    /**
+     * 分类 + 学期两个维度的积分明细。
+     *
+     * ## 为什么两个维度要一起拉
+     *
+     * 「每一分有迹可循」的核心是 [SecondClassPointLedger.reconcile] 那次**跨维度对账**
+     * —— 同一份账按分类切、按学期切，小计必须相等。只拉一个维度就无从对账，
+     * 那个卡片也就没意义了。所以这里并行发两个请求。
+     *
+     * ## 容错
+     *
+     * 沿用成绩单那套分段容错：**任一维度失败只让该维度为空**，不影响另一个。
+     * 站点对这两个端点的开放程度按学校配置不同（有的学校只开分类不开学期），
+     * 一个端点为 0 记录是常态，不该让整页变成错误页。
+     * 但**两个都失败**时把异常抛出去 —— 那是真问题（网络 / 凭据），
+     * 上层要如实报错，不能显示成"没有记录"。
+     *
+     * [profileScore] 由调用方从已有快照带上，这里不重复请求表头。
+     */
+    suspend fun pointLedger(
+        client: SecondClassroomClient,
+        token: String,
+        profileScore: Double = 0.0,
+    ): SecondClassPointLedger = coroutineScope {
+        val byClassify = async {
+            runCatching { client.pointRecordsByClassify(token) }
+        }
+        val byTerm = async {
+            runCatching { client.pointRecordsByTerm(token) }
+        }
+        val classifyResult = byClassify.await()
+        val termResult = byTerm.await()
+        // 两边都挂了：这才值得报错。单边失败按"该校没这一维"处理。
+        // 注意这里是 if + throw，**不能**用 `?: return@coroutineScope` —— 那会让
+        // coroutineScope 的最后一个表达式变成 Unit，与声明的返回类型对不上。
+        if (classifyResult.isFailure && termResult.isFailure) {
+            throw classifyResult.exceptionOrNull()
+                ?: termResult.exceptionOrNull()
+                ?: IllegalStateException("积分明细加载失败")
+        }
+        SecondClassPointLedger(
+            byClassify = classifyResult.getOrDefault(emptyList()),
+            byTerm = termResult.getOrDefault(emptyList()),
+            profileScore = profileScore,
+        )
+    }
+
     // ── 活动模块 ──────────────────────────────────────────────────────────
 
     /**

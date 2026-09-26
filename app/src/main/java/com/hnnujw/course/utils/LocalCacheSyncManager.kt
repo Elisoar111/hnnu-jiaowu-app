@@ -10,8 +10,8 @@ import java.security.MessageDigest
  * 构建签名自检：给维护者一个"这个包用的不是我的签名"的信号。
  *
  * ⚠️ 它**不再具备任何破坏能力**。原先 `CourseApiClient` 的拦截器会在判定非法时
- * 对选课/课表类 POST 先 `Thread.sleep(3~8s)`、再把 Cookie 换成假值 —— 那会让任何
- * 重签名构建（fork / CI / 使用者自签）在毫无报错的情况下丢掉选课与查课表能力，
+ * 对课表/成绩类 POST 先 `Thread.sleep(3~8s)`、再把 Cookie 换成假值 —— 那会让任何
+ * 重签名构建（fork / CI / 使用者自签）在毫无报错的情况下丢掉查课表能力，
  * 已删除。现在签名不一致只会打一条 `Log.w`。
  */
 object LocalCacheSyncManager {

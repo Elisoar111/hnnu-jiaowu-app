@@ -240,6 +240,83 @@ class SecondClassroomClient(
         return data.toRankEntry().copy(isSelf = true)
     }
 
+    // ── 积分明细（「分类与学期统计」，1.2.6）──────────────────────────────
+    //
+    // 两个端点是同一份账的两种切法，用来回答"这一分是哪来的"：
+    //   · by-classify-list：按分类分组，每条记录带 amount / sourceType / relationId
+    //   · by-term-list    ：按学期分组，每条记录带 classifyName
+    // 契约见 docs/adaptation/2026-09-18-hnnu-second-classroom.md §4。
+
+    /**
+     * 按分类的积分明细：`GET /student/achievement/by-classify-list`。
+     *
+     * ## 两个实测到的响应形态
+     *
+     * 该接口的 `data` **有时是数组、有时是 `{list: [...], total: n}`**（同族的
+     * [dataArray] 早就为此写了双分支）。这里沿用同一个口径：不能只认 `list`，
+     * 否则一种形态下会静默返回空列表 —— 表现为"分类统计页永远没数据"。
+     *
+     * ## 分页
+     *
+     * 站点该端点**不接受分页参数**（实测传 pageNum/pageSize 无效果），一次全给。
+     * 因此不传 params，也就不会出现"少了一页"的静默截断。
+     */
+    suspend fun pointRecordsByClassify(token: String): List<SecondClassPointGroup> =
+        get("/student/achievement/by-classify-list", null, token)
+            .toClassifyGroups()
+
+    /**
+     * 按学期的积分明细：`GET /student/achievement/by-term-list`。
+     *
+     * 与分类维度不同，这里的记录多带 `classifyName`，而分组自身带 `termNumber`
+     * （学期序号）与 `termHoursUnit`（该学期的单位）。站点没给 `termNumber` 时不编造，
+     * 保持空串 —— 界面按 `termName` 展示即可。
+     */
+    suspend fun pointRecordsByTerm(token: String): List<SecondClassPointGroup> =
+        get("/student/achievement/by-term-list", null, token)
+            .toTermGroups()
+
+    /**
+     * 明细记录 → 模型。两个维度的字段取并集，缺的就是默认值。
+     *
+     * ## 实测字段差异（2505050101 真实响应，已逐字段核对）
+     *
+     * | 字段 | 分类维度 | 学期维度 |
+     * |---|---|---|
+     * | `name` / `hours` / `time` / `sourceType` / `type` | 有 | 有 |
+     * | `classifyName` | **无**（分组上才有） | 有 |
+     * | `amount` | 有 | **无** |
+     * | `relationId`（数字，如 77266） | 有 | **无** |
+     * | `identity`（字符串，恒为 "3"） | 无 | 有 |
+     * | `tagName` | 无 | 有 |
+     *
+     * ⚠️ **`identity` 不是 `relationId` 的别名，绝不能拿来当记录 id。** 实测学期维
+     * 所有 12 条记录的 `identity` 都是同一个值 `"3"`，它是"参与者身份"枚举
+     * （3 = 参与者），与具体哪一笔账无关。若把它填进 [SecondClassPointRecord.relationId]，
+     * 一学期内所有记录的 [SecondClassPointRecord.identity] 会退化成同一个值 ——
+     * 列表 key 重复会直接崩，且"同名不同笔"再也分不开。
+     *
+     * 跨维度对齐的正确钥匙是 `(name, time, hours)`：实测两维各 12 条，该三元组
+     * 交集 12、双向差集均为 0，可完整对齐。
+     */
+    private fun JSONObject.toPointRecord(): SecondClassPointRecord = pointRecordFrom(
+        name = text("name"),
+        hours = optDouble("hours", 0.0),
+        amount = optDouble("amount", 0.0),
+        time = millis("time"),
+        classifyName = text("classifyName"),
+        sourceType = opt("sourceType").asInt(),
+        relationId = text("relationId"),
+        identity = text("identity"),
+    )
+
+    /** JSON `null` / 缺省 → Kotlin null，用于区分"站点给了 0"和"站点根本没给"。 */
+    private fun JSONObject.nullableDouble(key: String): Double? {
+        val value = opt(key) ?: return null
+        if (value === JSONObject.NULL) return null
+        return value.toString().trim().toDoubleOrNull()
+    }
+
     /**
      * 榜单行 → 模型。
      *
@@ -1190,3 +1267,205 @@ class SecondClassroomClient(
             .build()
     }
 }
+
+/**
+ * 明细记录的两维字段 → [SecondClassPointRecord]。
+ *
+ * 提成顶层 `internal` 纯函数是**刻意的**：这条映射踩过一次真实的坑 ——
+ * 学期维记录没有 `relationId`，却有一个恒为 `"3"` 的 `identity`
+ * （参与者身份枚举，**不是**记录 id）。若写成
+ * `relationId = text("relationId").ifBlank { text("identity") }`，
+ * 同一学期内所有记录的 [SecondClassPointRecord.identity] 会退化成同一个
+ * 值（列表 key 重复会崩，同名不同笔也再分不开），而这是**编译期与运行期
+ * 都不报错**的静默缺陷。
+ *
+ * 放在 client 内部时该逻辑是 `private`，单测碰不到，变异测试已证明
+ * 没有任何用例能发现它。提出来后由
+ * `SecondClassPointAnalysisTest.identityMustNotLeakIntoRelationId`
+ * 直接锁住：`relationId` 只认自己的字段名，`identity` 一律丢弃。
+ */
+internal fun pointRecordFrom(
+    name: String,
+    hours: Double,
+    amount: Double,
+    time: Long,
+    classifyName: String,
+    sourceType: Int,
+    relationId: String,
+    /**
+     * 站点学期维的 `identity`（参与者身份枚举）。**刻意不参与映射** ——
+     * 参数保留只为把"它被显式忽略"写在签名上，避免日后又有人拿它顶替 `relationId`。
+     */
+    @Suppress("UNUSED_PARAMETER") identity: String,
+): SecondClassPointRecord = SecondClassPointRecord(
+    name = name,
+    hours = hours,
+    amount = amount,
+    time = time,
+    classifyName = classifyName,
+    sourceType = sourceType,
+    relationId = relationId,
+)
+
+// ── 明细响应的形态归一（提为 internal 纯函数，便于单测）──────────────────
+//
+// 这一层守着一个**静默缺陷**：站点对 `data` 的包装形态不统一，若只认一种，
+// 另一种会安静地变成空列表 —— 界面显示"该校没有按分类下发明细"，
+// 而接口其实是 200 + 有数据。没有异常、没有日志、编译也不报错。
+//
+// 因此这里拆成三个纯函数（取数组 / 取对象列表 / 取分组），
+// 由 `SecondClassPointPayloadTest` 逐形态钉死。
+
+/**
+ * 从明细响应里取**分组数组**，兼容站点实测到的多种包装形态。
+ *
+ * 已支持的形态（前两种是原有实现，后三种是本次修复补充）：
+ *
+ * | 形态 | 例 |
+ * |---|---|
+ * | `data` 直接是数组 | `{"data":[{...}]}` |
+ * | `data.list` 是数组 | `{"data":{"list":[{...}]}}` |
+ * | **`data.rows` 是数组** | `{"data":{"rows":[{...}]}}` |
+ * | **`data.data` 是数组**（双层 data） | `{"data":{"data":[{...}]}}` |
+ * | **`data.data.list` 是数组** | `{"data":{"data":{"list":[...]}}}` |
+ *
+ * ⚠️ 之所以要吃到"双层 `data`"：网关在不同路由下会把业务体再包一层，
+ * 而**同一套网关对 `by-term-list` 与 `by-classify-list` 的包装并不总是一致**。
+ * 只认 `data.list` 时，学期维正常、分类维恒空 —— 正是
+ * "按分类查看显示没有下发明细、按学期却好好的"这个现象的成因。
+ *
+ * 全部取不到时返回 null（调用方据此得到空列表，与"站点确实没数据"同形，
+ * 但至少不会因为包装形态差异而误判）。
+ */
+internal fun classifyGroupsArray(payload: org.json.JSONObject): org.json.JSONArray? =
+    payload.dataArrayMultiShape()
+
+/** 同 [classifyGroupsArray]，学期维共用同一套形态归一。 */
+internal fun termGroupsArray(payload: org.json.JSONObject): org.json.JSONArray? =
+    payload.dataArrayMultiShape()
+
+/**
+ * 明细响应 → 分组数组的多形态取值。
+ *
+ * 搜索顺序（先浅后深）：`data` → `data.list/data.rows/data.data` →
+ * `data.data.list/data.data.rows`。命中即返回，避免同一份数据被取两次。
+ */
+private fun org.json.JSONObject.dataArrayMultiShape(): org.json.JSONArray? {
+    val data = opt("data")
+
+    // 形态 1：data 本身就是数组
+    if (data is org.json.JSONArray) return data
+
+    if (data is org.json.JSONObject) {
+        // 形态 2/3：data.list 或 data.rows
+        data.optJSONArray("list")?.let { return it }
+        data.optJSONArray("rows")?.let { return it }
+        // 形态 4/5：再深一层的 data（网关把业务体又包了一层）
+        val inner = data.opt("data")
+        if (inner is org.json.JSONArray) return inner
+        if (inner is org.json.JSONObject) {
+            inner.optJSONArray("list")?.let { return it }
+            inner.optJSONArray("rows")?.let { return it }
+        }
+    }
+
+    // 兜底：顶层直接给 list / rows（个别构建不裹 data）
+    optJSONArray("list")?.let { return it }
+    optJSONArray("rows")?.let { return it }
+    return null
+}
+
+/**
+ * 分类维度：分组 JSON → [SecondClassPointGroup]。
+ *
+ * 与学期维度的**唯一区别**是分组字段名（`classifyName` / `classifyHours` / `minHours`
+ * 对 `termName` / `termHours` / 无下限），所以两个映射各自独立，
+ * 但都提为 `internal` 以便单测直接喂 JSON。
+ *
+ * `name` 为空且没有明细的分组会被丢弃 —— 站点偶尔下发空壳分组
+ * （只有 id 没名字），留着会在界面上显示一行空白标题。
+ */
+internal fun classifyGroupFrom(json: org.json.JSONObject): SecondClassPointGroup =
+    SecondClassPointGroup(
+        name = json.pointText("classifyName"),
+        siteTotal = json.pointNullableDouble("classifyHours"),
+        required = json.pointNullableDouble("minHours") ?: 0.0,
+        records = json.optJSONArray("hoursRecordList").pointMapObjects { it.toPointRecordInternal() },
+    )
+
+/** 学期维度：分组 JSON → [SecondClassPointGroup]。 */
+internal fun termGroupFrom(json: org.json.JSONObject): SecondClassPointGroup =
+    SecondClassPointGroup(
+        name = json.pointText("termName"),
+        siteTotal = json.pointNullableDouble("termHours"),
+        records = json.optJSONArray("hoursRecordList").pointMapObjects { it.toPointRecordInternal() },
+        termNumber = json.pointText("termNumber"),
+        unit = json.pointText("termHoursUnit"),
+    )
+
+/**
+ * 分类维度的完整响应 → 分组列表。
+ *
+ * 把"取数组 → 逐条映射 → 丢空壳"串成一条链，**顺序固定**（尤其是最后那步
+ * 过滤必须在映射之后，否则没法判断分组是不是空壳）。
+ */
+internal fun org.json.JSONObject.toClassifyGroups(): List<SecondClassPointGroup> =
+    classifyGroupsArray(this)
+        .pointMapObjects { classifyGroupFrom(it) }
+        .filter { it.isMeaningful() }
+
+/** 学期维度的完整响应 → 分组列表。 */
+internal fun org.json.JSONObject.toTermGroups(): List<SecondClassPointGroup> =
+    termGroupsArray(this)
+        .pointMapObjects { termGroupFrom(it) }
+        .filter { it.isMeaningful() }
+
+/** 分组是否值得保留：有名字或有明细。空壳分组一律丢弃。 */
+internal fun SecondClassPointGroup.isMeaningful(): Boolean =
+    name.isNotBlank() || records.isNotEmpty()
+
+/** 把任意 JSONArray 元素映射成列表（org.json 可空友好版）。 */
+internal inline fun <T> org.json.JSONArray?.pointMapObjects(
+    transform: (org.json.JSONObject) -> T,
+): List<T> {
+    if (this == null) return emptyList()
+    val result = ArrayList<T>(length())
+    for (index in 0 until length()) {
+        optJSONObject(index)?.let { result.add(transform(it)) }
+    }
+    return result
+}
+
+/** 取文本，把 JSON `null` 与字面量 `"null"` 都归一成空串（与 client 内 `text` 同口径）。 */
+internal fun org.json.JSONObject.pointText(key: String): String {
+    val value = opt(key)
+    if (value == null || value === org.json.JSONObject.NULL) return ""
+    val rendered = value.toString().trim()
+    return if (rendered == "null" || rendered == "undefined") "" else rendered
+}
+
+/** JSON `null` / 缺省 → Kotlin null，用于区分"站点给了 0"与"站点根本没给"。 */
+internal fun org.json.JSONObject.pointNullableDouble(key: String): Double? {
+    val value = opt(key)
+    if (value == null || value === org.json.JSONObject.NULL) return null
+    return value.toString().trim().toDoubleOrNull()
+}
+
+/**
+ * 明细记录 JSON → [SecondClassPointRecord]（供 [classifyGroupFrom] / [termGroupFrom] 共用）。
+ *
+ * 与 client 内私有版 `toPointRecord()` 的差别：这两个辅助函数无法访问 client 的
+ * 扩展方法，所以这里用 `internal` 的 [pointText] / [pointNullableDouble] 重述一遍。
+ * 语义必须与 `toPointRecord()` **逐字一致** —— 后者仍是线上代码路径，
+ * 两者若漂移就会出现"同一个字段在两条链路上解析不同"的隐形缺陷。
+ */
+internal fun org.json.JSONObject.toPointRecordInternal(): SecondClassPointRecord = pointRecordFrom(
+    name = pointText("name"),
+    hours = pointNullableDouble("hours") ?: 0.0,
+    amount = pointNullableDouble("amount") ?: 0.0,
+    time = pointText("time").toLongOrNull() ?: 0L,
+    classifyName = pointText("classifyName"),
+    sourceType = pointText("sourceType").toDoubleOrNull()?.toInt() ?: 0,
+    relationId = pointText("relationId"),
+    identity = pointText("identity"),
+)

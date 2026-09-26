@@ -421,6 +421,33 @@ fun LiquidSegmentedControl(
     enabled: Boolean = true,
     backdrop: Backdrop? = LocalControlBackdrop.current,
     height: Dp = 52.dp,
+    /**
+     * 左右内边距。默认按高度自适应（compact 3dp / 否则 5dp）。
+     *
+     * 课表日期条传 `0.dp`：它的每一格必须和下方网格的日期列**逐列对齐**，
+     * 多出一点内边距整条就会偏移。
+     */
+    edgePadding: Dp? = null,
+    /** 上下内边距。默认同上。日期条传 `0.dp`（见 ScheduleScreen 的几何注释）。 */
+    verticalInset: Dp? = null,
+    /**
+     * 静止态保留的折射强度下限（0..1）。默认按高度自适应（0.30f / 0.42f）。
+     *
+     * 密集的多行标签（如日期条的「星期 + 日期 + 圆点」三行）要传 `0f`：
+     * 静止折射会把文字拉糊。两条渲染路径（API 33+ 运行时透镜 / API 31-32 异步折射）
+     * 都读这个值，所以按压与运动中的光学表现仍然一致。
+     */
+    restingRefraction: Float? = null,
+    /** 是否绘制轨道底板。日期条传 `false`，只留滑块，让壁纸透上来。 */
+    showTrack: Boolean = true,
+    /**
+     * 是否绘制选中滑块。默认 true。
+     *
+     * 传 `false` 用于表达"这一条当前没有选中项"：周视图翻到**非本周**时整周都在浏览中、
+     * 不存在"当日"，日期条上就不该有滑块 —— 否则滑块落在第 1 格，用户会以为
+     * "正在看周一"。两条渲染路径（有折射 / 无折射兜底）都会跳过绘制。
+     */
+    showIndicator: Boolean = true,
     labelContent: (@Composable (index: Int, selection: Float, color: Color) -> Unit)? = null
 ) {
     if (options.isEmpty()) return
@@ -473,8 +500,9 @@ fun LiquidSegmentedControl(
     ) {
         val density = LocalDensity.current
         val compact = height <= 36.dp
-        val horizontalPadding = if (compact) 3.dp else 5.dp
-        val verticalPadding = if (compact) 3.dp else 5.dp
+        val horizontalPadding = edgePadding ?: if (compact) 3.dp else 5.dp
+        val verticalPadding = verticalInset ?: if (compact) 3.dp else 5.dp
+        val refractionFloor = restingRefraction?.coerceIn(0f, 1f) ?: if (compact) 0.30f else 0.42f
         val horizontalPaddingPx = with(density) { horizontalPadding.toPx() }
         val segmentWidthPx =
             ((constraints.maxWidth - horizontalPaddingPx * 2f) / optionCount)
@@ -652,7 +680,10 @@ fun LiquidSegmentedControl(
             verticalAlignment = Alignment.CenterVertically
         ) {
             options.forEachIndexed { index, label ->
-                val selectionAmount =
+                // showIndicator = false ⇒ 这一条**没有选中项**，所以任何一格都不算"选中"：
+                // 既没有滑块，也不该有主色/加粗的选中文字。否则滑块虽然藏了，
+                // 第 1 格的字仍然是选中色，看起来像"正在看周一"。
+                val selectionAmount = if (!showIndicator) 0f else
                     (1f - abs(dragAnimation.value - index.toFloat())).coerceIn(0f, 1f)
                 val textColor = if (enabled) {
                     // 分段栏嵌在页面里，只靠字重差提示太弱：选中直接走主色，
@@ -729,7 +760,10 @@ fun LiquidSegmentedControl(
             modifier = Modifier
                 .fillMaxSize()
                 .then(
-                    if (glassBackdrop != null) {
+                    if (!showTrack && glassBackdrop != null) {
+                        // 只要滑块、不要轨道：日期条用它让壁纸从格间透上来。
+                        Modifier
+                    } else if (glassBackdrop != null) {
                         Modifier.drawBackdrop(
                             backdrop = glassBackdrop,
                             shape = { Capsule() },
@@ -767,22 +801,25 @@ fun LiquidSegmentedControl(
                             onDrawSurface = { drawRect(trackBackgroundColor) }
                         )
                     } else {
-                        Modifier
+                        (if (showTrack) Modifier
                             .clip(trackShape)
                             .background(trackBackgroundColor)
-                            .border(0.75.dp, trackBorderColor, trackShape)
-                            .drawBehind {
-                                val transform = segIndicatorScale(dragAnimation)
-                                val left = horizontalPaddingPx + dragAnimation.value * segmentWidthPx
-                                val top = verticalPadding.toPx()
-                                val w = segmentWidthPx
-                                val h = indicatorHeight.toPx()
-                                scale(transform.scaleX, transform.scaleY, Offset(left + w / 2f, top + h / 2f)) {
-                                    drawRoundRect(fallbackIndicatorColor, Offset(left, top),
-                                        androidx.compose.ui.geometry.Size(w, h),
-                                        androidx.compose.ui.geometry.CornerRadius(h / 2f))
-                                }
-                            }
+                            .border(0.75.dp, trackBorderColor, trackShape) else Modifier)
+                            // showIndicator = false 时连"无折射兜底滑块"也不画。
+                            .then(
+                                if (showIndicator) Modifier.drawBehind {
+                                    val transform = segIndicatorScale(dragAnimation)
+                                    val left = horizontalPaddingPx + dragAnimation.value * segmentWidthPx
+                                    val top = verticalPadding.toPx()
+                                    val w = segmentWidthPx
+                                    val h = indicatorHeight.toPx()
+                                    scale(transform.scaleX, transform.scaleY, Offset(left + w / 2f, top + h / 2f)) {
+                                        drawRoundRect(fallbackIndicatorColor, Offset(left, top),
+                                            androidx.compose.ui.geometry.Size(w, h),
+                                            androidx.compose.ui.geometry.CornerRadius(h / 2f))
+                                    }
+                                } else Modifier
+                            )
                     }
                 )
         ) {
@@ -798,7 +835,7 @@ fun LiquidSegmentedControl(
                 clip = false
             }
 
-        if (glassBackdrop != null && indicatorBackdrop != null) {
+        if (showIndicator && glassBackdrop != null && indicatorBackdrop != null) {
             // 专供滑块折射采样的隐藏层：染成主色后，透镜里浮出的就是饱和蓝字，
             // 滑块表面因此可以做到几乎透明，不必靠白色填充去制造存在感。
             val labelTint = ColorFilter.tint(if (enabled) MaterialTheme.colorScheme.primary
@@ -870,10 +907,10 @@ fun LiquidSegmentedControl(
                                         indicatorMaterial.optics.velocityForFullEffect
                                 ),
                                 pressScalesRefraction = true,
-                                // 与 API33+ 同值（见下面 resolvePhysicalLens 的调用）：
-                                // 这个控件静止态**保留**折射，与底栏指示器不同。
-                                refractionFloor = if (compact) 0.30f else 0.42f,
-                                chromaticAberrationAtRest = true
+                                // 密集多行标签（日期条）可以关掉静止态折射。
+                                // 两条渲染路径保留同样的按压与运动光学表现。
+                                refractionFloor = refractionFloor,
+                                chromaticAberrationAtRest = refractionFloor > 0f
                             )
                         },
                         // 与下面 layerBlock **同一份**形变。不传的话按下时库的
@@ -901,9 +938,9 @@ fun LiquidSegmentedControl(
                                 motionIntensity = motion,
                                 enableBlur = false,
                                 allowChromaticAberration = true,
-                                chromaticAberrationAtRest = true,
+                                chromaticAberrationAtRest = refractionFloor > 0f,
                                 pressScalesRefraction = true,
-                                refractionFloor = if (compact) 0.30f else 0.42f
+                                refractionFloor = refractionFloor
                             )
                             if (params.useLens) {
                                 lens(
@@ -1217,6 +1254,15 @@ fun LiquidPicker(
     fun rowRevealProgress(index: Int): Float {
         if (reduceMotion) return if (expanded) 1f else 0f
         return if (expanded) {
+            // 已经静止 ⇒ 揭示必须已经完成。
+            //
+            // 行级揭示是**时间**驱动的（0.22s 起、每行再错开 0.018s、用 0.20s 淡入），
+            // 而弹簧的静止判据是**位置/速度**（|x-target|<0.0025 且 |v|<0.035）。
+            // 两者是两套时钟：弹簧可能先停，此时 phaseTimeSeconds 就停在半路，
+            // 于是靠后的选项永远停在半透明 —— 列表越长越明显
+            //（场地类别有 36 项，末几行需要的 0.22+0.63+0.20≈1.05s 已经超过弹簧的静止时间）。
+            // 静止就是静止：这里直接给 1，避免"动画结束了但内容还没显形"。
+            if (motion.isSettled) return 1f
             val timed = smoothStep(
                 (motionTimeSeconds - 0.22f - index * PickerItemStaggerSeconds) / 0.20f
             )

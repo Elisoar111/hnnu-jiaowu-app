@@ -123,7 +123,7 @@ if [ ! -f "$NOTES_FILE" ]; then
 <!--
 更新日志的唯一数据源。CI（.github/workflows/release.yml）从这里读，扇出到：
   - GitHub Release 的正文
-  - Gitee version.json 的 releaseNotes 字段
+  - Gitee Release 的正文
 
 ## notes 区块的硬约束
 

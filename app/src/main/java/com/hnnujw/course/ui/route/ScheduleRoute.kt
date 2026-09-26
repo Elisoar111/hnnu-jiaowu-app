@@ -76,6 +76,7 @@ import com.hnnujw.course.schedule.ScheduleExcelIO
 import com.hnnujw.course.document.XlsxParser
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import com.hnnujw.course.AppTabNavigation
 
 private const val ScheduleRouteSnapshotMaxAgeMs = 5 * 60 * 1000L
 
@@ -147,6 +148,8 @@ fun ScheduleRoute() {
     
     // Dialog State
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
+    /** 同一个子页窗口里的第二层：true = 正在看「课程提醒设置」。 */
+    var showReminderSettings by rememberSaveable { mutableStateOf(false) }
     var detailId by rememberSaveable(routeAccountKey) { mutableStateOf<String?>(null) }
     var detailSourceBounds by remember(routeAccountKey) { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     var editingId by rememberSaveable(routeAccountKey) { mutableStateOf<String?>(null) }
@@ -160,6 +163,13 @@ fun ScheduleRoute() {
     /** 0 = 未打开；6/7 = 从周六 / 周日的星期条进入补课弹窗。 */
     var makeUpDay by remember { mutableIntStateOf(0) }
     /**
+     * 补课把课落进**别的周**后，让课表 pager 跳到那一格，免得用户改了却看不到。
+     * 递增它 == 换一个 `weekRequestKey`，从而触发 [ScheduleWeekPagerSync] 的跳转
+     * （见下面 `ScheduleScreen` 的 `snapshotFlow`）。光改 `currentWeek` 不会动 pager，
+     * 因为 `ScheduleWeekPagerSync` 只在 key 变了或首屏直接请求时才跳。
+     */
+    var weekJumpSeq by remember { mutableIntStateOf(0) }
+    /**
      * 补课的目标周次 = 用户点击那一刻正在浏览的周次。
      *
      * 快照下来而不是直接用 `currentWeek`：弹窗打开后底下的课表 pager 仍可被
@@ -169,12 +179,14 @@ fun ScheduleRoute() {
     var makeUpWeek by remember { mutableIntStateOf(1) }
     /** true = 顶栏导出按钮弹「日历 / Excel」格式选择。 */
     var showExportChooser by rememberSaveable { mutableStateOf(false) }
-    /** true = 显示「添加桌面组件」选择器（三种样式预览 + 请求钉到桌面）。 */
-    var showWidgetPicker by rememberSaveable { mutableStateOf(false) }
+    /** true = 显示 App 内「组件工作台」（Compose 卡片，与系统桌面组件无关）。 */
+    var showWidgetBoard by rememberSaveable { mutableStateOf(false) }
     // 日 / 周视图偏好：全局生效（不按账号），冷启动还原。
     var dayView by rememberSaveable { mutableStateOf(ScheduleDisplayStore.dayView(context)) }
     // 显示密度（标准 / 紧凑）：同属全局展示偏好。
     var scheduleCompact by rememberSaveable { mutableStateOf(ScheduleDisplayStore.compact(context)) }
+    // 周视图是否画周末两列：同属全局展示偏好。日视图恒 7 天，不受此开关影响。
+    var scheduleShowWeekend by rememberSaveable { mutableStateOf(ScheduleDisplayStore.showWeekend(context)) }
     // 「回到今天」请求计数（桌面组件点按时 +1，见 ScheduleScreen.todayRequest）。
     var todayNonce by remember { mutableIntStateOf(0) }
     
@@ -189,6 +201,22 @@ fun ScheduleRoute() {
     val remindersRevision = reminderScheduler.revision
     val settingsTerm = settingsTermOverride ?: resolvedTermId
     val termTimeBase = remember(settingsTerm, remindersRevision) { reminderScheduler.timeBase(routeAccountKey, settingsTerm) }
+    // 「课程提醒」那一行显示的状态。读 reminderScheduler.revision 让它跟着调度器一起刷新 ——
+    // 提醒设置页里改了总开关/提前量，退回来这一行要立刻变。
+    val reminderSummary = remember(remindersRevision) {
+        val current = reminderScheduler.settings()
+        buildString {
+            append(if (current.masterEnabled) "已开启" else "已关闭")
+            // leadMinutesLabel 自己带「上课时 / N 分钟」两种说法，这里不要再拼「提前」，
+            // 否则 0 分钟会写成「提前 上课时」。
+            if (current.masterEnabled) {
+                append(" · ").append(com.hnnujw.course.schedule.leadMinutesLabel(current.leadMinutes))
+            }
+            if (current.autoMode != com.hnnujw.course.schedule.AutoModeKind.Off) {
+                append(" · 上课自动").append(current.autoMode.label)
+            }
+        }
+    }
     // 展示用的时间基准。四级兜底，保证 firstWeekDate 恒非空 —— 星期条下面的日期不会整行消失。
     //
     //   1. 提醒日历里该学期已保存的第一周日期（用户在设置里选过，最权威）；
@@ -570,7 +598,7 @@ fun ScheduleRoute() {
         periodTimes = periodTimes,
         periodCount = periodCount,
         firstWeekDate = displayedTimeBase?.firstWeekDate,
-        weekRequestKey = appliedCalendar.orEmpty(),
+        weekRequestKey = "${appliedCalendar.orEmpty()}#$weekJumpSeq",
         onWeekChange = { currentWeek = it },
         onCourseClick = {
             notificationCourseJson = null
@@ -593,45 +621,50 @@ fun ScheduleRoute() {
         onDayViewChange = { dayView = it; ScheduleDisplayStore.setDayView(context, it) },
         onSyncClick = { loadSchedule(true) },
         onAddClick = { editingId = java.util.UUID.randomUUID().toString() },
-        onWidgetClick = { showWidgetPicker = true },
-        compact = scheduleCompact
+        onWidgetBoardClick = { showWidgetBoard = true },
+        compact = scheduleCompact,
+        showWeekend = scheduleShowWeekend,
+        // 「回到今天」真正的消费端在 ScheduleScreen：它除了翻到本周，还要复位日视图停在哪一天。
+        // 这里以前漏传了这个参数（默认值 0 会让消费端直接 return），于是 Route 里改了 currentWeek、
+        // 但 pager 的 key（weekRequestKey）没变，翻页同步不动，桌面卡片 / 通知点进来仍留在上次那一周。
+        todayRequest = todayNonce
     )
     }
 
-    // 桌面组件点按的深链：回到今天 / 打开课程详情 / 同步。账号对不上则忽略
-    // （组件是按账号渲染的，换账号后旧组件的点击不该把课表拉到别人的"今天"）。
-    val widgetRequest = ScheduleWidgetNavigation.requested
-    LaunchedEffect(widgetRequest) {
-        val request = widgetRequest ?: return@LaunchedEffect
-        if (!ScheduleWidgetNavigation.matchesCurrentAccount(request)) {
-            ScheduleWidgetNavigation.consume()
-            return@LaunchedEffect
+    // 桌面课表卡片点按的「回到今天」：卡片是按当前账号渲染的，点开的意思就是"看现在"。
+    // 光切到课表 Tab 不够 —— 课表页记着上次翻到第几周、日视图停在哪天，不复位就会
+    // 落在三天前的那一页上。请求由 AppTabNavigation 与通知共用同一条通道（消费一次即清空）。
+    val todayRequestAt = AppTabNavigation.requestedTodayAt
+    LaunchedEffect(todayRequestAt) {
+        if (todayRequestAt == null) return@LaunchedEffect
+        ScheduleDates.weekAt(displayedTimeBase?.firstWeekDate, System.currentTimeMillis())?.let {
+            currentWeek = it
         }
-        when (request.action) {
-            ScheduleWidgetAction.Today, ScheduleWidgetAction.Course -> {
-                ScheduleDates.weekAt(displayedTimeBase?.firstWeekDate, System.currentTimeMillis())?.let {
-                    currentWeek = it
-                }
-                todayNonce++
-                if (request.action == ScheduleWidgetAction.Course) {
-                    val target = courses.firstOrNull { it.id == request.course }
-                    if (target != null) {
-                        notificationCourseJson = null
-                        detailSourceBounds = null
-                        detailId = target.id
-                    } else {
-                        GlassToaster.show("课程信息已更新，请在课表中查看")
-                    }
-                }
+        todayNonce++
+        AppTabNavigation.consumeToday()
+    }
+
+    // 桌面卡片点某一行（时间轴 / 今日课表的「下一节」）或「下一节课」卡片本身时，
+    // 落到课表页之后还要打开**那一门课**的详情。
+    //
+    // 请求带的是卡片渲染那一刻的课程 id，用户可能已经换账号 / 换学期 / 重新同步过课表，
+    // 所以要先确认它还在当前课表里。三种情况必须分开处理（判据见 decideCourseOpen）：
+    // 命中就打开并清掉请求；课表还没加载完就**留着请求等下一轮**（否则表现为"点了没反应"）；
+    // 加载完仍找不到才丢掉（否则它会在某次刷新后突然弹出一个跟当下操作无关的详情）。
+    val courseOpenRequest = AppTabNavigation.requestedCourseId
+    LaunchedEffect(courseOpenRequest, courses, isLoading) {
+        when (decideCourseOpen(courseOpenRequest, courses.map { it.id }, isLoading)) {
+            CourseOpenDecision.Open -> {
+                notificationCourseJson = null
+                // 不是从课表上的卡片点的，没有"源卡片"可做锚点动画。
+                detailSourceBounds = null
+                detailId = courseOpenRequest
+                AppTabNavigation.consumeCourse()
             }
-            ScheduleWidgetAction.Sync -> loadSchedule(true)
-            ScheduleWidgetAction.Calendar -> {
-                settingsTermOverride = null
-                showSettingsDialog = true
-            }
-            ScheduleWidgetAction.Login -> Unit // 未登录时 MainActivity 已导向登录页
+
+            CourseOpenDecision.Drop -> AppTabNavigation.consumeCourse()
+            CourseOpenDecision.Wait, CourseOpenDecision.None -> Unit
         }
-        ScheduleWidgetNavigation.consume()
     }
 
     // ── 导出 ─────────────────────────────────────────────────────────────
@@ -690,36 +723,36 @@ fun ScheduleRoute() {
             },
         )
     }
-    if (showWidgetPicker) {
-        com.hnnujw.course.ui.screen.ScheduleWidgetPicker(onDismiss = { showWidgetPicker = false })
+    if (showWidgetBoard) {
+        com.hnnujw.course.ui.route.WidgetBoardRoute(onDismiss = { showWidgetBoard = false })
     }
     if (makeUpDay != 0) {
-        val targetWeek = makeUpWeek
         com.hnnujw.course.ui.screen.MakeUpCourseDialog(
-            weekendDay = makeUpDay,
-            targetWeek = targetWeek,
+            initialTargetDay = makeUpDay,
+            initialTargetWeek = makeUpWeek,
             courses = courses,
             firstWeekDate = displayedTimeBase?.firstWeekDate,
             onDismiss = { makeUpDay = 0 },
-            onConfirm = { sourceDay, week ->
-                val target = makeUpDay
+            // 四个参数全部来自弹窗内的选择：源(星期, 周) 与 目标(星期, 周)。
+            // 这里只照单执行，`makeUpDay` / `makeUpWeek` 是**初值**不是答案——
+            // 拿初值当目标正是"默认决定了"的旧行为，必须改用回传来的参数。
+            onConfirm = { sourceDay, sourceWeek, targetDay, targetWeek ->
                 makeUpDay = 0
-                val targetName = if (target == 7) "周日" else "周六"
-                // 「补课」= 把那一周那一天的课**整体**搬过来，所以这里不挑课程：
-                // 该天该周的每一门都按各自的原时段生成一条自定义课程，
-                // 落在用户点击的那一格 —— 目标周 = 点击时浏览的周，目标天 = 点击的星期。
+                val targetName = com.hnnujw.course.schedule.scheduleWeekdayShort(targetDay)
+                // 「补课」= 把**源那一周那一天的课整体**搬到**目标那一周那一天**，
+                // 不挑具体课程：该天该周每一门按各自原时段生成一条自定义课程。
                 val sources = courses.filter {
-                    !it.isCustom && it.day == sourceDay && isInWeek(it.weeks, week)
+                    !it.isCustom && it.day == sourceDay && isInWeek(it.weeks, sourceWeek)
                 }
                 if (sources.isEmpty()) {
-                    GlassToaster.show("第 $week 周那天没有课，没有可补的内容")
+                    GlassToaster.show("第 $sourceWeek 周${com.hnnujw.course.schedule.scheduleWeekdayLong(sourceDay)}没有课，没有可补的内容")
                 } else {
                     sources.forEach { source ->
                         // 同一门课在同一格反复补课时**合并周次**而不是再堆一条：
                         // 否则课表上会出现多张完全重叠的卡片，看得见却点不中下面那张。
                         // `weeks` 是逗号分隔的周次列表（见 ScheduleWeeks.parse）。
                         val existing = settingsManager.getCustomCourses(routeAccountKey).firstOrNull {
-                            it.day == target &&
+                            it.day == targetDay &&
                                 it.startPeriod == source.startPeriod &&
                                 it.endPeriod == source.endPeriod &&
                                 it.name == source.name &&
@@ -737,7 +770,7 @@ fun ScheduleRoute() {
                             name = source.name,
                             location = source.location,
                             teacher = source.teacher,
-                            day = target,
+                            day = targetDay,
                             startPeriod = source.startPeriod,
                             endPeriod = source.endPeriod,
                             weeks = newWeeks
@@ -751,8 +784,12 @@ fun ScheduleRoute() {
                             "custom:${course.id}", course.name, course.teacher, course.location,
                             course.day, course.startPeriod, course.endPeriod, course.weeks, true))
                     }
+                    // 把课补进了别的周 → 课表 pager 跳到那一格，免得用户改了却看不到。
+                    currentWeek = targetWeek
+                    weekJumpSeq++
                     GlassToaster.show(
-                        "已补课：第 $week 周星期" + "一二三四五六日".getOrElse(sourceDay - 1) { '?' } +
+                        "已补课：第 $sourceWeek 周" +
+                            com.hnnujw.course.schedule.scheduleWeekdayLong(sourceDay) +
                             " ${sources.size} 门 → 第 $targetWeek 周$targetName"
                     )
                 }
@@ -781,7 +818,20 @@ fun ScheduleRoute() {
     }
     
     if (showSettingsDialog) {
-        com.hnnujw.course.ui.system.GlassSubpage(onDismiss = { showSettingsDialog = false; settingsTermOverride = null }) { close ->
+        com.hnnujw.course.ui.system.GlassSubpage(onDismiss = {
+            showSettingsDialog = false
+            settingsTermOverride = null
+            showReminderSettings = false
+        }) { close ->
+            // 课表设置与课程提醒设置共用一个子页窗口，靠 showReminderSettings 在两页间切换。
+            // 这样提醒页的返回箭头是回到课表设置，而不是把整层子页关掉。
+            if (showReminderSettings) {
+                com.hnnujw.course.ui.screen.ReminderSettingsScreen(
+                    scheduler = reminderScheduler,
+                    onBack = { showReminderSettings = false }
+                )
+            } else {
+            // 下面这一大块保持原缩进不动：为了嵌进 else 而重排 60 多行只会让 diff 没法看。
             ScheduleSettingsScreen(
                 manager = settingsManager,
                 periodTimesOverride = periodTimesFor(termTimeBase),
@@ -817,13 +867,41 @@ fun ScheduleRoute() {
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     "application/vnd.ms-excel",
                 )) },
+                // 补课入口：设置页只在「隐藏周末」时显示这一行，而那个条件在**设置页内部**
+                // 读它自己的本地状态。所以这里恒定传回调，不按开关传 null ——
+                // 否则拨到「隐藏」的那一瞬间回调仍是 null，这一行渲染不出来。
+                onMakeUpCourse = {
+                    makeUpWeek = currentWeek
+                    // 默认落周六；弹窗里还能改成周日、以及"源"是哪一个星期。
+                    makeUpDay = 6
+                    // 必须先关掉设置页：补课弹窗渲染在 Route 这一层，
+                    // 而设置页是压在它上面的独立窗口，不关就看不见弹窗。
+                    close()
+                },
+                // 提醒设置单独一页，行上显示当前状态（总开关/提前量/自动模式）。
+                onOpenReminderSettings = { showReminderSettings = true },
+                reminderSummary = reminderSummary,
                 effectiveFirstWeekDate = displayedTimeBase?.firstWeekDate,
+                // 展示偏好（显示密度 / 显示周末）：本页只发意图，落盘与状态更新都在这里做
+                // —— 与 dayView 同一条写法。设置页自己改 store 会绕开 Route 的内存状态，
+                // 表现就是"设置页选了、退回来课表没变"。
+                displayCompact = scheduleCompact,
+                onDisplayCompactChange = {
+                    scheduleCompact = it
+                    ScheduleDisplayStore.setCompact(context, it)
+                },
+                showWeekend = scheduleShowWeekend,
+                onShowWeekendChange = {
+                    scheduleShowWeekend = it
+                    ScheduleDisplayStore.setShowWeekend(context, it)
+                },
                 onClose = {
                     periodCount = settingsManager.periodCount
                     periodTimes = periodTimesFor(displayedTimeBase).map { PeriodTimeUi(it.period, it.startTime, it.endTime) }
                     close()
                 }
             )
+            }
         }
     }
     

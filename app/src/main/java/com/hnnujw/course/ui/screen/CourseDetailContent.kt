@@ -51,7 +51,12 @@ data class CourseDetailUiState(
     val makeUpWeekday: Int? = null,
     val sourceCenterX: Float? = null,
     /** 时间冲突时的候选课程：自己 + 全部撞车的课（有冲突才 > 1）。 */
-    val conflictCandidates: List<ScheduleCourseUi> = emptyList()
+    val conflictCandidates: List<ScheduleCourseUi> = emptyList(),
+    /**
+     * 提前量文案（「上课前 15 分钟」/「上课时提醒」）。由调用方从提醒偏好里取 ——
+     * 这里原先硬编码 15 分钟，把提前量做成可设置之后那句话就开始骗人了。
+     */
+    val reminderLeadText: String = "上课前 15 分钟"
 )
 
 /** Content-sized sheet with a bounded scroll body and a persistent, single primary action. */
@@ -133,8 +138,8 @@ fun CourseDetailContent(
                                 AnimatedLineIcon(AnimatedIconSpec.Calendar, Modifier.size(18.dp), tint = colors.primary)
                                 Text(
                                     text = if (ui.makeUpWeekday != null) {
-                                        "补课/调休：本课时为周末补课，对应平时「星期${
-                                            "一二三四五六日".getOrElse(ui.makeUpWeekday - 1) { '?' }
+                                        "补课/调休：本课时为周末补课，对应平时「${
+                                            com.hnnujw.course.schedule.scheduleWeekdayLong(ui.makeUpWeekday)
                                         }」的《${course.name}》课程"
                                     } else {
                                         "补课/调休：本课时为周末补课课程"
@@ -147,8 +152,8 @@ fun CourseDetailContent(
                         }
                     }
                     Column(Modifier.moduleEntrance(1, entrance), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val weekday = "一二三四五六日".getOrElse(course.day - 1) { ' ' }
-                        val time = "周$weekday · 第 ${course.startPeriod}–${course.endPeriod} 节"
+                        val weekday = com.hnnujw.course.schedule.scheduleWeekdayShort(course.day)
+                        val time = "$weekday · 第 ${course.startPeriod}–${course.endPeriod} 节"
                         if (wideDetails) Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             DetailInfoTile("上课时间", time, AnimatedIconSpec.Clock, Modifier.weight(1f).fillMaxHeight())
                             DetailInfoTile("上课地点", course.location.ifBlank { "未指定地点" }, AnimatedIconSpec.Location,
@@ -260,7 +265,7 @@ fun CourseDetailContent(
                                     state = if (ui.reminderEnabled) IconVisualState.Selected else IconVisualState.Idle)
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                     Text("课程提醒", style = MaterialTheme.typography.titleSmall)
-                                    Text(if (ui.reminderEnabled) "上课前 15 分钟" else "未开启 · 上课前 15 分钟",
+                                    Text(if (ui.reminderEnabled) ui.reminderLeadText else "未开启 · ${ui.reminderLeadText}",
                                         style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
                                 }
                                 LiquidSwitch(ui.reminderEnabled, onReminderChanged, enabled = ui.reminderAvailable)

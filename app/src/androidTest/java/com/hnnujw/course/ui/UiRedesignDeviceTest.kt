@@ -20,7 +20,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.hnnujw.course.BuildConfig
 import com.hnnujw.course.demo.DemoData
-import com.hnnujw.course.ui.route.FilterActionContent
 import com.hnnujw.course.ui.screen.*
 import com.hnnujw.course.ui.system.*
 import com.hnnujw.course.ui.theme.CourseSelectorTheme
@@ -79,38 +78,6 @@ class UiRedesignDeviceTest {
         }
     }
 
-    @Test fun filterBadgeReservesItsBoundsAtZeroOneNineAndNinePlus() {
-        val count = mutableIntStateOf(0)
-        val font = mutableFloatStateOf(1f)
-        compose.setContent {
-            val density = LocalDensity.current.density
-            CompositionLocalProvider(LocalDensity provides Density(density, font.floatValue)) {
-                CourseSelectorTheme {
-                    Box(Modifier.size(180.dp, 120.dp).background(MaterialTheme.colorScheme.surface).testTag("frame"),
-                        contentAlignment = Alignment.Center) {
-                        TopBarActionRail(Modifier.testTag("filter-cell")) {
-                            action(0, contentDescription = "筛选", onClick = {}) {
-                                FilterActionContent(count.intValue, true, {})
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        for (scale in listOf(1f, 1.6f)) for (value in listOf(0, 1, 9, 12)) {
-            compose.runOnIdle { count.intValue = value; font.floatValue = scale }
-            compose.waitForIdle()
-            if (value == 0) compose.onNodeWithTag("filter-count-badge", true).assertDoesNotExist()
-            else {
-                compose.onNodeWithText(if (value > 9) "9+" else value.toString(), true).assertIsDisplayed()
-                val badge = compose.onNodeWithTag("filter-count-badge", true).fetchSemanticsNode().boundsInRoot
-                val cell = compose.onNodeWithTag("filter-cell", true).fetchSemanticsNode().boundsInRoot
-                assertTrue(badge.left >= cell.left && badge.top >= cell.top && badge.right <= cell.right && badge.bottom <= cell.bottom)
-            }
-            capture("01-badge-" + value + "-font" + scale)
-        }
-    }
-
     @Test fun detailUsesOpaqueSectionsKeepsFooterAndSurvivesThemeChange() {
         val dark = mutableStateOf(false)
         val reminder = mutableStateOf(false)
@@ -154,59 +121,6 @@ class UiRedesignDeviceTest {
         compose.onNodeWithContentDescription("关闭课程详情").performClick()
         compose.waitForIdle()
         compose.runOnIdle { assertFalse(open.value) }
-    }
-
-    @Test fun consoleKeepsItsActionDockThroughRunningStoppedAndResultStates() {
-        val queue = mutableStateOf(DemoData.grabQueue().take(3))
-        val running = mutableStateOf(false)
-        val successes = mutableIntStateOf(0)
-        val failures = mutableIntStateOf(0)
-        val statuses = mutableStateOf<Map<String, GrabQueueItemStatus>>(emptyMap())
-        fun key(index: Int): String {
-            val c = queue.value[index]
-            return c.name + "_" + c.teacher + "_" + c.time
-        }
-        compose.setContent {
-            CourseSelectorTheme {
-                CompositionLocalProvider(LocalAppOverlayBottomInset provides 72.dp) {
-                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("frame")) {
-                        GrabProScreen(running.value, successes.intValue, failures.intValue, 3, null, null,
-                            "本地演示任务", "800", {}, "5", {},
-                            onStart = { running.value = true; statuses.value = mapOf(key(0) to GrabQueueItemStatus.GRABBING) },
-                            onStop = { running.value = false }, queue = queue.value, onClearLog = {},
-                            queueItemStatuses = statuses.value, showQueueModeLabels = false, supportsScheduling = false)
-                    }
-                }
-            }
-        }
-        val before = compose.onNodeWithTag("grab-action-dock").fetchSemanticsNode().boundsInRoot
-        capture("04-console-waiting")
-        compose.mainClock.autoAdvance = false
-        compose.onNodeWithContentDescription("开始执行").performClick()
-        compose.mainClock.advanceTimeBy(128)
-        capture("04-console-start-middle")
-        compose.mainClock.advanceTimeBy(400)
-        compose.onNodeWithContentDescription("停止执行").assertIsDisplayed()
-        capture("04-console-running")
-        compose.onNodeWithContentDescription("停止执行").performClick()
-        compose.mainClock.advanceTimeBy(1000)
-        compose.onNodeWithContentDescription("开始执行").assertIsDisplayed()
-        capture("04-console-stopped")
-        compose.runOnIdle {
-            statuses.value = mapOf(key(0) to GrabQueueItemStatus.SUCCESS, key(1) to GrabQueueItemStatus.FAILED)
-            successes.intValue = 1; failures.intValue = 1
-        }
-        compose.mainClock.advanceTimeBy(128)
-        capture("04-console-result-middle")
-        compose.mainClock.advanceTimeBy(1000)
-        capture("04-console-result")
-        val after = compose.onNodeWithTag("grab-action-dock").fetchSemanticsNode().boundsInRoot
-        assertEquals(before.bottom, after.bottom, 1f)
-        assertEquals(before.top, after.top, 1f)
-        compose.runOnIdle { queue.value = emptyList(); statuses.value = emptyMap() }
-        compose.mainClock.advanceTimeBy(1000)
-        compose.onNodeWithContentDescription("开始执行").assertIsNotEnabled()
-        capture("04-console-empty")
     }
 
     @Test fun lineIconsHaveDistinctIntermediateFramesAndReverse() {

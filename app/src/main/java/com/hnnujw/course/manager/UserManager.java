@@ -698,7 +698,6 @@ public class UserManager {
             runtimeSchoolAddress = address;
             runtimeSchool = currentSchool;
             sessionState.replace(account);
-            if (accountChanged) SmartSelector.getInstance().reloadForCurrentAccount();
         } catch (Exception e) {
             Log.w(TAG, "刷新账号运行态失败: " + e.getMessage());
         }

@@ -100,7 +100,6 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.hnnujw.course.activation.ActivationManager
 import com.hnnujw.course.manager.AppearanceSettingsManager
-import com.hnnujw.course.manager.SmartSelector
 import com.hnnujw.course.manager.UserManager
 import com.hnnujw.course.ui.screen.OnboardingDialog
 import com.hnnujw.course.ui.system.CapsuleNavigationBar
@@ -165,6 +164,24 @@ class MainActivity : FragmentActivity() {
          */
         const val EXTRA_OPEN_GRADES_TAB = "com.hnnujw.course.extra.OPEN_GRADES_TAB"
 
+        /**
+         * 桌面课表卡片点击时携带：落到课表页之后**还要复位到本周今天**。
+         *
+         * 只带 Tab 不够：课表页会记住用户上次翻到第几周、日视图下停在哪一天，
+         * 于是点「下一节课」卡片可能落在三天前的那一页上 —— 点卡片的意思明显是"看现在"。
+         */
+        const val EXTRA_OPEN_TODAY = "com.hnnujw.course.extra.OPEN_TODAY"
+
+        /**
+         * 桌面卡片点击时携带：落到课表页之后**还要打开这门课的详情**。
+         *
+         * 值就是 `ScheduleCourseUi.id` / `ScheduleCourseRecord.id`（`network:…` / `custom:…`）。
+         * 卡片是按**上次渲染时**的课表画的，用户可能已经换了账号或学期，所以这个 id 未必
+         * 还能在课表里找到 —— 找不到就只落到课表页，绝不弹一个不相干的详情
+         * （判据见 [com.hnnujw.course.schedule.decideCourseOpen]）。
+         */
+        const val EXTRA_OPEN_COURSE = "com.hnnujw.course.extra.OPEN_COURSE"
+
         /** 当前是否允许发系统通知（Android 13 以下默认允许）。 */
         fun notificationsAllowed(context: Context): Boolean =
             Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
@@ -208,7 +225,6 @@ class MainActivity : FragmentActivity() {
             userManager.startDemoSession(com.hnnujw.course.demo.DemoData.school())
         }
 
-        SmartSelector.getInstance().init(this)
         com.hnnujw.course.network.CourseApiClient.getInstance().init(this)
 
         if (!userManager.isLoggedIn && !(userManager.hasSavedCookie() && userManager.sessionState.state.value.expired)) {
@@ -259,8 +275,6 @@ class MainActivity : FragmentActivity() {
         AppTabNavigation.accept(intent)
         // App 已在运行时再扫一次码 / 再点一次链接走这里（singleTop 语义）
         com.hnnujw.course.secondclass.SecondClassDeepLinkNavigation.accept(intent)
-        // 桌面课表组件点击（组件 Intent 带 CLEAR_TOP|SINGLE_TOP，热态走这里）
-        com.hnnujw.course.schedule.ScheduleWidgetNavigation.accept(intent)
     }
 }
 
@@ -279,13 +293,59 @@ object AppTabNavigation {
     var requestedGradesTab by androidx.compose.runtime.mutableStateOf<Int?>(null)
         private set
 
+    /**
+     * 课表页的「回到今天」请求（见 [MainActivity.EXTRA_OPEN_TODAY]）。
+     *
+     * 用时间戳而不是布尔：连着点两次卡片要能各跳一次，布尔第二次点没区别。null = 无请求。
+     */
+    var requestedTodayAt by androidx.compose.runtime.mutableStateOf<Long?>(null)
+        private set
+
+    /**
+     * 课表页要打开哪门课的详情（见 [MainActivity.EXTRA_OPEN_COURSE]）。
+     *
+     * 这里存的是**课程 id**，由课表页自己拿它去 `courses` 里查 —— 不在这里解析成课程对象，
+     * 因为课表页的数据（当前学期、缓存）跟这里不是一份。null = 无请求。
+     */
+    var requestedCourseId by androidx.compose.runtime.mutableStateOf<String?>(null)
+        private set
+
     fun accept(intent: Intent?) {
         intent?.getStringExtra(MainActivity.EXTRA_OPEN_TAB)?.let { requestedPage = StartupPage.decode(it) }
         intent?.getStringExtra(MainActivity.EXTRA_OPEN_GRADES_TAB)?.toIntOrNull()
             ?.takeIf { it in 0..2 }?.let { requestedGradesTab = it }
+        if (intent?.getBooleanExtra(MainActivity.EXTRA_OPEN_TODAY, false) == true) requestToday()
+        intent?.getStringExtra(MainActivity.EXTRA_OPEN_COURSE)?.takeIf { it.isNotBlank() }
+            ?.let { requestedCourseId = it }
     }
 
     fun consume() { requestedPage = null }
+
+    /**
+     * 应用内自助跳页（组件工作台的卡片点按等）。
+     *
+     * 与 intent 走**同一条消费路径**：`MainScreen` 只订阅 [requestedPage]，
+     * 所以不存在"两条通道各跳一次"或"跳完没清空"的问题。
+     */
+    fun request(page: StartupPage) { requestedPage = page }
+
+    /** 请求课表页复位到本周今天（桌面课表卡片点按走这里）。 */
+    fun requestToday() { requestedTodayAt = System.nanoTime() }
+
+    /**
+     * 应用内组件工作台点课表卡片的**某一行**时走这里：跳到课表、复位到今天、
+     * 再打开那一行对应的课。和桌面卡片逐行点击是同一套语义
+     * （见 [MainActivity.EXTRA_OPEN_COURSE] 与 [consumeCourse]）。
+     */
+    fun openCourse(courseId: String) {
+        requestedPage = StartupPage.Schedule
+        requestedTodayAt = System.nanoTime()
+        requestedCourseId = courseId
+    }
+
+    fun consumeToday() { requestedTodayAt = null }
+
+    fun consumeCourse() { requestedCourseId = null }
 
     fun consumeGradesTab() { requestedGradesTab = null }
 }
@@ -298,13 +358,13 @@ sealed class BottomNavItem(
     val label: String get() = page.label
     val icon: ImageVector get() = symbol.outline
     object Schedule : BottomNavItem(StartupPage.Schedule, AppSymbolSpec.Schedule)
-    object Grab : BottomNavItem(StartupPage.Grab, AppSymbolSpec.Grab)
+    object Xuegong : BottomNavItem(StartupPage.Xuegong, AppSymbolSpec.Xuegong)
     object Grades : BottomNavItem(StartupPage.Grades, AppSymbolSpec.Grades)
     object SecondClass : BottomNavItem(StartupPage.SecondClass, AppSymbolSpec.Achievement)
     object Settings : BottomNavItem(StartupPage.Settings, AppSymbolSpec.Settings)
 
     companion object {
-        val entries: List<BottomNavItem> get() = listOf(Schedule, Grab, Grades, SecondClass, Settings)
+        val entries: List<BottomNavItem> get() = listOf(Schedule, Xuegong, Grades, SecondClass, Settings)
     }
 }
 
@@ -518,6 +578,13 @@ fun MainScreen(
 
     // 底栏滚动最小化：捕获页面内任意滚动的方向（nested scroll 冒泡，页面零改动）
     var navBarMinimized by remember { mutableStateOf(false) }
+    // 「设置 → 外观 → 底部导航栏自动收起」。读的是 manager 的 state，所以在设置页拨动
+    // 开关当帧就生效，不需要退出重进。
+    //
+    // 判据放在**这里**而不是 CapsuleNavigationBar 里：底栏只认 `minimized` 这个结果，
+    // 它不需要知道"为什么收起"。关掉开关时传下去的 `minimized` 恒为 false，
+    // 底栏自然一直展开 —— 不用给底栏再加一个"允许收起"的参数。
+    val navBarAutoCollapseEnabled = AppearanceSettingsManager.navBarAutoCollapseEnabled
     // API31/32 折射底图的新鲜度。页面内容随滚动移动，底图必须跟着重拍，
     // 否则折射里是启动那一刻的画面。见 GlassLensFreshness 的注释。
     //
@@ -531,10 +598,12 @@ fun MainScreen(
         }
     }
     val navScrollIntent = remember { NavScrollIntent() }
-    val navBarScrollConnection = remember(density, dialogHostState) {
+    val navBarScrollConnection = remember(density, dialogHostState, navBarAutoCollapseEnabled) {
         object : NestedScrollConnection {
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.UserInput && dialogHostState.currentDialog == null) {
+                if (navBarAutoCollapseEnabled && source == NestedScrollSource.UserInput &&
+                    dialogHostState.currentDialog == null
+                ) {
                     if (consumed.y == 0f && available.y > 0f) {
                         navBarMinimized = false
                         navScrollIntent.reset()
@@ -550,7 +619,9 @@ fun MainScreen(
             }
         }
     }
-    LaunchedEffect(selectedTab) {
+    // 开关或 Tab 一变就把收起状态与滚动方向累计值一起清掉：
+    // 重新打开开关时如果沿用旧手势，底栏会立刻按"上一次的方向"再收一次。
+    LaunchedEffect(selectedTab, navBarAutoCollapseEnabled) {
         navBarMinimized = false
         navScrollIntent.reset()
     }
@@ -737,7 +808,7 @@ fun MainScreen(
                               savedPages.SaveableStateProvider(items[page].route) {
                                 when (page) {
                                     0 -> com.hnnujw.course.ui.route.ScheduleRoute()
-                                    1 -> com.hnnujw.course.ui.route.GrabProRoute()
+                                    1 -> com.hnnujw.course.ui.route.XuegongRoute()
                                     2 -> com.hnnujw.course.ui.route.GradesRoute()
                                     3 -> com.hnnujw.course.ui.route.SecondClassroomRoute()
                                     4 -> com.hnnujw.course.ui.route.SettingsRoute()
@@ -761,7 +832,8 @@ fun MainScreen(
                         selectedTab = targetTab
                     }
                 },
-                minimized = navBarMinimized,
+                // 关掉「自动收起」时恒传 false：底栏自己不需要知道原因（见上面 navBarAutoCollapseEnabled 的注释）
+                minimized = navBarAutoCollapseEnabled && navBarMinimized,
                 onExpandRequest = { navBarMinimized = false },
                 backdrop = navBarBackdrop,
                 lensFreshness = lensFreshness,
@@ -776,8 +848,7 @@ fun MainScreen(
             GlassToastHost(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = navBarContentInset + if (selectedTab == 1)
-                        com.hnnujw.course.ui.system.TaskControlsReservedHeight + 12.dp else 12.dp)
+                    .padding(bottom = navBarContentInset + 12.dp)
             )
 
             DialogHost(

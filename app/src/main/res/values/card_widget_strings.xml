@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  七种桌面卡片组件在选择器里显示的名字与说明。
+  这些文案与 App 内组件抽屉（widgetboard/InAppWidgetRegistry）里那一套是对应的，
+  改一处记得看另一处 —— 用户在抽屉里看到的说明，和长按桌面加组件时看到的，
+  说的必须是同一张卡片。
+-->
+<resources>
+    <string name="card_widget_next_name">下一节课</string>
+    <string name="card_widget_next_description">突出当前或接下来的一节课程，小尺寸也看得清。</string>
+
+    <string name="card_widget_today_name">今日课表</string>
+    <string name="card_widget_today_description">正在上的那节加上紧接着的下一节，附今日课程数。</string>
+
+    <string name="card_widget_timeline_name">今日时间轴</string>
+    <string name="card_widget_timeline_description">今天全部课程按时间排开，进行中的那节高亮。</string>
+
+    <string name="card_widget_exam_name">考试倒计时</string>
+    <string name="card_widget_exam_description">最近一场考试的天数、时间与考场座位。</string>
+
+    <string name="card_widget_grades_name">成绩概览</string>
+    <string name="card_widget_grades_description">平均绩点、已修学分与已出成绩门数。</string>
+
+    <string name="card_widget_secondclass_name">第二课堂积分</string>
+    <string name="card_widget_secondclass_description">综测附加分与各模块积分进度。</string>
+
+    <string name="card_widget_message_name">未读消息</string>
+    <string name="card_widget_message_description">教务消息中心的未读条数与最近一条。</string>
+</resources>

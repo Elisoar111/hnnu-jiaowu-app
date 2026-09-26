@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistAddCheck
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Icon
@@ -67,10 +68,10 @@ fun OnboardingDialog(
                 target = StartupPage.Schedule
             ),
             OnboardingEntry(
-                icon = Icons.AutoMirrored.Outlined.PlaylistAddCheck,
-                title = "选课",
-                description = "队列与定时任务按规则自动尝试，捡漏不落下",
-                target = StartupPage.Grab
+                icon = Icons.Outlined.School,
+                title = "学工系统",
+                description = "日常请假与节假日去向登记，提交后实时同步",
+                target = StartupPage.Xuegong
             ),
             OnboardingEntry(
                 icon = Icons.Outlined.EmojiEvents,

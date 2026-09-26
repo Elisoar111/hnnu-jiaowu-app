@@ -95,6 +95,6 @@ fun validateScheduleCourse(course: ScheduleCourseRecord, periodCount: Int): Stri
     course.name.isBlank() -> "请填写课程名称"
     course.day !in 1..7 -> "星期需在周一至周日之间"
     course.startPeriod !in 1..periodCount || course.endPeriod !in course.startPeriod..periodCount -> "请检查开始和结束节次"
-    !ScheduleWeeks.parse(course.weeks).valid -> "请填写有效周次，例如 1-16周(单),18周"
+    !ScheduleWeeks.parse(course.weeks).valid -> "请填写有效周次，例如 1-16周（单），18周"
     else -> null
 }

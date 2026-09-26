@@ -7,7 +7,7 @@ import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
-import androidx.compose.material.icons.outlined.MyLocation
+import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
@@ -26,7 +26,7 @@ import kotlin.math.sin
 enum class AppSymbolSpec(val outline: ImageVector) {
     Courses(Icons.AutoMirrored.Outlined.FormatListBulleted),
     Schedule(Icons.Outlined.DateRange),
-    Grab(Icons.Outlined.MyLocation),
+    Xuegong(Icons.Outlined.School),
     Grades(Icons.Outlined.BarChart),
     /** 第二课堂：奖章轮廓，和"成绩"的柱状图区分开。 */
     Achievement(Icons.Outlined.EmojiEvents),
@@ -40,7 +40,7 @@ fun AppSymbol(spec: AppSymbolSpec, progress: Float, tint: Color, modifier: Modif
         spec = when (spec) {
             AppSymbolSpec.Courses -> AnimatedIconSpec.Courses
             AppSymbolSpec.Schedule -> AnimatedIconSpec.Calendar
-            AppSymbolSpec.Grab -> AnimatedIconSpec.Target
+            AppSymbolSpec.Xuegong -> AnimatedIconSpec.Person
             AppSymbolSpec.Grades -> AnimatedIconSpec.Grades
             AppSymbolSpec.Achievement -> AnimatedIconSpec.Achievement
             AppSymbolSpec.Settings -> AnimatedIconSpec.Settings

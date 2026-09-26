@@ -52,8 +52,20 @@ class ScheduleSettingsManager internal constructor(private var prefs: SharedPref
     }
 
     private fun accountStorageKey(): String {
-        return UserManager.getInstance().currentAccountStorageKey.ifBlank { "default" }
+        return normalizeAccountKey(UserManager.getInstance().currentAccountStorageKey.ifBlank { "default" })
     }
+
+    /**
+     * 账号键归一化，与 [CourseCacheManager] / [GradesCacheManager] / `SecondClassroomStore` 同一口径。
+     *
+     * 为什么必须在这里做而不是靠调用方：本类是按账号落盘的存储层，而"写一个键、读另一个键"
+     * 是这类代码最容易犯且**用户无从察觉**的错（项目里已出现过一次：二课卡片恒显示"未绑定"）。
+     * 当前所有调用方传的都是 `currentAccountStorageKey`（本身已归一化，故本函数对它们是**空操作**，
+     * 不产生迁移），但把归一化收进存储层后，将来任何调用方误传 `currentAccountKey`
+     * （形如 `hnnu::2024001`）也不会把数据劈成两份。
+     */
+    private fun normalizeAccountKey(accountKey: String): String =
+        accountKey.ifBlank { "default" }.replace(Regex("[^A-Za-z0-9_.-]"), "_")
 
     private fun scopedKey(key: String): String {
         return "${key}_${accountStorageKey()}"
@@ -250,7 +262,7 @@ class ScheduleSettingsManager internal constructor(private var prefs: SharedPref
     )
     
     private fun customCoursesKey(accountKey: String): String {
-        return "${KEY_CUSTOM_COURSES}_$accountKey"
+        return "${KEY_CUSTOM_COURSES}_${normalizeAccountKey(accountKey)}"
     }
     
     fun getCustomCourses(accountKey: String = accountStorageKey()): List<CustomCourse> {

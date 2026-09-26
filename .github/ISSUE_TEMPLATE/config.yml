@@ -1,5 +1,14 @@
 blank_issues_enabled: true
 contact_links:
-  - name: 使用问题咨询
-    url: https://github.com/znjhahaha/zhengfang-apk/discussions
-    about: 一般使用问题请到 Discussions 讨论区提问
+  # ⚠️ 指向本项目的反馈区，不要指向第三方仓库。
+  # 历史上这里写的是 https://github.com/znjhahaha/zhengfang-apk/discussions ——
+  # 那是**上游原作者**的仓库（本项目的致谢对象），用户会被导到一个与本项目无关的地方。
+  #
+  # 另外：GitHub 镜像仓库 Elisoar111/hnnu-jiaowu-app 目前 Issues 与 Discussions 都是关闭的
+  # （gh api repos/Elisoar111/hnnu-jiaowu-app → has_issues=false, has_discussions=false），
+  # 所以本目录下的模板在那边实际不会被展示。真正可用、已开启的是 Gitee 仓库：
+  #   gh api 查询：Elisoar/hnnu-jiaowu-app → has_issues=true
+  # 若哪天在 GitHub 侧打开了 Issues/Discussions，把下面的 url 换回本仓库即可。
+  - name: 使用问题咨询 / 反馈
+    url: https://gitee.com/Elisoar/hnnu-jiaowu-app/issues
+    about: 一般使用问题与新功能建议请到 Gitee 仓库的 Issues 提出（GitHub 镜像仓未开启 Issues）

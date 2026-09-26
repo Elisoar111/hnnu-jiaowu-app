@@ -350,7 +350,7 @@ fun SecondClassActivityCenterScreen(
                         onClick = onRefresh,
                     )
                     3 -> {
-                        // 一键已读（同选课页 DoneAll 图标，仅点击、无长按）：常显，无未读时点了只提示
+                        // 一键已读（同消息中心 DoneAll 图标，仅点击、无长按）：常显，无未读时点了只提示
                         SystemIconButton(
                             icon = Icons.Default.DoneAll,
                             contentDescription = "一键已读",

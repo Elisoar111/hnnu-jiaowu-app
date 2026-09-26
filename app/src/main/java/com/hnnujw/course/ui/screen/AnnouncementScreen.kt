@@ -99,7 +99,7 @@ fun AnnouncementScreen(onBack: () -> Unit) {
         onBack = { if (detail != null) detail = null else onBack() },
         actions = {
             if (detail == null) {
-                // 一键已读：同消息中心/选课页的 DoneAll 图标，常显、仅点击无长按
+                // 一键已读：同消息中心的 DoneAll 图标，常显、仅点击无长按
                 SystemIconButton(Icons.Default.DoneAll, "一键已读", {
                     if (unread > 0) {
                         AnnouncementCenter.markAllRead(context)

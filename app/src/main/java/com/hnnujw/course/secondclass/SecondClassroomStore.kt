@@ -1,6 +1,7 @@
 package com.hnnujw.course.secondclass
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import com.hnnujw.course.manager.CredentialStore
 import com.hnnujw.course.manager.UserManager
@@ -51,15 +52,75 @@ object SecondClassroomStore {
     fun defaultPassword(studentId: String): String =
         if (studentId.isBlank()) "" else studentId.trim() + DEFAULT_PASSWORD_SUFFIX
 
-    fun token(context: Context, accountKey: String): String =
-        prefs(context).getString(KEY_TOKEN_PREFIX + accountKey, "").orEmpty()
+    /**
+     * 账号键归一化：与 `UserManager.toStorageKey`、[SecondClassOverviewCache.normalize]
+     * 用同一条规则（非 `[A-Za-z0-9_.-]` 一律换成 `_`）。
+     *
+     * 为什么必须有：本工程并存两种账号键口径 ——
+     * `currentAccountKey`（`hnnu::2024001`）与 `currentAccountStorageKey`（`hnnu__2024001`）。
+     * 调用方并不统一（二课各页面传前者，桌面组件传后者）。不归一化就会
+     * **写进一个键、读另一个键**，读出来永远是空串：表现为"明明绑定过二课，
+     * 卡片却说未绑定"，并且 `WidgetBoardRoute` 会因此提前 return，
+     * 让积分概览缓存永远写不进去。归一化之后两种口径落到同一个键上。
+     */
+    internal fun normalize(accountKey: String): String =
+        accountKey.ifBlank { "default" }.replace(Regex("[^A-Za-z0-9_.-]"), "_")
 
-    fun saveToken(context: Context, accountKey: String, token: String) {
-        prefs(context).edit().putString(KEY_TOKEN_PREFIX + accountKey, token).apply()
+    private fun tokenKey(accountKey: String) = KEY_TOKEN_PREFIX + normalize(accountKey)
+
+    /**
+     * 与 [accountKey] 指向同一个账号、但**写法不同**的历史键（如 `token_hnnu::2024001`）。
+     *
+     * 为什么不能直接拼 `token_ + accountKey` 来还原旧键：调用方可能传的是已归一化的
+     * storage key，从它反推不出旧键的字面量。所以统一按"归一化后是否指向同一账号"来认，
+     * 这样无论调用方传哪种口径都能认出老数据。
+     */
+    private fun staleTokenKeys(p: SharedPreferences, accountKey: String): List<String> {
+        val normalized = normalize(accountKey)
+        val current = KEY_TOKEN_PREFIX + normalized
+        return p.all.keys.filter { candidate ->
+            candidate.startsWith(KEY_TOKEN_PREFIX) && candidate != current &&
+                normalize(candidate.removePrefix(KEY_TOKEN_PREFIX)) == normalized
+        }
     }
 
-    fun clearToken(context: Context, accountKey: String) {
-        prefs(context).edit().remove(KEY_TOKEN_PREFIX + accountKey).apply()
+    fun token(context: Context, accountKey: String): String = readToken(prefs(context), accountKey)
+
+    fun saveToken(context: Context, accountKey: String, token: String) =
+        writeToken(prefs(context), accountKey, token)
+
+    fun clearToken(context: Context, accountKey: String) = removeToken(prefs(context), accountKey)
+
+    // ---- 以下三个是纯存储原语，直接吃 SharedPreferences ----
+    // 不经过 Context 是为了让 JVM 单测能喂内存实现（同 ScheduleCacheStore 的做法）：
+    // 键口径的一致性完全由这几个函数决定，必须有回归测试盯着。
+
+    internal fun readToken(p: SharedPreferences, accountKey: String): String {
+        if (accountKey.isBlank()) return ""
+        val key = tokenKey(accountKey)
+        p.getString(key, "").orEmpty().takeIf { it.isNotBlank() }?.let { return it }
+        // 迁移：老版本把 token 写在未归一化的键上，读到就搬到归一化键（只搬一次）。
+        val stale = staleTokenKeys(p, accountKey).firstOrNull() ?: return ""
+        val migrated = p.getString(stale, "").orEmpty()
+        if (migrated.isNotBlank()) p.edit().putString(key, migrated).remove(stale).apply()
+        return migrated
+    }
+
+    internal fun writeToken(p: SharedPreferences, accountKey: String, token: String) {
+        if (accountKey.isBlank()) return
+        val editor = p.edit().putString(tokenKey(accountKey), token)
+        // 顺手清掉历史写法，避免同一账号留两份、日后被迁移逻辑"复活"成旧值。
+        // staleTokenKeys 已排除当前键本身，所以不会把刚写进去的 token 删掉。
+        staleTokenKeys(p, accountKey).forEach { editor.remove(it) }
+        editor.apply()
+    }
+
+    internal fun removeToken(p: SharedPreferences, accountKey: String) {
+        if (accountKey.isBlank()) return
+        val editor = p.edit()
+        staleTokenKeys(p, accountKey).forEach { editor.remove(it) }
+        // 显式再删一次目标键：staleTokenKeys 不包含它，且这样在"目标键不存在"时也幂等
+        editor.remove(tokenKey(accountKey)).apply()
     }
 
     fun hasPassword(context: Context, accountKey: String): Boolean =

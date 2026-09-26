@@ -8,8 +8,17 @@ import android.util.Log
 import com.hnnujw.course.BuildConfig
 
 /**
- * Backdrop 兼容性由真实运行结果决定，不按设备品牌预先禁用。
- * 当前版本发生 crash、native crash 或 ANR 后，下次启动回退到 Material 实现；升级后重新尝试。
+ * Backdrop 的运行期开关。
+ *
+ * **当前策略（实验期）：只要系统版本够（>= Android 12 / S）就恒启用** —— 既不按设备品牌
+ * 预筛，也**不因历史崩溃熔断降级**。上一进程是否异常退出（crash / native crash / ANR）
+ * 只用来写一条 `Log.w` 取证，不产生任何行为改变；`KEY_DISABLED_VERSION` 是历史字段，
+ * 现在每次启动都会主动清掉。
+ *
+ * 换句话说：外部看到的是"永远开启"。[isBackdropEnabled] 返回 false 的唯一原因是系统版本
+ * 低于 S。要恢复"崩溃后降级"时，[didPreviousProcessFail] 已经能识别三种失败原因、
+ * [disableDynamicOpticsForSession] 也能按会话关掉动态折射 —— 缺的只是把两者接成
+ * "写 disabledVersion → 下次启动读它"这条线。
  */
 object GlassRuntimeGuard {
     private const val TAG = "GlassRuntimeGuard"

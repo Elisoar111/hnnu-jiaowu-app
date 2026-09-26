@@ -23,10 +23,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.hnnujw.course.ui.screen.ScheduleCourseSheet
 import com.hnnujw.course.ui.screen.ScheduleCourseUi
 import com.hnnujw.course.ui.screen.ScheduleScreen
-import com.hnnujw.course.ui.screen.CourseListScreen
 import com.hnnujw.course.ui.screen.ScheduleCourseEditor
 import com.hnnujw.course.manager.ScheduleSettingsManager
-import com.hnnujw.course.model.CourseFilter
 import com.hnnujw.course.ui.system.*
 import com.hnnujw.course.ui.theme.CourseSelectorTheme
 import com.hnnujw.course.ui.theme.NavigationPages
@@ -245,22 +243,6 @@ class ScheduleMotionDeviceTest {
         compose.runOnIdle { account.value = "b" }
         compose.onNodeWithText("旧数据").assertDoesNotExist()
         compose.runOnIdle { assertEquals(3f, motion.position, 0f); assertEquals(setOf(3), motion.pages.keys) }
-    }
-
-    @Test fun filterSummaryCanScrollHorizontallyOnNarrowScreen() {
-        compose.setContent {
-            CourseSelectorTheme {
-                Box(Modifier.size(320.dp, 560.dp)) {
-                    CourseListScreen(emptyList(), false, {}, {}, {}, {}, activeFilter = CourseFilter(
-                        kkbmIdList = listOf("计算机科学与技术学院", "外国语学院", "机械工程学院", "材料科学学院")))
-                }
-            }
-        }
-        val row = compose.onNodeWithTag("active-filter-summary")
-        row.performTouchInput { swipeLeft() }
-        val range = row.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
-        assertTrue(range.maxValue() > 0f)
-        assertTrue(range.value() > 0f)
     }
 
     private fun captureFrame(name: String) {

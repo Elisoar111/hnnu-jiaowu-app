@@ -37,7 +37,7 @@ fun PhosphorNavigationIcon(
             when (spec) {
                 AppSymbolSpec.Courses -> drawBooks(t, tint, fill)
                 AppSymbolSpec.Schedule -> drawCalendar(t, tint, fill)
-                AppSymbolSpec.Grab -> drawLightning(t, tint, fill)
+                AppSymbolSpec.Xuegong -> drawSchool(t, tint, fill)
                 AppSymbolSpec.Grades -> drawChart(t, tint, fill)
                 AppSymbolSpec.Achievement -> drawMedal(t, tint, fill)
                 AppSymbolSpec.Settings -> drawSliders(t, tint, fill)
@@ -146,5 +146,25 @@ private fun DrawScope.drawSliders(t: Float, tint: Color, fill: Color) {
         drawLine(tint, Offset(x + 24f, y), Offset(216f, y), 16f, StrokeCap.Round)
         drawCircle(fill, 24f, Offset(x, y))
         drawCircle(tint, 24f, Offset(x, y), style = outlineStroke)
+    }
+}
+
+/** 学工系统：校园建筑（屋顶三角 + 楼体 + 门）。选中位移带轻微上下浮动。 */
+private fun DrawScope.drawSchool(t: Float, tint: Color, fill: Color) {
+    val bob = 6f * flourish(t)
+    translate(0f, -bob) {
+        // 楼体填充与轮廓
+        drawRoundRect(fill, Offset(72f, 104f), Size(112f, 104f), CornerRadius(10f))
+        drawRoundRect(tint, Offset(72f, 104f), Size(112f, 104f), CornerRadius(10f), style = outlineStroke)
+        // 屋顶（三角）
+        val roof = Path().apply {
+            moveTo(56f, 104f)
+            lineTo(128f, 52f)
+            lineTo(200f, 104f)
+            close()
+        }
+        drawPath(roof, tint, style = outlineStroke)
+        // 门
+        drawRoundRect(tint, Offset(112f, 160f), Size(32f, 48f), CornerRadius(6f), style = outlineStroke)
     }
 }

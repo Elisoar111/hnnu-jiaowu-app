@@ -29,27 +29,27 @@ class ScheduleRepository(
     fun snapshot(account: String, school: String, termId: String? = null): ScheduleSnapshot {
         val cachePrefs = context.getSharedPreferences("schedule_cache", Context.MODE_PRIVATE)
         val cache = ScheduleCacheStore(cachePrefs)
-        val term = termId?.takeIf { it.isNotBlank() }?.let(AcademicStudyParser::term)
-            ?: cache.currentTerm(account, school)
+        val currentTerm = cache.currentTerm(account, school)
+        val term = termId?.takeIf { it.isNotBlank() }?.let(AcademicStudyParser::term) ?: currentTerm
         val json = cache.read(account, school, term)
         val network = json?.let(ScheduleJson::parse).orEmpty().map { it.course }
         val records = mergeCustom(network, settings.getCustomCourses(account))
         return ScheduleSnapshot(
             account, school, term.id, records,
-            timeBase(account, term.id, cache.currentTerm(account, school).id),
+            timeBase(account, term.id),
             cachePrefs.getLong("schedule_${account}_${school}_${term.id}_time", 0), json != null
         )
     }
 
-    fun timeBase(account: String, term: String, currentTerm: String): ScheduleTimeBase {
+    /**
+     * 取某学期的时间基准。**纯读，不写盘。**
+     *
+     * 桌面卡片每次刷新都会走到这里，读接口一旦带副作用，"刷新"就变成了"写 prefs"，
+     * 调用方也无法从签名判断代价。历史日历迁移已挪到 [migrateLegacyCalendar]。
+     */
+    fun timeBase(account: String, term: String): ScheduleTimeBase {
         val periods = settings.getPeriodTimes()
         val store = ScheduleCalendarStore(context.getSharedPreferences("course_reminders", Context.MODE_PRIVATE))
-        if (account.isNotBlank() && term == currentTerm) {
-            store.migrateLegacy(account, currentTerm, ScheduleTimeBase(
-                ScheduleTimeBase.dateFromMillis(settings.semesterStartDate),
-                periods.associate { it.period to it.startTime },
-                periods.associate { it.period to it.endTime }))
-        }
         val calendar = store.read(account, term)
         val resolved = calendar?.firstWeekDate?.takeIf { it.isNotBlank() && ScheduleDates.firstMonday(it) != null }
             ?: ScheduleTimeBase.dateFromMillis(settings.semesterStartDate).takeIf { it.isNotBlank() }
@@ -59,6 +59,28 @@ class ScheduleRepository(
             periods.associate { it.period to it.startTime } + calendar?.periodStarts.orEmpty(),
             periods.associate { it.period to it.endTime } + calendar?.periodEnds.orEmpty()
         )
+    }
+
+    /**
+     * 把旧格式的课表日历迁进 `course_reminders`。**会写 prefs**，所以只允许在显式的
+     * "写"时机调用 —— 目前是 `CourseApplication` 主进程 onCreate 的一次调用。
+     *
+     * 它原先挂在 [timeBase] 里，两个问题同时存在：① 读路径每次刷新都要过一遍迁移判定
+     * （数据不巧时真的会反复 `write`）；② [timeBase] 只由 [snapshot] 触达，所以
+     * **从没加过桌面组件、也没打开过组件工作台的用户，迁移根本不会发生**。
+     * 挪到启动路径后，既不再有副作用，覆盖范围反而变大了。
+     */
+    fun migrateLegacyCalendar(account: String, school: String): Boolean {
+        if (account.isBlank() || school.isBlank()) return false
+        val cache = ScheduleCacheStore(context.getSharedPreferences("schedule_cache", Context.MODE_PRIVATE))
+        val term = cache.currentTerm(account, school)
+        val periods = settings.getPeriodTimes()
+        val store = ScheduleCalendarStore(context.getSharedPreferences("course_reminders", Context.MODE_PRIVATE))
+        return store.migrateLegacy(account, term.id, ScheduleTimeBase(
+            ScheduleTimeBase.dateFromMillis(settings.semesterStartDate),
+            periods.associate { it.period to it.startTime },
+            periods.associate { it.period to it.endTime }
+        ))
     }
 
     companion object {

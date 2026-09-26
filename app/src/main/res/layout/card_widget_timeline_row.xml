@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  今日时间轴的一行：左侧一条竖轨 + 一个圆点，右侧「时间 / 课名」两行。
+
+  与 card_widget_row.xml 的区别只在左侧那 12dp 的轨道槽 —— 时间轴要能一眼看出
+  "上到哪一节了"，而通用行是"标签 / 正文 / 状态"三列，没有纵向的先后感。
+
+  圆点颜色由 CardWidgetRenderer 逐行 setBackgroundColor：进行中的那一节点亮成强调色，
+  其余是静默的小点。所以这里给的是兜底颜色（静默色），运行时一定会被覆盖。
+
+  轨道用 1dp 宽的 ImageView 而不是给容器加 border：RemoteViews 只认"预先声明好的视图"，
+  画一条线最省事也最稳的办法就是一个 1dp 宽的 ImageView。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/card_row_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:minHeight="40dp"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
+
+    <FrameLayout
+        android:layout_width="12dp"
+        android:layout_height="match_parent"
+        android:minHeight="32dp">
+
+        <ImageView
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="center_horizontal"
+            android:background="#30536078"
+            android:contentDescription="@null" />
+
+        <ImageView
+            android:id="@+id/card_row_dot"
+            android:layout_width="5dp"
+            android:layout_height="5dp"
+            android:layout_gravity="center"
+            android:background="#A8B2C4"
+            android:contentDescription="@null" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginStart="6dp"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/card_row_label"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:textColor="#536078"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/card_row_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:textColor="#536078"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/card_row_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:ellipsize="end"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="#1D2433"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+</LinearLayout>

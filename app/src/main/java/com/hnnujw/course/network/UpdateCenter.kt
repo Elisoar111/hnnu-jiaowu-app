@@ -50,10 +50,16 @@ object UpdateCenter {
         if (now - store.getLong(KEY_LAST_CHECK, 0L) < MIN_INTERVAL_MS) return
 
         val result = AppUpdateChecker.check(BuildConfig.VERSION_NAME)
-        store.edit().putLong(KEY_LAST_CHECK, now).apply()
+        // 只有**真的问到了结果**才记账。失败也记账的话，一次地铁里的断网就会让这台
+        // 设备在接下来 6 小时里彻底不查更新 —— 而用户很可能一直在正常用网。
+        if (result !is AppUpdateChecker.Result.Failure) {
+            store.edit().putLong(KEY_LAST_CHECK, now).apply()
+        }
 
         val info = (result as? AppUpdateChecker.Result.Update)?.info ?: return
-        if (info.versionName == store.getString(KEY_SKIPPED, null)) return
+        // 强制更新版本**无视「以后再说」**：那个标记是给可选更新用的；
+        // 拿它去压住一个"不升级就没法用"的版本，只会把用户永远留在旧版上。
+        if (!info.forceUpdate && info.versionName == store.getString(KEY_SKIPPED, null)) return
         pending = info
     }
 
@@ -75,9 +81,12 @@ object UpdateCenter {
         }
     }
 
-    /** 用户点「以后再说」：记住这个版本，本次不再提示。 */
+    /** 用户点「以后再说」：记住这个版本，本次不再提示。强制更新不记。 */
     fun dismiss(context: Context) {
-        pending?.let { prefs(context).edit().putString(KEY_SKIPPED, it.versionName).apply() }
+        // 强制更新不写跳过标记：它本来就不提供"稍后"（弹窗只在确实装不上时才允许关闭），
+        // 写进去反而会让下次自动检查把这个版本永久压掉。
+        pending?.takeIf { !it.forceUpdate }
+            ?.let { prefs(context).edit().putString(KEY_SKIPPED, it.versionName).apply() }
         pending = null
     }
 

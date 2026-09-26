@@ -22,6 +22,15 @@ fun GlassPageScaffold(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     onBack: (() -> Unit)? = null,
+    /**
+     * 顶栏折叠进度（0=展开大标题，1=收成细玻璃条）。
+     *
+     * 默认 0 表示"不折叠"，因此旧调用点行为不变。需要跟手折叠的页面
+     * 自己持有 [androidx.compose.foundation.ScrollState]，把
+     * `(scrollState.value / 96f).coerceIn(0f, 1f)` 传进来即可 ——
+     * 与课表 / 成绩 / 设置 / 二课页用的是同一套判据。
+     */
+    collapseFraction: Float = 0f,
     actions: @Composable RowScope.() -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
     content: @Composable (PaddingValues) -> Unit
@@ -35,6 +44,7 @@ fun GlassPageScaffold(
                     SystemTopBar(
                         title = title,
                         subtitle = subtitle,
+                        collapseFraction = collapseFraction,
                         navigationIcon = {
                             if (onBack != null) SystemIconButton(Icons.AutoMirrored.Filled.ArrowBack, "返回", onBack)
                         },

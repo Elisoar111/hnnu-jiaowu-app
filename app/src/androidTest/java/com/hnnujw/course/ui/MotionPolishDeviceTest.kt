@@ -81,7 +81,7 @@ class MotionPolishDeviceTest {
     }
 
     @Test fun everyNavigationIconReplaysWithoutRepeatingNavigation() {
-        val destinations = listOf(BottomNavItem.SecondClass, BottomNavItem.Schedule, BottomNavItem.Grab, BottomNavItem.Grades, BottomNavItem.Settings)
+        val destinations = listOf(BottomNavItem.SecondClass, BottomNavItem.Schedule, BottomNavItem.Xuegong, BottomNavItem.Grades, BottomNavItem.Settings)
         val selected = mutableIntStateOf(0)
         var calls = 0
         compose.setContent {

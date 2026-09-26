@@ -62,6 +62,7 @@ private fun ScheduleCourseSheetContent(course: ScheduleCourseUi, account: String
     val key = remember(account, term, course.id) { CourseReminderKey(account, term, course.id) }
     val record = remember(key, revision) { scheduler.find(key) }
     val status = remember(key, revision) { scheduler.status(key) }
+    val reminderPrefs = remember(revision) { scheduler.settings() }
     val permissionRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { scheduler.reconcile() }
     val conflicts = remember(course, allCourses) { scheduleConflicts(course.record(), allCourses.map { it.record() }) }
     // 冲突选课的候选：自己 + 与自己撞车的全部课程（从课表全量里解析出完整信息）。
@@ -86,7 +87,15 @@ private fun ScheduleCourseSheetContent(course: ScheduleCourseUi, account: String
     val makeUpWeekday = if (course.day == 6 || course.day == 7) {
         allCourses.firstOrNull { it.id != course.id && it.day in 1..5 && it.name == course.name }?.day
     } else null
-    val description = when (status.availability) {
+    // 提前量是全局设置，详情页必须显示真实值：原先这里写死「上课前 15 分钟」，
+    // 用户在提醒设置里改成 30 分钟之后，这一行就成了假话。
+    val reminderLeadText = if (reminderPrefs.leadMinutes == 0) "上课时提醒"
+        else "上课前 " + leadMinutesLabel(reminderPrefs.leadMinutes)
+    // 总开关关掉时，逐门课程的开关不生效 —— 这条必须压过下面按 availability 的分支，
+    // 否则页面会写着「下次提醒：X月X日」，而那个闹钟根本不会被排出来。
+    val description = if (!reminderPrefs.masterEnabled) {
+        "「课程提醒」总开关已关闭，这里的开关暂不生效"
+    } else when (status.availability) {
         ReminderAvailability.Off -> if (term.isBlank()) "学期信息加载后可设置提醒" else "开启后，在上课前通知你"
         ReminderAvailability.NeedsPermission -> "待授权：允许通知和精确闹钟后生效"
         ReminderAvailability.NeedsTime -> "待补全本学期第一周周一日期或节次时间"
@@ -100,7 +109,7 @@ private fun ScheduleCourseSheetContent(course: ScheduleCourseUi, account: String
             record?.enabled == true && status.availability == ReminderAvailability.NeedsPermission,
             status.availability == ReminderAvailability.NeedsTime, !ScheduleWeeks.parse(course.weeks).valid,
             isMakeUp = course.day == 6 || course.day == 7, makeUpWeekday = makeUpWeekday, sourceCenterX,
-            conflictCandidates = conflictCandidates),
+            conflictCandidates = conflictCandidates, reminderLeadText = reminderLeadText),
         state, close, onReminderChanged = { scheduler.setEnabled(key, course.record(), it) },
         onPermission = {
             val permissions = scheduler.permissions()

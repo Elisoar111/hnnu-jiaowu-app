@@ -86,4 +86,33 @@ class SchedulePersistenceTest {
         assertEquals(base, store.read("a", "2026-2027-1"))
         assertEquals(next, ScheduleCalendarStore(prefs).read("a", "2026-2027-2"))
     }
+
+    /**
+     * 存储层自己归一化账号键，而不是依赖调用方传对形态。
+     *
+     * 项目里有两种账号键且**永不相等**：`currentAccountKey` = `hnnu::2024001`，
+     * `currentAccountStorageKey` = `hnnu__2024001`。按账号落盘的存储层若只做字符串拼接，
+     * 调用方一旦传错形态就会"写一个键、读另一个键" —— 数据被静默劈成两份，用户无从察觉
+     * （本项目已因同类问题出现过"二课卡片恒显示未绑定"）。
+     *
+     * 当前所有调用方传的都是 storage key，归一化对它们是**空操作**（`_` 属于允许字符），
+     * 所以这条测试同时钉住了"加固不改变现有行为"。
+     */
+    @Test fun customCoursesAreStoredUnderTheSameSlotWhateverKeyShapeCallersUse() {
+        val prefs = MemoryPreferences()
+        val manager = ScheduleSettingsManager(prefs)
+        val rawKey = "hnnu::2024001"
+        val storageKey = "hnnu__2024001"
+
+        manager.addCustomCourse(
+            ScheduleSettingsManager.CustomCourse("c1", "数学", "A101", "", 1, 1, 2, "1-16周"),
+            rawKey,
+        )
+
+        // 换成另一种形态读，必须读到同一份数据
+        assertEquals(1, manager.getCustomCourses(storageKey).size)
+        assertEquals("数学", manager.getCustomCourses(storageKey).single().name)
+        assertEquals(1, ScheduleSettingsManager(prefs).getCustomCourses(rawKey).size)
+        assertEquals(1, ScheduleSettingsManager(prefs).getCustomCourses(storageKey).size)
+    }
 }

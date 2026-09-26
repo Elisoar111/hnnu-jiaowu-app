@@ -235,7 +235,7 @@ fun SettingsRoute(
     }
 
     fun shareAppToClassmates() {
-        val text = "校园助理 · 开源免费的高校教务客户端（课表 / 选课 / 成绩 / 第二课堂）\n" +
+        val text = "校园助理 · 开源免费的高校教务客户端（课表 / 成绩 / 第二课堂）\n" +
             "GitHub：https://github.com/Elisoar111/hnnu-jiaowu-app\n" +
             "Gitee：https://gitee.com/Elisoar/hnnu-jiaowu-app"
         val send = Intent(Intent.ACTION_SEND).apply {
@@ -398,16 +398,41 @@ fun SettingsRoute(
         val storageKey = userManager.deleteAccount(record.key)
         if (storageKey.isNotEmpty()) {
             com.hnnujw.course.manager.CourseCacheManager.clearAccountCache(context, storageKey)
-            // 删号不能只清课程缓存：成绩/考试缓存、消息中心缓存都是按账号落盘的，
+            // 删号不能只清课程缓存：成绩/考试缓存、消息中心缓存、二课积分缓存都是按账号落盘的，
             // 留着就是"删了号还能翻出旧数据"的残留。
             com.hnnujw.course.manager.GradesCacheManager.clearAccount(context, storageKey)
             com.hnnujw.course.academic.MessageCenterManager.clearCache(context, storageKey)
+            com.hnnujw.course.secondclass.SecondClassOverviewCache.clearAccount(context, storageKey)
+            // 二课积分**明细**缓存也是按账号落盘的，且里面全是"我参加了什么"这类
+            // 具体活动记录。漏掉它，删号后还能在统计页翻出旧账号的完整流水。
+            com.hnnujw.course.secondclass.SecondClassPointCache.clearAccount(context, storageKey)
+            // 提醒计划同样是按账号落盘的，而且**两套提醒都已提供清理 API** —— 此前只是没接进来。
+            // 漏掉它们，系统里会永久留着该账号的课前 / 考前提醒闹钟（开机重排还会把它排回来），
+            // 用户删号后仍可能收到它的提醒。`ExamReminderScheduler.clearAll` 的注释写的就是
+            // "退出登录 / 删除账号时清掉该账号的提醒"，但此前零调用点。
+            com.hnnujw.course.schedule.ScheduleReminderScheduler.get(context).clearAccount(storageKey)
+            com.hnnujw.course.schedule.ExamReminderScheduler.clearAll(context, storageKey)
         }
-        // 第二课堂的 token 与已保存密码是按 accountKey 存的，一起删掉才算"彻底删号"
+        // 第二课堂的 token、学工 token 与已保存密码都是按 accountKey 存的，一起删掉才算"彻底删号"。
+        // 学工那条尤其不能漏：`XuegongStore.clearAccount` 会一并删掉加密存储的学工密码。
         com.hnnujw.course.secondclass.SecondClassroomStore.clearAccount(context, record.key)
+        com.hnnujw.course.xuegong.XuegongStore.clearAccount(context, record.key)
+        // 一卡通同理：令牌与加密保存的一卡通密码都按 accountKey 存，删号必须一起清。
+        com.hnnujw.course.ykt.YktStore.clearAccount(context, record.key)
+        // 电费查询的"上次选择"（费项/校区/楼栋/楼层/房间）也是按账号落盘的。
+        // 不清的话，下一个登进同一账号的人会看到上一个学生的宿舍号。
+        com.hnnujw.course.ykt.YktSelectionStore.clear(context, record.key)
+        // 电费提醒的去重状态也按账号存：不清的话下一个登进同一账号会继承"已提醒过"，
+        // 于是首次跌破余额时静默不响 —— 正是这个功能最该响的时刻。
+        com.hnnujw.course.ykt.YktAlertStateStore.clear(context, record.key)
         refreshAccountUiState()
         if (isCurrent) {
-            // 当前账号被删掉，会话已经没有依据了，直接回登录页
+            // 当前账号被删掉，会话已经没有依据了，直接回登录页。
+            // 消息基线一并清掉 —— 但 `MessageCenterNotifier.reset` 会把**内存里的红点**也归零，
+            // 所以只能对"正在被删的当前账号"调用，否则会误清其它账号的红点。
+            if (storageKey.isNotEmpty()) {
+                com.hnnujw.course.academic.MessageCenterNotifier.reset(context, storageKey)
+            }
             GlassToaster.show("账号已删除，请重新登录")
             performLogout()
         } else {
@@ -499,6 +524,8 @@ fun SettingsRoute(
         onStartupPageSelect = { showStartupPageDialog = true },
         glassEffectEnabled = AppearanceSettingsManager.glassEffectEnabled,
         onGlassEffectChange = { AppearanceSettingsManager.updateGlassEffect(it) },
+        navBarAutoCollapseEnabled = AppearanceSettingsManager.navBarAutoCollapseEnabled,
+        onNavBarAutoCollapseChange = { AppearanceSettingsManager.updateNavBarAutoCollapse(it) },
         messageUnread = messageUnread,
         announcementUnread = announcementUnread,
         onAnnouncements = { context.startActivity(Intent(context, com.hnnujw.course.AnnouncementActivity::class.java)) },
@@ -509,13 +536,17 @@ fun SettingsRoute(
         notificationsAllowed = notificationsAllowed,
         onNotificationSettings = { MainActivity.openNotificationSettings(context) },
         onMessageCenter = { context.startActivity(Intent(context, MessageCenterActivity::class.java)) },
-        onXuegongSystem = {
-            runCatching { context.startActivity(Intent(context, com.hnnujw.course.XuegongActivity::class.java)) }
-                .onFailure { GlassToaster.show("无法打开学工系统页面") }
-        },
         onKaojiRegistration = {
             runCatching { context.startActivity(Intent(context, com.hnnujw.course.KaojiActivity::class.java)) }
                 .onFailure { GlassToaster.show("无法打开考级报名页面") }
+        },
+        onCampusCard = {
+            runCatching { context.startActivity(Intent(context, com.hnnujw.course.YktActivity::class.java)) }
+                .onFailure { GlassToaster.show("无法打开一卡通页面") }
+        },
+        onEmptyRoom = {
+            runCatching { context.startActivity(Intent(context, com.hnnujw.course.EmptyRoomActivity::class.java)) }
+                .onFailure { GlassToaster.show("无法打开空闲教室查询") }
         },
         onCheckUpdate = { checkForUpdate() },
         onOpenManual = {
@@ -578,13 +609,18 @@ fun SettingsRoute(
             text = "确定要清除所有本地缓存数据吗？",
             onConfirm = {
                 // 之前这里只弹了一句 Toast、什么都没清。现在真正落地清理：
-                // 课程列表缓存 + 成绩/考试缓存 + 消息中心缓存 + 课表缓存。
+                // 课程列表缓存 + 成绩/考试缓存 + 消息中心缓存 + 二课积分缓存 + 课表缓存。
                 // 注意不动账号、密码、激活码、外观与提醒设置等"配置"类数据。
                 val cacheAccountKey = UserManager.getInstance().currentAccountStorageKey
                 com.hnnujw.course.manager.CourseCacheManager.clearCache(context)
                 if (cacheAccountKey.isNotBlank()) {
                     com.hnnujw.course.manager.GradesCacheManager.clearAccount(context, cacheAccountKey)
                     com.hnnujw.course.academic.MessageCenterManager.clearCache(context, cacheAccountKey)
+                    // 二课积分缓存同样按账号落盘；漏掉它，"清除缓存"后卡片仍会读到旧数据
+                    com.hnnujw.course.secondclass.SecondClassOverviewCache.clearAccount(context, cacheAccountKey)
+                    // 明细缓存与概览缓存是两份 prefs，必须各自清 —— 只清概览会让
+                    // 统计页继续显示旧流水，用户会以为"清除缓存没生效"
+                    com.hnnujw.course.secondclass.SecondClassPointCache.clearAccount(context, cacheAccountKey)
                 }
                 context.getSharedPreferences("schedule_cache", android.content.Context.MODE_PRIVATE)
                     .edit().clear().apply()
@@ -735,14 +771,18 @@ fun SettingsRoute(
                         .fillMaxWidth()
                         .clickable {
                             showContactDialog = false
-                            openInBrowser("https://github.com/Elisoar111/hnnu-jiaowu-app/issues")
+                            // ⚠️ 这里原先指向 https://github.com/Elisoar111/hnnu-jiaowu-app/issues，
+                            // 但 GitHub 镜像仓的 Issues 是**关闭**的（has_issues=false），点进去是 404
+                            // —— 一个"推荐"入口指向打不开的页面。Gitee 仓库已开启 Issues（has_issues=true），
+                            // 所以反馈走那边。若以后在 GitHub 侧打开了 Issues，把这里换回去即可。
+                            openInBrowser("https://gitee.com/Elisoar/hnnu-jiaowu-app/issues")
                         },
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
                     shape = RoundedCornerShape(14.dp)
                 ) {
                     Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
                         Text(
-                            text = "GitHub Issue（推荐）",
+                            text = "Gitee Issue（推荐）",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -829,7 +869,7 @@ fun SettingsRoute(
             ) {
                 Text(
                     text = "开源、免费、无广告的高校教务客户端。" +
-                        "课表、选课、成绩、第二课堂、教务消息一站式完成，" +
+                        "课表、成绩、第二课堂、教务消息一站式完成，" +
                         "全套液态玻璃界面，折射、色散与跟手形变实时渲染。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -867,7 +907,7 @@ fun SettingsRoute(
                 AboutSection(title = "反馈与声明") {
                     Text(
                         text = "问题与建议：GitHub Issue 或邮件 elisoar@qq.com\n" +
-                            "本应用与学校官方无关，选课规则与数据以学校教务为准。",
+                            "本应用与学校官方无关，课表与成绩数据以学校教务为准。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         lineHeight = 20.sp

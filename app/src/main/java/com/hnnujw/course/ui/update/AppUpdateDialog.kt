@@ -1,5 +1,11 @@
 package com.hnnujw.course.ui.update
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -37,10 +44,13 @@ import androidx.compose.ui.unit.sp
 import com.hnnujw.course.network.AppDownloader
 import com.hnnujw.course.network.AppUpdateInfo
 import com.hnnujw.course.ui.system.GlassProgressBar
+import com.hnnujw.course.ui.system.MarkdownText
 import com.hnnujw.course.ui.system.SystemDialog
 import com.hnnujw.course.ui.system.SystemPrimaryButton
 import com.hnnujw.course.ui.system.SystemSecondaryButton
+import com.hnnujw.course.ui.system.rememberGlassAccessibilityMode
 import com.hnnujw.course.ui.system.rememberScreenMetrics
+import com.hnnujw.course.ui.theme.MotionDuration
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
@@ -135,31 +145,29 @@ fun AppUpdateDialog(
         downloadJob?.cancel()
         downloadJob = null
         AppDownloader.reset()
-        onDismiss()
+        // 强制更新时「取消下载」只中止这一次传输，**不能**顺势把弹窗也关掉 ——
+        // 那等于给了一个绕过强制更新的后门按钮。
+        if (!info.forceUpdate) onDismiss()
     }
 
     val running = downloadState as? AppDownloader.State.Running
     val failed = (downloadState as? AppDownloader.State.Failed)
         ?.takeIf { readyApk == null }
 
+    /**
+     * 强制更新时弹窗不可关闭 —— 但**确实装不上时例外**。
+     *
+     * 「没有直链可下载」「下载失败」「系统没有可用安装器」这几种情况下如果还锁着弹窗，
+     * 用户会卡在一个关不掉、也点不动的框里，比不弹这个版本还糟。所以只要真的
+     * 无路可走，就把他放出去。
+     */
+    val stuck = directApkUrl == null || failed != null || hint != null
+    val dismissible = !info.forceUpdate || stuck
+
     SystemDialog(
-        onDismissRequest = { if (running == null) onDismiss() },
+        onDismissRequest = { if (dismissible && running == null) onDismiss() },
         icon = {
-            Surface(
-                shape = CircleShape,
-                color = Color(0xFFE3F2FD),
-                shadowElevation = 4.dp,
-                modifier = Modifier.size(64.dp)
-            ) {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.SystemUpdate,
-                        contentDescription = null,
-                        modifier = Modifier.size(32.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
+            UpdateGlyph()
         },
         title = {
             Column(
@@ -175,9 +183,15 @@ fun AppUpdateDialog(
                     textAlign = TextAlign.Center
                 )
                 Text(
-                    text = "当前版本 v$currentVersion",
+                    text = if (info.forceUpdate) {
+                        "本次更新需要升级后才能继续使用"
+                    } else {
+                        "当前版本 v$currentVersion"
+                    },
                     fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // 强制更新用错误色提示：这是一条"必须做"的说明，不是版本身份信息。
+                    color = if (info.forceUpdate) Color(0xFFF44336) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = if (info.forceUpdate) FontWeight.Medium else FontWeight.Normal,
                     textAlign = TextAlign.Center
                 )
             }
@@ -202,17 +216,19 @@ fun AppUpdateDialog(
                 enabled = running == null
             )
         },
-        dismissButton = {
-            // 这里必须是「取消下载」而不是「后台下载」：下载协程挂在
-            // rememberCoroutineScope() 上，弹窗一旦离开组合树，作用域就被取消，
-            // 下载**会真的断掉**。写成"后台下载"会让用户以为它还在后台跑，其实早就停了。
-            // 想做成真·后台下载，得把任务挪到进程级作用域，并在完成时发通知。
-            SystemSecondaryButton(
-                text = if (running != null) "取消下载" else "以后再说",
-                onClick = { if (running != null) cancelDownload() else onDismiss() },
-                enabled = true
-            )
-        }
+        dismissButton = if (dismissible) {
+            {
+                // 这里必须是「取消下载」而不是「后台下载」：下载协程挂在
+                // rememberCoroutineScope() 上，弹窗一旦离开组合树，作用域就被取消，
+                // 下载**会真的断掉**。写成"后台下载"会让用户以为它还在后台跑，其实早就停了。
+                // 想做成真·后台下载，得把任务挪到进程级作用域，并在完成时发通知。
+                SystemSecondaryButton(
+                    text = if (running != null) "取消下载" else "以后再说",
+                    onClick = { if (running != null) cancelDownload() else onDismiss() },
+                    enabled = true
+                )
+            }
+        } else null,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // 进度条：只在真正下载时出现，避免静止状态下多一条没意义的横线。
@@ -274,7 +290,9 @@ fun AppUpdateDialog(
                     .heightIn(max = notesMaxHeight)
                     .verticalScroll(rememberScrollState())
             ) {
-                Text(
+                // Release 说明现在可以带 Markdown（**加粗** / - 列表 / ## 小标题），
+                // 由 MarkdownText 决定走富文本还是普通 Text：不含标记时与以前完全一致。
+                MarkdownText(
                     text = info.notes.ifBlank { "本次更新暂无详细说明，建议更新到最新版本。" },
                     fontSize = 14.sp,
                     // 固定高度容器里的文字必须显式给 lineHeight，否则会继承默认行高
@@ -300,9 +318,49 @@ fun AppUpdateDialog(
     }
 }
 
+/**
+ * 弹窗顶部的更新图标：淡蓝圆底 + 系统更新图形，带**呼吸缩放**。
+ *
+ * 呼吸是参考项目里值得抄的一处细节：更新提示弹出来时用户往往正在忙别的，
+ * 静止的图标很容易被当成装饰略过。开了系统「减少动态效果」时退回静态。
+ */
+@Composable
+private fun UpdateGlyph() {
+    val reduceMotion = rememberGlassAccessibilityMode().reduceMotion
+    val transition = rememberInfiniteTransition(label = "updateGlyph")
+    val glyphScale by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = if (reduceMotion) 1f else 1.12f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(MotionDuration.EmphasisPulse, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "updateGlyphScale"
+    )
+    Surface(
+        shape = CircleShape,
+        color = Color(0xFFE3F2FD),
+        shadowElevation = 4.dp,
+        modifier = Modifier
+            .size(64.dp)
+            .graphicsLayer {
+                scaleX = glyphScale
+                scaleY = glyphScale
+            }
+    ) {
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = Icons.Default.SystemUpdate,
+                contentDescription = null,
+                modifier = Modifier.size(32.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+    }
+}
+
 private fun formatSize(bytes: Long): String =
     String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
-
 private fun formatSpeed(bytesPerSecond: Long): String =
     String.format(Locale.US, "%.1f MB/s", bytesPerSecond / 1024.0 / 1024.0)
 

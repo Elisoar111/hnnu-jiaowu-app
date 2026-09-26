@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import com.hnnujw.course.model.SchoolConfig
+import com.hnnujw.course.widgetboard.CardWidgetUpdater
 import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
@@ -19,8 +20,34 @@ import java.io.File
  */
 object MessageCenterManager {
 
+    /**
+     * 账号键归一化：与项目内其它按账号落盘的存储保持一致（非法字符替换为 `_`）。
+     *
+     * 例：`hnnu::2024001` → `hnnu__2024001`。
+     */
+    internal fun normalizeAccountKey(accountKey: String): String =
+        accountKey.ifBlank { "default" }.replace(Regex("[^A-Za-z0-9_.-]"), "_")
+
+    /**
+     * 账号键 → 当前缓存文件名。
+     *
+     * 旧实现是 `accountKey.hashCode().toString(36)`，有两个问题：
+     * 1. 两个不同账号一旦 `hashCode()` 碰撞，就会互相读到对方的消息列表；
+     * 2. 文件名是乱码串，排查线上问题时无法从文件名看出属于哪个账号。
+     * 现统一为项目内其它缓存一致的归一化口径。
+     */
+    internal fun cacheFileName(accountKey: String): String =
+        "message_center_" + normalizeAccountKey(accountKey) + ".json"
+
+    /** 旧口径（`hashCode()`）的文件名，**仅用于读取并迁移历史缓存**。 */
+    internal fun legacyCacheFileName(accountKey: String): String =
+        "message_center_" + accountKey.hashCode().toString(36) + ".json"
+
     private fun cacheFile(context: Context, accountKey: String): File =
-        File(context.cacheDir, "message_center_" + accountKey.hashCode().toString(36) + ".json")
+        File(context.cacheDir, cacheFileName(accountKey))
+
+    private fun legacyCacheFile(context: Context, accountKey: String): File =
+        File(context.cacheDir, legacyCacheFileName(accountKey))
 
     fun unreadCount(messages: List<AcademicMessage>): Int = messages.count { !it.read }
 
@@ -54,8 +81,33 @@ object MessageCenterManager {
 
     fun readCache(context: Context, accountKey: String): List<AcademicMessage>? = runCatching {
         val file = cacheFile(context, accountKey)
-        if (!file.exists()) return@runCatching null
-        val arr = JSONArray(file.readText())
+        if (file.exists()) return@runCatching decodeMessages(file.readText())
+
+        // 旧口径文件（`hashCode()` 命名）一次性迁移：读到内容后改写成新文件名并删掉旧的。
+        // 迁移失败不影响本次读取 —— 缓存目录里的数据随时可以重新抓取。
+        val legacy = legacyCacheFile(context, accountKey)
+        if (!legacy.exists()) return@runCatching null
+        val text = legacy.readText()
+        runCatching {
+            file.writeText(text)
+            legacy.delete()
+        }
+        decodeMessages(text)
+    }.getOrNull()
+
+    /**
+     * 缓存 JSON → 消息列表。
+     *
+     * **空数组 `[]` 解出的是空列表，不是 null** —— "共 0 条"是权威状态，与
+     * "读不到缓存"是两件事（见 `widgetboard/WidgetBoardData.messagesCardData` 的契约注释：
+     * 列表为空也返回非 null，卡片据此显示"共 0 条 / 没有未读"）。只有 JSON 本身
+     * 损坏、根本解不出列表时才返回 null。
+     *
+     * 抽成纯函数是为了能被 JVM 单测盯住：这个区分一旦被写回 `ifEmpty { null }`，
+     * 桌面卡片就会在"确实没有消息"的账号上错误地显示"还没有消息缓存"。
+     */
+    internal fun decodeMessages(json: String): List<AcademicMessage>? = runCatching {
+        val arr = JSONArray(json)
         val list = mutableListOf<AcademicMessage>()
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
@@ -70,26 +122,51 @@ object MessageCenterManager {
                 content = o.optString("content")
             )
         }
-        list.ifEmpty { null }
+        list
     }.getOrNull()
+
+    internal fun encodeMessages(messages: List<AcademicMessage>): String {
+        val arr = JSONArray()
+        for (m in messages) {
+            arr.put(JSONObject().apply {
+                put("id", m.id); put("title", m.title); put("sender", m.sender)
+                put("sendTime", m.sendTime); put("summary", m.summary)
+                put("read", m.read); put("detailUrl", m.detailUrl)
+                put("content", m.content)
+            })
+        }
+        return arr.toString()
+    }
 
     fun writeCache(context: Context, accountKey: String, messages: List<AcademicMessage>) {
         runCatching {
-            val arr = JSONArray()
-            for (m in messages) {
-                arr.put(JSONObject().apply {
-                    put("id", m.id); put("title", m.title); put("sender", m.sender)
-                    put("sendTime", m.sendTime); put("summary", m.summary)
-                    put("read", m.read); put("detailUrl", m.detailUrl)
-                    put("content", m.content)
-                })
-            }
-            cacheFile(context, accountKey).writeText(arr.toString())
+            cacheFile(context, accountKey).writeText(encodeMessages(messages))
+            // 新口径文件已落盘，旧口径文件不再需要（读取时新文件优先）。
+            legacyCacheFile(context, accountKey).delete()
+            notifyCardWidget(context)
         }
     }
 
     fun clearCache(context: Context, accountKey: String) {
-        runCatching { cacheFile(context, accountKey).delete() }
+        runCatching {
+            cacheFile(context, accountKey).delete()
+            legacyCacheFile(context, accountKey).delete()
+        }
+        notifyCardWidget(context)
+    }
+
+    /**
+     * 通知桌面卡片重画一次。
+     *
+     * 列表缓存落在 `cacheDir` 的 JSON 文件里，而桌面组件的自动刷新只监听 SharedPreferences
+     * （`CardWidgetUpdater.OBSERVED_PREFS`），看不见文件写入。少了这一句，桌面上的
+     * 「未读消息」卡就要等系统 `updatePeriodMillis` 那个 30 分钟的兜底周期才更新 ——
+     * 收到新消息后半小时桌面还是旧数字。
+     *
+     * 放在写入之后而不是读完之前：卡片渲染本来就只读缓存，读这一侧没有可通知的事。
+     */
+    private fun notifyCardWidget(context: Context) {
+        runCatching { CardWidgetUpdater.refreshSoon(context) }
     }
 
     /** 标记单条为已读并写回缓存，同时把未读计数减一。 */

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.ContentPasteSearch
+import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.ImportContacts
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Share
@@ -44,6 +45,8 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.TextFormat
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.HowToReg
+import androidx.compose.material.icons.outlined.MeetingRoom
+import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -112,6 +115,9 @@ fun SettingsScreen(
     onStartupPageSelect: () -> Unit = {},
     glassEffectEnabled: Boolean = true,
     onGlassEffectChange: (Boolean) -> Unit = {},
+    /** 底部导航栏是否随滚动自动收起（默认开）。 */
+    navBarAutoCollapseEnabled: Boolean = true,
+    onNavBarAutoCollapseChange: (Boolean) -> Unit = {},
     /** 消息中心未读数；> 0 时入口显示红点。 */
     messageUnread: Int = 0,
     isSuper: Boolean = false,
@@ -127,11 +133,12 @@ fun SettingsScreen(
     notificationsAllowed: Boolean = true,
     /** 打开系统通知设置页。 */
     onNotificationSettings: () -> Unit = {},
-    /** 学工系统（日常请假 / 节假日去向登记）。 */
-    onXuegongSystem: () -> Unit = {},
-
     /** 考级项目报名（教务系统内的等级考试报名）。 */
     onKaojiRegistration: () -> Unit = {},
+    /** 空闲教室查询（教务系统内的场地查询，只读）。 */
+    onEmptyRoom: () -> Unit = {},
+    /** 一卡通（校园卡余额 / 宿舍电费，只读）。 */
+    onCampusCard: () -> Unit = {},
     onMessageCenter: () -> Unit = {},
     /** 公告中心未读数；> 0 时入口显示红点。 */
     announcementUnread: Int = 0,
@@ -256,22 +263,30 @@ fun SettingsScreen(
                 )
             }
 
-            // 校园服务：学工系统（学生工作处的系统，与教务/二课都不是一套）；
-            // 考级项目报名（教务系统内的等级考试报名，复用教务登录态）
+            // 校园服务：考级项目报名（教务系统内的等级考试报名，复用教务登录态）
             InsetGroupedSection(Modifier.moduleEntrance(3), header = "校园服务") {
-                SettingsRow(
-                    icon = Icons.AutoMirrored.Outlined.Assignment,
-                    iconTint = Color(0xFF34C759),
-                    title = "学工系统",
-                    subtitle = "日常请假 · 节假日去向登记（可提交）",
-                    onClick = onXuegongSystem
-                )
                 SettingsRow(
                     icon = Icons.Outlined.HowToReg,
                     iconTint = Color(0xFF5E5CE6),
                     title = "考级项目报名",
                     subtitle = "四六级 / 普通话等等级考试报名与退报",
                     onClick = onKaojiRegistration,
+                    showDivider = false
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.MeetingRoom,
+                    iconTint = Color(0xFFFF9500),
+                    title = "空闲教室",
+                    subtitle = "按周次 / 星期 / 节次查询没课的教室",
+                    onClick = onEmptyRoom,
+                    showDivider = false
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.CreditCard,
+                    iconTint = Color(0xFF34C759),
+                    title = "一卡通",
+                    subtitle = "余额、消费与宿舍电费查询",
+                    onClick = onCampusCard,
                     showDivider = false
                 )
             }
@@ -307,11 +322,27 @@ fun SettingsScreen(
                     } else {
                         "已关闭，改用不透明材质，更省电也更清晰"
                     },
-                    showDivider = false,
                     trailing = {
                         LiquidSwitch(
                             checked = glassEffectEnabled,
                             onCheckedChange = onGlassEffectChange
+                        )
+                    }
+                )
+                InsetGroupedRow(
+                    icon = Icons.Outlined.Home,
+                    iconTint = Color(0xFF30D158),
+                    title = "底部导航栏自动收起",
+                    subtitle = if (navBarAutoCollapseEnabled) {
+                        "向下浏览时收起，向上浏览时展开"
+                    } else {
+                        "始终保持展开"
+                    },
+                    showDivider = false,
+                    trailing = {
+                        LiquidSwitch(
+                            checked = navBarAutoCollapseEnabled,
+                            onCheckedChange = onNavBarAutoCollapseChange
                         )
                     }
                 )

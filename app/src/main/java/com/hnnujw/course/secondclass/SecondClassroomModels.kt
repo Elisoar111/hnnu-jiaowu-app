@@ -106,6 +106,156 @@ data class SecondClassSnapshot(
     val boards: Map<SecondClassRankLevel, SecondClassRankBoard> = emptyMap(),
 )
 
+// ── 积分明细（「分类与学期统计」，1.2.6）──────────────────────────────────
+//
+// 「每一分有迹可循」= 总积分必须能拆回一条条来源记录。
+// 站点把同一份账按两个维度各切一遍：
+//   · 按分类  `/student/achievement/by-classify-list`
+//   · 按学期  `/student/achievement/by-term-list`
+// 两条链路的记录**字段不完全一致**（学期维度多带 `classifyName`，分类维度多带
+// `amount` / `sourceType` / `relationId`），所以统一收敛到 [SecondClassPointRecord]，
+// 缺什么就是空值 —— 而不是为两个维度各写一套模型 + 两套界面。
+
+/**
+ * 一条积分来源记录（一笔"账"）。
+ *
+ * 两个维度共用的最小公倍数：分类维度提供 `amount` / `sourceType`，学期维度提供
+ * `classifyName`。所以同一条记录在两个 Tab 下的信息量可以不同，
+ * **但 `hours` 与 `time` 一定都在** —— 它们是"这一分从哪来、什么时候到账"的判据。
+ */
+data class SecondClassPointRecord(
+    /** 来源名称（活动名 / 申报项目名）。 */
+    val name: String,
+    /** 本笔记账的积分（站点 `hours`）。 */
+    val hours: Double,
+    /** 折算前的原始值（站点 `amount`）；分类维度才有，缺省时取 0 表示"站点没给"。 */
+    val amount: Double = 0.0,
+    /** 记账时间（epoch 毫秒）；站点没给时为 0。 */
+    val time: Long = 0,
+    /** 所属分类（学期维度才有；分类维度由外层分组补上）。 */
+    val classifyName: String = "",
+    /**
+     * 来源类型码（站点 `sourceType`）。
+     *
+     * ⚠️ 站点没有下发类型文案，也**没有**权威取值表，所以这里只保留原值，
+     * **不在界面上展示** —— 见 [sourceLabel]。
+     */
+    val sourceType: Int = 0,
+    /** 关联实体 id（站点 `relationId`），用于同一笔记录在两个维度间对齐。 */
+    val relationId: String = "",
+) {
+    /**
+     * 来源类型码的**裸文案**（形如 `来源 3`）。
+     *
+     * ⚠️ **刻意不在界面展示**（[com.hnnujw.course.ui.screen.SecondClassPointStatsContent]
+     * 的记录行已移除该字段）。原因：站点不给类型文案、也没有取值表，渲染出来就是
+     * 一行行读不懂的数字 —— 实测大量记录的 `sourceType` 恰好是 `3`，用户看到的就是
+     * "每个数字后面都有个 3"，纯噪声，还会把有用的分类/时间挤掉。
+     *
+     * 保留本属性只为了**可诊断性**（日志/调试时仍能看到原值），
+     * 并把"为什么不显示"这个决策留在代码里，避免日后又被加回界面。
+     */
+    val sourceLabel: String get() = when (sourceType) {
+        0 -> ""
+        else -> "来源 $sourceType"
+    }
+
+    /**
+     * 稳定标识：用于列表 key 与"同一笔账"的跨维度比对（[SecondClassPointLedger.reconcile]）。
+     *
+     * 必须把 `hours` 也算进去：同名活动可能被记两次账（不同档位 / 不同学期），
+     * 只按名字去重会把真实的两笔合成一笔，那反而让账"对不上"。
+     */
+    val identity: String
+        get() = listOf(name.trim(), hourKey(hours), time.toString(), relationId).joinToString("|")
+
+    /** 小数比较的容差键：去掉浮点尾差，避免 3.0 与 3.0000001 被当成两条。 */
+    private fun hourKey(value: Double): String =
+        String.format(java.util.Locale.ROOT, "%.2f", value)
+}
+
+/**
+ * 一个分组（一个分类 / 一个学期）的积分小计。
+ *
+ * [total] 有两个来源，优先级：**站点小计 > 本地记录求和**。
+ * 站点给的小计是权威值（它还会算上没下发记录的账），本地求和只是兜底。
+ * 两者不一致时由 [SecondClassPointLedger.reconcile] 标出来 —— 那正是
+ * "有账对不上"的信号，应该让用户看见，而不是悄悄用本地值盖掉。
+ */
+data class SecondClassPointGroup(
+    /** 分组名（分类名 / 学期名）。 */
+    val name: String,
+    /** 站点的 `classifyHours` / `termHours`；站点没给时为 null。 */
+    val siteTotal: Double? = null,
+    /** 学校要求的下限（分类维度有 `minHours`；学期维度没有）。 */
+    val required: Double = 0.0,
+    /** 明细记录。 */
+    val records: List<SecondClassPointRecord> = emptyList(),
+    /** 学期维度才有：学期序号（`termNumber`）。 */
+    val termNumber: String = "",
+    /** 学期维度才有：该学期积分的展示单位（`termHoursUnit`）。 */
+    val unit: String = "",
+) {
+    /** 本地明细求和。[records] 为空时是 0 —— 调用方要看 [hasRecords] 再决定显示什么。 */
+    val detailSum: Double get() = records.sumOf { it.hours }
+
+    /** 展示用合计：站点小计优先，缺失才退回本地求和。 */
+    val total: Double get() = siteTotal ?: detailSum
+
+    val hasRecords: Boolean get() = records.isNotEmpty()
+
+    /**
+     * 站点小计与本地明细是否对得上（差 > 0.005 视为不一致）。
+     * 站点没给小计时无从比较，返回 true（不误报）。
+     */
+    val reconciled: Boolean
+        get() = siteTotal == null || kotlin.math.abs(siteTotal - detailSum) <= 0.005
+}
+
+/**
+ * 一次「分类与学期统计」加载的完整结果。
+ *
+ * 两个维度是同一份账的两种切法，所以**必须一起加载**：
+ * 只有一个维度时 [SecondClassPointLedger.reconcile]（跨维度对账）就没法做，
+ * 而"每一分有迹可循"的核心正是这次对账。
+ */
+data class SecondClassPointLedger(
+    val byClassify: List<SecondClassPointGroup> = emptyList(),
+    val byTerm: List<SecondClassPointGroup> = emptyList(),
+    /** 站点表头的总积分；用来和两个维度的小计再对一次。 */
+    val profileScore: Double = 0.0,
+    /** 分页游标：还有更多记录时由界面上的「继续加载」触发。 */
+    val termHasMore: Boolean = false,
+    val classifyHasMore: Boolean = false,
+) {
+    val isEmpty: Boolean get() = byClassify.isEmpty() && byTerm.isEmpty()
+
+    /** 两个维度各自的合计（用于对账卡片）。 */
+    val classifyTotal: Double get() = byClassify.sumOf { it.total }
+    val termTotal: Double get() = byTerm.sumOf { it.total }
+
+    /** 记录总条数 —— "有迹可循"的最直观指标。 */
+    val recordCount: Int get() = (byClassify.sumOf { it.records.size }) + (byTerm.sumOf { it.records.size })
+
+    companion object {
+        /**
+         * 跨维度对账。
+         *
+         * 判据是**分类维度的小计** vs **学期维度的小计**，因为它们是同一份账的两种
+         * 切法，正常必然相等。差 > [TOLERANCE] 说明其中一边漏了记录（站点常见：
+         * 学期维度不含补录的历史账），此时界面应该如实提示，而不是随便挑一个显示。
+         *
+         * 任一维度为空时不做判断（数据没拉全，比了也是错的）。
+         */
+        const val TOLERANCE: Double = 0.005
+
+        fun reconcile(ledger: SecondClassPointLedger): Boolean {
+            if (ledger.byClassify.isEmpty() || ledger.byTerm.isEmpty()) return true
+            return kotlin.math.abs(ledger.classifyTotal - ledger.termTotal) <= TOLERANCE
+        }
+    }
+}
+
 /**
  * 一条「我的申报」记录（`/project/request/list1`）。
  *

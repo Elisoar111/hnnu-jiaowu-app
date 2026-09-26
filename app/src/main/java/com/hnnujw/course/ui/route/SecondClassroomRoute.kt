@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -17,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.hnnujw.course.demo.DemoData
 import com.hnnujw.course.manager.UserManager
+import com.hnnujw.course.secondclass.SecondClassPointCache
+import com.hnnujw.course.secondclass.SecondClassPointLedger
 import com.hnnujw.course.secondclass.SecondClassRankBoard
 import com.hnnujw.course.secondclass.SecondClassRankLevel
 import com.hnnujw.course.secondclass.SecondClassSnapshot
@@ -33,6 +36,7 @@ import com.hnnujw.course.ui.system.rememberPageData
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 
@@ -77,6 +81,56 @@ fun SecondClassroomRoute(
     var showLogin by remember { mutableStateOf(false) }
     /** 「成绩单」Tab 是否被打开过：只在打开后才去拉二课快照与榜单。 */
     var transcriptRequested by rememberSaveable { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    // ── 「分类与学期统计」（成绩单内的第二个分段）───────────────────────────
+    /** 成绩单内部分段：0 总览 / 1 分类与学期统计。 */
+    var transcriptSegment by rememberSaveable(accountKey) { mutableIntStateOf(0) }
+    /** 积分明细（分类 + 学期）。 */
+    var pointLedger by rememberPageData("secondclass.points") { SecondClassPointLedger() }
+    var pointLoading by remember(accountKey) { mutableStateOf(false) }
+    var pointError by remember(accountKey) { mutableStateOf("") }
+
+    /**
+     * 拉取积分明细。
+     *
+     * **按需触发**：只有用户切到「分类与学期统计」分段才会调 —— 这是两个额外的
+     * 网络请求，绝大多数同学进来只为看一眼总积分，不该让他们等。
+     * 已有缓存且不强制刷新时直接复用（[SecondClassPointCache.isStale] 判新鲜度）。
+     *
+     * 与二课其它链路一致：token 失效只清二课自己的凭据，绝不碰教务会话。
+     */
+    fun loadPoints(force: Boolean) {
+        val stored = SecondClassPointCache.load(context, accountKey)
+        if (!force && stored != null && !SecondClassPointCache.isStale(stored.updatedAt)) {
+            pointLedger = stored.ledger
+            pointError = ""
+            return
+        }
+        val c = SecondClassroomStore.clientFor(school) ?: return
+        pointLoading = true
+        scope.launch {
+            try {
+                val token = SecondClassroomStore.token(context, accountKey)
+                if (token.isBlank()) {
+                    pointError = "绑定第二课堂后即可查看积分明细"
+                    return@launch
+                }
+                val loaded = withContext(Dispatchers.IO) {
+                    SecondClassroomRepository.pointLedger(c, token, snapshot.profile.score)
+                }
+                pointLedger = loaded
+                pointError = ""
+                // 落缓存：下次进来能立刻出内容，不用盯着加载态
+                SecondClassPointCache.save(context, accountKey, loaded)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                pointError = SecondClassroomStore.handleFailure(context, accountKey, e)
+            } finally {
+                pointLoading = false
+            }
+        }
+    }
 
     LaunchedEffect(accountKey, revision, available, transcriptRequested) {
         if (isDemo) {
@@ -189,6 +243,30 @@ fun SecondClassroomRoute(
         }
     }
 
+    /**
+     * 「分类与学期统计」的加载闸门。
+     *
+     * 三个条件同时成立才发请求：成绩单被打开过、凭据可用、**用户真的切到了这个分段**。
+     * 用 effect 而不是只在 onSegmentSelect 里调，是为了让"整页刷新"也能带上它
+     * （刷新会把 revision++，这里跟着重跑）；同时 `loadPoints` 内部有缓存与陈旧判定，
+     * 重复触发不会变成请求风暴。
+     *
+     * 演示模式直接跳过：DEMO 快照本来就没有明细，取不到也编不出来。
+     */
+    LaunchedEffect(accountKey, revision, bound, available, transcriptSegment, transcriptRequested) {
+        if (isDemo) {
+            // 演示模式：直接喂一份虚构明细（账目对得上，用来演示"每一分都有出处"）
+            if (transcriptSegment == 1 && pointLedger.isEmpty) {
+                pointLedger = DemoData.secondClassPointLedger()
+            }
+            return@LaunchedEffect
+        }
+        if (!transcriptOnly && !transcriptRequested) return@LaunchedEffect
+        if (!available || !bound) return@LaunchedEffect
+        if (transcriptSegment != 1) return@LaunchedEffect
+        loadPoints(force = revision > 0 && pointLedger.isEmpty)
+    }
+
     if (transcriptOnly) {
         SecondClassTranscriptScreen(
             ui = SecondClassroomUi(
@@ -203,6 +281,10 @@ fun SecondClassroomRoute(
                 boardError = boardError,
                 // 直接读全局 state：拨动开关后整页重组，榜单随之显隐
                 showClassRank = com.hnnujw.course.manager.AppearanceSettingsManager.showClassRank,
+                transcriptSegment = transcriptSegment,
+                pointLedger = pointLedger,
+                pointLoading = pointLoading,
+                pointError = pointError,
             ),
             onBind = { showLogin = true },
             onRefresh = {
@@ -214,6 +296,13 @@ fun SecondClassroomRoute(
             onShowClassRankChange = {
                 com.hnnujw.course.manager.AppearanceSettingsManager.updateShowClassRank(it)
             },
+            onSegmentSelect = { segment ->
+                transcriptSegment = segment
+                // 切到统计分段才去拉明细 —— 不点这个分段一个请求都不发
+                if (segment == 1) loadPoints(force = false)
+            },
+            onPointsRefresh = { loadPoints(force = true) },
+            onPointsBind = { showLogin = true },
             onClose = onClose,
         )
     } else if (available && bound) {
@@ -243,6 +332,10 @@ fun SecondClassroomRoute(
                         boardLoading = boardLoading,
                         boardError = boardError,
                         showClassRank = com.hnnujw.course.manager.AppearanceSettingsManager.showClassRank,
+                        transcriptSegment = transcriptSegment,
+                        pointLedger = pointLedger,
+                        pointLoading = pointLoading,
+                        pointError = pointError,
                     ),
                     onBind = { showLogin = true },
                     onRefresh = {
@@ -254,6 +347,12 @@ fun SecondClassroomRoute(
                     onShowClassRankChange = {
                         com.hnnujw.course.manager.AppearanceSettingsManager.updateShowClassRank(it)
                     },
+                    onSegmentSelect = { segment ->
+                        transcriptSegment = segment
+                        if (segment == 1) loadPoints(force = false)
+                    },
+                    onPointsRefresh = { loadPoints(force = true) },
+                    onPointsBind = { showLogin = true },
                     embedded = true,
                 )
             },

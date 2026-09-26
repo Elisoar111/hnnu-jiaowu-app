@@ -119,7 +119,7 @@ import kotlinx.coroutines.withContext
  * 与二课的处理完全一致，用户不用每次进来都输密码。
  */
 @Composable
-fun XuegongScreen(onBack: () -> Unit) {
+fun XuegongScreen(onBack: (() -> Unit)? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val userManager = remember { UserManager.getInstance() }
@@ -378,6 +378,21 @@ fun XuegongScreen(onBack: () -> Unit) {
         }
     }
 
+    // 返回键处理：子页（详情/表单）打开时返回箭头收起子页；根页面透传 onBack。
+    // 作为 Tab 时 onBack 为 null → 不显示箭头（与其它 Tab 一致）；
+    // 作为独立 Activity 时 onBack=finish → 根页面箭头点按即退出 Activity。
+    val backHandler: (() -> Unit)? =
+        if (leaveDetail != null || whereaboutsDetail != null || leaveForm != null || whereaboutsForm != null) {
+            {
+                if (leaveDetail != null) leaveDetail = null
+                else if (whereaboutsDetail != null) whereaboutsDetail = null
+                else if (leaveForm != null && !(leaveForm?.submitting ?: false)) leaveForm = null
+                else if (whereaboutsForm != null && !(whereaboutsForm?.submitting ?: false)) whereaboutsForm = null
+            }
+        } else {
+            onBack
+        }
+
     GlassPageScaffold(
         title = when {
             leaveDetail != null -> "请假详情"
@@ -391,15 +406,7 @@ fun XuegongScreen(onBack: () -> Unit) {
             token.isBlank() -> null
             else -> "日常请假与节假日去向登记"
         },
-        onBack = {
-            when {
-                leaveDetail != null -> leaveDetail = null
-                whereaboutsDetail != null -> whereaboutsDetail = null
-                leaveForm != null -> if (!(leaveForm?.submitting ?: false)) leaveForm = null
-                whereaboutsForm != null -> if (!(whereaboutsForm?.submitting ?: false)) whereaboutsForm = null
-                else -> onBack()
-            }
-        },
+        onBack = backHandler,
         actions = {
             if (token.isNotBlank() && !detailOpen) {
                 SystemIconButton(Icons.Outlined.Refresh, "刷新", { if (!loading) load(token) })
@@ -814,7 +821,13 @@ private fun LeaveTab(
     onWriteLeave: () -> Unit,
 ) {
     if (page == null) {
-        SystemEmptyState(title = "暂无数据", message = "没有读到请假记录。")
+        // page == null 是**读取失败**，不是"没有请假记录"（后者由下面的分支处理）。
+        // 原先这里写「暂无数据 / 没有读到请假记录。」，两者看起来都是空态，
+        // 用户分不清"学校还没开这个入口"与"这次没请求到"。
+        SystemEmptyState(
+            title = "请假记录读取失败",
+            message = "没有取到学工系统的请假数据，请稍后重试。若一直失败，可能是校方入口尚未开放。"
+        )
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1019,7 +1032,11 @@ private fun WhereaboutsTab(
     onOpenBatch: (XuegongHolidayBatch) -> Unit,
 ) {
     if (page == null) {
-        SystemEmptyState(title = "暂无数据", message = "没有读到去向登记信息。")
+        // 同 LeaveTab：null = 读取失败，"没有批次"是另一种状态（见下方 visibleBatches 分支）。
+        SystemEmptyState(
+            title = "去向登记读取失败",
+            message = "没有取到学工系统的去向登记数据，请稍后重试。若一直失败，可能是校方入口尚未开放。"
+        )
         return
     }
     fun recordOf(batch: XuegongHolidayBatch): XuegongWhereaboutsRecord? =

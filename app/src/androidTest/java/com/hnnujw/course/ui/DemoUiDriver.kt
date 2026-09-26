@@ -148,7 +148,7 @@ internal class DemoUiDriver : AutoCloseable {
     }
     fun navigate(text: String) {
         if (!hasText(text)) {
-            listOf("课表", "选课", "成绩", "二课", "设置").firstOrNull(::hasText)?.let {
+            listOf("课表", "学工", "成绩", "二课", "我的").firstOrNull(::hasText)?.let {
                 click(it, bottomMost = true)
                 SystemClock.sleep(500)
             }

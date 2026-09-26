@@ -39,25 +39,16 @@ object CourseReminderPlanner {
         val course = reminder.course
         val weeks = ScheduleWeeks.parse(course.weeks)
         if (!weeks.valid) return ReminderStatus(ReminderAvailability.InvalidWeeks)
-        val date = timeBase?.firstWeekDate?.split('-')?.map { it.toIntOrNull() }
-        val time = timeBase?.periodStarts?.get(course.startPeriod)?.split(':')?.map { it.toIntOrNull() }
-        if (date?.size != 3 || date.any { it == null } || time?.size != 2 || time.any { it == null } ||
-            time[0] !in 0..23 || time[1] !in 0..59 || course.day !in 1..7 ||
-            course.startPeriod < 1 || course.endPeriod < course.startPeriod || reminder.leadMinutes !in 0..1440) {
+        // 日期 / 时钟的解析都走 ScheduleOccurrences 里的共享助手：上课自动模式要用同一套
+        // 算术判断"这节课什么时候开始"，两份实现迟早会对不上。
+        val time = parseClock(timeBase?.periodStarts?.get(course.startPeriod))
+        if (time == null || course.day !in 1..7 || course.startPeriod < 1 ||
+            course.endPeriod < course.startPeriod || reminder.leadMinutes !in 0..1440) {
             return ReminderStatus(ReminderAvailability.NeedsTime)
         }
-        val monday = runCatching {
-            Calendar.getInstance(zone).apply {
-                clear()
-                isLenient = false
-                set(date[0]!!, date[1]!! - 1, date[2]!!, time[0]!!, time[1]!!)
-                timeInMillis
-                require(get(Calendar.DAY_OF_WEEK) == Calendar.MONDAY)
-            }
-        }.getOrNull() ?: return ReminderStatus(ReminderAvailability.NeedsTime)
+        val monday = weekOneMonday(timeBase, zone) ?: return ReminderStatus(ReminderAvailability.NeedsTime)
         for (week in weeks.weeks.sorted()) {
-            val occurrence = (monday.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, (week - 1) * 7 + course.day - 1) }
-            val startsAt = occurrence.timeInMillis
+            val startsAt = occurrenceAt(monday, week, course.day, time.first, time.second, zone).timeInMillis
             val trigger = startsAt - reminder.leadMinutes * 60_000L
             if (trigger > now) return ReminderStatus(ReminderAvailability.Scheduled, PlannedReminder(reminder, trigger, startsAt))
         }

@@ -16,7 +16,7 @@ import androidx.compose.runtime.compositionLocalOf
  * - `rememberCoursePeriodHeight` 是用同一个（已缩放的）密度去实测文字的，
  *   所以行高会跟着文字自动长高，不会把字挤到"一行都排不下"。
  *
- * 其它页面（成绩、选课、二课、设置）不读这个值，因此不受影响。
+ * 其它页面（成绩、二课、设置）不读这个值，因此不受影响。
  */
 val LocalScheduleFontScale = compositionLocalOf { 1f }
 

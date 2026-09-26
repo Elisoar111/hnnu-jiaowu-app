@@ -3,6 +3,7 @@ package com.hnnujw.course.examreg
 import com.hnnujw.course.academic.AcademicException
 import com.hnnujw.course.academic.AcademicHtml
 import com.hnnujw.course.academic.AcademicHttpTransport
+import com.hnnujw.course.academic.AcademicMenu
 import com.hnnujw.course.academic.AcademicStatus
 import com.hnnujw.course.model.SchoolConfig
 import okhttp3.MultipartBody
@@ -21,7 +22,15 @@ object KaojiClient {
     /** 入口页（服务端直出项目卡片）。 */
     private const val INDEX_PATH = "kjgl/kjbm_cxXskjbm.html"
     private const val GNMKDM = "N2510"
-    private const val XMLBFL = "1001"
+
+    /** 本学期过期项目（网页端页头「本学期过期项目报名信息」按钮走到这里）。 */
+    private const val EXPIRED_PATH = "kjgl/kjbm_cxGqxm.html"
+
+    /**
+     * 兜底类别。仅在**菜单里读不到考级入口**时使用（例如菜单接口临时不可用）。
+     * 正常情况下类别由 [loadCategories] 从教务菜单发现 —— 别再写死。
+     */
+    val DEFAULT_CATEGORY = KaojiCategory(xmlbfl = "1001", title = "考级项目报名")
 
     // ── 结果模型 ─────────────────────────────────────────────────────────
 
@@ -37,31 +46,86 @@ object KaojiClient {
         data class NeedLogin(val message: String) : SubmitResult()
     }
 
+    sealed class ExpiredResult {
+        data class Success(val projects: List<KaojiExpiredProject>, val totalCount: Int) : ExpiredResult()
+        data class NeedLogin(val message: String) : ExpiredResult()
+        data class Failure(val message: String) : ExpiredResult()
+    }
+
+    // ── 类别发现 ─────────────────────────────────────────────────────────
+
+    /**
+     * 从教务功能菜单（[AcademicMenu.PATH]）发现本账号可用的考级类别。
+     *
+     * 菜单条目形如 `clickMenu('N2510','/kjgl/kjbm_cxXskjbm.html?xmlbfl=1001','考级项目报名','null')`
+     * —— 类别代码、入口路径、站点标题都在里面，所以这里**只做发现，不做猜测**：
+     * 学生有「大类分流报名 / 推免报名」权限的学校会在菜单里多出对应条目，
+     * 我们照收；没有就只显示一条。
+     *
+     * 读不到（菜单接口异常 / 条目里没带 xmlbfl）时退到 [DEFAULT_CATEGORY]，
+     * 保证页面至少能用 —— 这也是早先版本写死 1001 时唯一的行为，不会变差。
+     */
+    suspend fun loadCategories(transport: AcademicHttpTransport): List<KaojiCategory> =
+        runCatching {
+            val response = transport.get(transport.appUrl(AcademicMenu.PATH))
+            if (AcademicHtml.isLoginPage(response.text)) return@runCatching emptyList()
+            AcademicMenu.query(response.text, INDEX_PATH)
+                .mapNotNull { item ->
+                    val xmlbfl = AcademicMenu.queryParam(item.url, "xmlbfl") ?: return@mapNotNull null
+                    KaojiCategory(xmlbfl = xmlbfl, title = item.title.ifBlank { DEFAULT_CATEGORY.title })
+                }
+                .distinctBy { it.xmlbfl }
+        }.getOrDefault(emptyList()).ifEmpty { listOf(DEFAULT_CATEGORY) }
+
     // ── 读取 ─────────────────────────────────────────────────────────────
 
     /**
      * 拉取考级报名主页：项目卡片 + 已报名记录。
      * 两个请求都是 GET，与网页浏览等价。
+     *
+     * ⚠️ 「项目列表为空」是**成功**（当前没有开放批次），不是失败 ——
+     * 解析层只在连页面都认不出时才给 null，那时优先把站点自己的提示语
+     * （`.nodata` / `.error_title`，如「无功能权限」）透给用户，
+     * 比我们自造的「没有返回可识别的页面」有用得多。
+     *
+     * @param xmlbfl 类别代码，来自 [loadCategories]；默认 [DEFAULT_CATEGORY]。
      */
-    suspend fun loadPage(transport: AcademicHttpTransport, school: SchoolConfig): LoadResult {
+    suspend fun loadPage(
+        transport: AcademicHttpTransport,
+        school: SchoolConfig,
+        xmlbfl: String = DEFAULT_CATEGORY.xmlbfl,
+    ): LoadResult {
         return try {
             val index = transport.get(
-                transport.appUrl("$INDEX_PATH?xmlbfl=$XMLBFL&gnmkdm=$GNMKDM"),
-                referer = transport.appUrl("xsMain/newindex.html")
+                transport.appUrl("$INDEX_PATH?xmlbfl=$xmlbfl&gnmkdm=$GNMKDM"),
+                referer = transport.appUrl(AcademicMenu.PATH)
             )
             if (AcademicHtml.isLoginPage(index.text)) {
                 return LoadResult.NeedLogin("登录已失效，请重新登录教务账号")
             }
+            val pageNotice = AcademicHtml.pageNotice(index.text)
             val page = KaojiParser.parseIndexPage(index.text)
-                ?: return LoadResult.Failure("教务系统没有返回可识别的考级报名页面，可能该功能未开放")
+                ?: return LoadResult.Failure(
+                    pageNotice.ifBlank { "教务系统没有返回可识别的考级报名页面，可能该功能未开放" }
+                )
             val registered = runCatching {
                 val grid = transport.get(
-                    transport.appUrl("$INDEX_PATH?doType=query&pkey=&xmlbfl=$XMLBFL&_=${System.currentTimeMillis()}"),
+                    transport.appUrl("$INDEX_PATH?doType=query&pkey=&xmlbfl=$xmlbfl&_=${System.currentTimeMillis()}"),
                     referer = index.url, ajax = true
                 )
-                if (AcademicHtml.isLoginPage(grid.text)) emptyList() else KaojiParser.parseRegistered(grid.text)
-            }.getOrDefault(emptyList())
-            LoadResult.Success(page.copy(registered = registered))
+                if (AcademicHtml.isLoginPage(grid.text)) {
+                    KaojiParser.Envelope(emptyList(), 0)
+                } else {
+                    KaojiParser.parseEnvelope(grid.text)
+                }
+            }.getOrDefault(KaojiParser.Envelope(emptyList(), 0))
+            LoadResult.Success(
+                page.copy(
+                    registered = registered.rows.map(KaojiParser::toRegistered),
+                    registeredTotal = registered.totalCount,
+                    pageNotice = pageNotice,
+                )
+            )
         } catch (e: AcademicException) {
             if (e.status == AcademicStatus.SESSION_EXPIRED) {
                 LoadResult.NeedLogin("登录已失效，请重新登录教务账号")
@@ -73,6 +137,43 @@ object KaojiClient {
         }
     }
 
+    /**
+     * 拉取「本学期过期项目报名信息」，与网页端页头那个信封按钮同一个接口。
+     *
+     * 与 [loadPage] 共用同一个 jqGrid 信封解析，但**按需调用**（界面上是显式按钮）：
+     * 网页端也要点一下才看，没必要每次进页面都多打一个请求。
+     */
+    suspend fun loadExpired(
+        transport: AcademicHttpTransport,
+        xmlbfl: String = DEFAULT_CATEGORY.xmlbfl,
+    ): ExpiredResult {
+        return try {
+            val response = transport.get(
+                transport.appUrl("$EXPIRED_PATH?doType=query&pkey=&xmlbfl=$xmlbfl&_=${System.currentTimeMillis()}"),
+                referer = transport.appUrl("$INDEX_PATH?xmlbfl=$xmlbfl&gnmkdm=$GNMKDM"),
+                ajax = true
+            )
+            if (AcademicHtml.isLoginPage(response.text)) {
+                return ExpiredResult.NeedLogin("登录已失效，请重新登录教务账号")
+            }
+            val envelope = KaojiParser.parseEnvelope(response.text)
+            // 信封都解析不出来（不是 JSON）说明不是这个接口该有的响应，
+            // 别把它当成"过期项目为 0 条"。
+            if (envelope.rows.isEmpty() && envelope.totalCount == 0 && !response.text.trim().startsWith("{")) {
+                return ExpiredResult.Failure("教务系统没有返回可识别的过期项目数据")
+            }
+            ExpiredResult.Success(envelope.rows.map(KaojiParser::toExpiredProject), envelope.totalCount)
+        } catch (e: AcademicException) {
+            if (e.status == AcademicStatus.SESSION_EXPIRED) {
+                ExpiredResult.NeedLogin("登录已失效，请重新登录教务账号")
+            } else {
+                ExpiredResult.Failure(e.message ?: "加载过期项目失败")
+            }
+        } catch (e: Exception) {
+            ExpiredResult.Failure(e.message ?: "无法连接教务系统，请检查网络或稍后重试")
+        }
+    }
+
     // ── 报名 ─────────────────────────────────────────────────────────────
 
     /**
@@ -81,6 +182,7 @@ object KaojiClient {
      * multipart 提交到 zjBcXskjbm → 响应文本含「成功」判成。
      *
      * @param phone 考生联系电话；与表单页的 oldSjhm 不一致时站点置 gdbj=1（改过手机）。
+     * @param xmlbfl 当前类别，用于复刻网页端的 Referer。
      */
     suspend fun submitRegistration(
         transport: AcademicHttpTransport,
@@ -89,6 +191,7 @@ object KaojiClient {
         xnm: String,
         xqm: String,
         phone: String,
+        xmlbfl: String = DEFAULT_CATEGORY.xmlbfl,
     ): SubmitResult {
         return try {
             val check = transport.postForm(
@@ -103,7 +206,7 @@ object KaojiClient {
 
             val form = transport.get(
                 transport.appUrl("kjgl/kjbm_zjXskjbm.html?xmbmsz_id=${project.id}"),
-                referer = transport.appUrl("$INDEX_PATH?xmlbfl=$XMLBFL&gnmkdm=$GNMKDM")
+                referer = transport.appUrl("$INDEX_PATH?xmlbfl=$xmlbfl&gnmkdm=$GNMKDM")
             )
             if (AcademicHtml.isLoginPage(form.text)) return SubmitResult.NeedLogin("登录已失效，请重新登录教务账号")
             val snapshot = KaojiParser.parseFormPage(form.text)

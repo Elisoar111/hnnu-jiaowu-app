@@ -206,9 +206,34 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      # 正式发布签名。四个 secret 必须齐全且互相对应，否则下面的构建会被
+      # app/build.gradle 里那道 GradleException 直接终止（这是刻意设计：
+      # 与其静默发出一个 debug 签名、老用户覆盖安装失败的包，不如让流水线停下）。
+      #
+      #   KEYSTORE_BASE64            app/release-key.jks 的 base64（不要带换行）
+      #   RELEASE_STORE_PASSWORD     keystore 口令
+      #   RELEASE_KEY_ALIAS          别名（当前为 hnnujw-release）
+      #   RELEASE_KEY_PASSWORD       该别名对应的口令（PKCS12 下与 store 口令相同）
+      #
+      # 生成 base64：base64 -w0 app/release-key.jks
+      #
+      # ⚠️ 换密钥时**必须**同步改 scripts/publish.py 里的 EXPECTED_CERT_SHA256，
+      #    否则本地 publish.py 会把这个新包当成"签名证书不对"而拒绝上传。
+      # ⚠️ 2026-09-24 之前这几个 secret 形同虚设：当时 app/release-key.jks 根本不存在，
+      #    releaseKeystoreFile == null 让那道闸门永远不触发，hasReleaseSigning 恒为 false，
+      #    于是静默走了 build.gradle 的「缺正式签名就退回 debug keystore」兜底 ——
+      #    线上 v1.2.4 / v1.2.5 的 app-release.apk 实测就是 debug 签名（keytool -printcert
+      #    与本机 ~/.android/debug.keystore 证书一致）。别再让 secret 空着。
       - name: Decode Keystore
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/release-key.jks
+          if [ ! -s app/release-key.jks ]; then
+            echo "ERROR: app/release-key.jks 是空的 —— KEYSTORE_BASE64 这个 secret 没配。"
+            echo "       空文件同样会让 releaseKeystoreFile != null 而 hasReleaseSigning 为 false，"
+            echo "       闸门会拦住构建；但报错信息不如这里直白，所以先在这里停。"
+            exit 1
+          fi
+          echo "keystore 已就位：$(wc -c < app/release-key.jks) 字节"
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -326,10 +351,9 @@ jobs:
         run: |
           set -e
 
-          # job env 的 GITEE_REPO（仓库变量，回退原仓库）拼成两类地址：
-          # API 走 api/v5/repos/<repo>，附件直链走 <repo>/releases/download。
+          # job env 的 GITEE_REPO（仓库变量，回退原仓库）拼出 API 地址
+          # api/v5/repos/<repo>，创建 Release 与上传附件都走它。
           GITEE_REPO_API="gitee.com/api/v5/repos/${GITEE_REPO}"
-          GITEE_REPO_DOWNLOAD="gitee.com/${GITEE_REPO}/releases/download"
 
           APK_FILE=$(find ./apk -name "*.apk" | head -1)
 
@@ -339,7 +363,7 @@ jobs:
           fi
 
           if [ -z "${RELEASE_NOTES:-}" ]; then
-            echo "ERROR: 上游未传出更新日志，中止同步（不写空文案覆盖线上 version.json）"
+            echo "ERROR: 上游未传出更新日志，中止同步（不写空文案覆盖线上 Release 正文）"
             exit 1
           fi
 
@@ -419,60 +443,6 @@ jobs:
             echo "ERROR: No release ID, cannot upload APK"
           fi
 
-          # 3. 更新 version.json
-          echo ""
-          echo "--- Step 3: Update version.json ---"
-
-          DOWNLOAD_URL="https://${GITEE_REPO_DOWNLOAD}/${TAG}/app-release.apk"
-
-          VERSION_JSON=$(jq -n \
-            --argjson vc "$VERSION_CODE" \
-            --arg vn "$VERSION_NAME" \
-            --arg rn "${RELEASE_NOTES}" \
-            --arg du "$DOWNLOAD_URL" \
-            '{
-              versionCode: ($vc | tonumber),
-              versionName: $vn,
-              releaseNotes: $rn,
-              downloadUrl: $du,
-              forceUpdate: true
-            }')
-
-          echo "version.json content:"
-          echo "$VERSION_JSON" | jq .
-
-          VERSION_B64=$(echo -n "$VERSION_JSON" | base64 -w 0)
-
-          # 检查是否已存在
-          EXISTING_FILE=$(curl -s "https://${GITEE_REPO_API}/contents/version.json?access_token=${GITEE_TOKEN}" 2>/dev/null)
-
-          if echo "$EXISTING_FILE" | jq -e '.sha' > /dev/null 2>&1; then
-            OLD_SHA=$(echo "$EXISTING_FILE" | jq -r '.sha')
-            echo "Updating existing version.json (sha: $OLD_SHA)"
-            RESULT=$(curl -s -X PUT \
-              "https://${GITEE_REPO_API}/contents/version.json" \
-              -H "Content-Type: application/json" \
-              -d "$(jq -n \
-                --arg token "$GITEE_TOKEN" \
-                --arg msg "release: ${TAG}" \
-                --arg content "$VERSION_B64" \
-                --arg sha "$OLD_SHA" \
-                '{access_token: $token, message: $msg, content: $content, sha: $sha}')")
-            echo "Result: $(echo "$RESULT" | jq -r '.content.name // .message // "updated"')"
-          else
-            echo "Creating new version.json"
-            RESULT=$(curl -s -X POST \
-              "https://${GITEE_REPO_API}/contents/version.json" \
-              -H "Content-Type: application/json" \
-              -d "$(jq -n \
-                --arg token "$GITEE_TOKEN" \
-                --arg msg "release: ${TAG}" \
-                --arg content "$VERSION_B64" \
-                '{access_token: $token, message: $msg, content: $content, branch: "main"}')")
-            echo "Result: $(echo "$RESULT" | jq -r '.content.name // .message // "created"')"
-          fi
-
-          echo ""
           echo "=== Gitee sync complete ==="
 
       - name: Verify Gitee Delivery
