@@ -335,6 +335,10 @@ class ScheduleReminderScheduler private constructor(private val context: Context
      * SecurityException，此时若照样清空，还原目标就永久丢了，手机再也回不到原样。
      * 留着运行态，下一次 reconcile 还会再试一次。
      */
+    // 这里的 target 是此前从系统 currentInterruptionFilter 原样捕获的档位（或 UNKNOWN 哨兵），
+    // 本就属于合法的 INTERRUPTION_FILTER_* 集合；lint 追不动「持久化 Int」的来源，故显式豁免。
+    // （androidx.annotation 不在本项目依赖里，用 Kotlin 自己的 @Suppress —— lint 同样认。）
+    @Suppress("WrongConstant")
     private fun restoreAutoMode(runtime: AutoModeRuntime): Boolean {
         val done = runCatching {
             val target = runtime.previousInterruptionFilter
