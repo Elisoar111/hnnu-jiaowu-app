@@ -141,6 +141,66 @@ class ScheduleReminderScheduler private constructor(private val context: Context
         reconcile()
     }
 
+    // —— 学期批量开关（第 15 轮） ——
+    //
+    // 复用 updateSnapshot 存的那份「全量课表快照」（autoModeCoursesKey），不另造一套存储：
+    // 那份快照本来就是「本账号本学期的全部课」，正是批量开关要操作的对象。
+
+    /** 读回本学期的课表快照（term, courses）；从未加载过课表时返回 null。 */
+    fun semesterCourses(account: String): Pair<String, List<ScheduleCourseRecord>>? =
+        autoModeSnapshot(account)
+
+    /**
+     * 按学期一键全开 / 全关。
+     *
+     * 关键：**只调一次 [reconcile]**。循环里逐门调 `setEnabled` 会每次 save + reconcile，
+     * 一次"全部开启"几十门课就是几十轮闹钟重排。
+     *
+     * 判断全在 [SemesterReminderPlan.planSemesterToggle] 纯函数里，这里只做 IO 与落盘。
+     *
+     * @return 实际变更的记录条数（0 表示无变化，未落盘）。
+     */
+    @Synchronized
+    fun setAllEnabled(account: String, term: String, courses: List<ScheduleCourseRecord>, enabled: Boolean): Int {
+        if (account.isBlank() || term.isBlank() || courses.isEmpty()) return 0
+        val old = records()
+        val updated = SemesterReminderPlan.planSemesterToggle(
+            current = old,
+            account = account,
+            term = term,
+            courses = courses,
+            enabled = enabled,
+            // 提前量取**设备级全局**值（本项目口径），不是逐条继承老记录 —— 见 SemesterReminderPlan 注释
+            leadMinutes = settings().leadMinutes
+        )
+        if (updated == old) return 0
+        save(updated)
+        reconcile()
+        return updated.size - old.size
+    }
+
+    /**
+     * 本学期提醒概况：已开启数 / 总数 + 按状态分组。
+     *
+     * 状态逐门用 [status] 现算（含总开关、权限、周次、时间基的判定），
+     * 所以「待授权」「周次待核对」这类分组能真实反映当前可提醒状态。
+     */
+    @Synchronized
+    fun semesterSummary(account: String, term: String, courses: List<ScheduleCourseRecord>): SemesterReminderPlan.SemesterReminderSummary {
+        val list = records()
+        val byId = list.associateBy { it.key.storageId }
+        var enabledCount = 0
+        val statuses = LinkedHashMap<String, ReminderAvailability>(courses.size)
+        for (course in courses.distinctBy { it.id }) {
+            if (course.id.isBlank()) continue
+            val key = CourseReminderKey(account, term, course.id)
+            val record = byId[key.storageId]
+            if (record?.enabled == true) enabledCount++
+            statuses[course.id] = status(key).availability
+        }
+        return SemesterReminderPlan.summarize(account, term, enabledCount, statuses)
+    }
+
     @Synchronized
     fun updateSnapshot(account: String, term: String, courses: List<ScheduleCourseRecord>) {
         if (account.isBlank() || term.isBlank()) return

@@ -13,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -86,6 +87,8 @@ fun ReminderSettingsScreen(
     var showLeadPicker by remember { mutableStateOf(false) }
     var showAutoModePicker by remember { mutableStateOf(false) }
     var showPermissionGuide by remember { mutableStateOf(false) }
+    /** 批量开关进行中：防重复点击。 */
+    var busy by remember { mutableStateOf(false) }
 
     // 权限状态不是可观察的：从系统设置页回来、或刚弹完运行时授权框，都要重新读一遍。
     // 少这一下的话，用户明明授了权，页面还写着"未授权"。
@@ -131,6 +134,40 @@ fun ReminderSettingsScreen(
     val scrollState = rememberScrollState()
     val headerCollapse by remember {
         derivedStateOf { (scrollState.value / 96f).coerceIn(0f, 1f) }
+    }
+
+    // ── 本学期课程：批量开关（第 15 轮） ────────────────────────────────
+    //
+    // 数据源是课表快照（Scheduler 里 updateSnapshot 存的那份）。用户还没打开过课表时
+    // 这份快照是 null，此时两个按钮要禁用并说明原因，而不是给个点了没反应的按钮。
+    val account = remember(scheduler, permissionTick) {
+        com.hnnujw.course.manager.UserManager.getInstance().let {
+            if (it.isLoggedIn && !it.isDemoMode) it.currentAccountStorageKey else ""
+        }
+    }
+    var semesterRevision by remember { mutableIntStateOf(0) }
+    // 快照 + 概况一起重算：revision 变化（本页操作后）、账号变化或权限/总开关变化时都刷新。
+    // 用一个局部 data class 装住三元组，避免在渲染处反复解 Pair（可读性 + 少踩类型错）。
+    data class SemesterState(
+        val term: String,
+        val courses: List<com.hnnujw.course.schedule.ScheduleCourseRecord>,
+        val summary: com.hnnujw.course.schedule.SemesterReminderPlan.SemesterReminderSummary
+    )
+    val semesterData: SemesterState? = remember(account, permissionTick, semesterRevision, settings.masterEnabled) {
+        val snapshot = if (account.isBlank()) null else scheduler.semesterCourses(account)
+        if (snapshot == null) {
+            null
+        } else {
+            SemesterState(
+                term = snapshot.first,
+                courses = snapshot.second,
+                summary = scheduler.semesterSummary(account, snapshot.first, snapshot.second)
+            )
+        }
+    }
+    val summary = semesterData?.summary
+    val toggleAvailability = summary?.let {
+        com.hnnujw.course.schedule.SemesterReminderPlan.toggleAvailability(it, settings.masterEnabled)
     }
 
     val reminderFooter = when {
@@ -208,6 +245,62 @@ fun ReminderSettingsScreen(
                     showDivider = false,
                     onClick = { showAutoModePicker = true }
                 )
+            }
+
+            InsetGroupedSection(
+                header = "本学期课程",
+                footer = when {
+                    account.isBlank() -> "登录后可为整学期课程一键开关提醒。"
+                    summary == null -> "还没有本学期课表快照，请先在课表页加载本学期课程，再回来一键设置。"
+                    else -> "一键仅作用于本学期的 ${summary.totalCount} 门课；单门可在课程详情里单独调整。"
+                }
+            ) {
+                val state = semesterData
+                val summary = state?.summary
+                if (state != null && summary != null) {
+                    InsetGroupedRow(
+                        icon = Icons.Outlined.NotificationsActive,
+                        iconTint = Color(0xFF0A84FF),
+                        title = "已开启 ${summary.enabledCount} / ${summary.totalCount} 门",
+                        subtitle = com.hnnujw.course.schedule.SemesterReminderPlan
+                            .availabilityBreakdown(summary)
+                            .ifBlank { "全部课程均已就绪" },
+                        showDivider = true
+                    )
+                    // 「待授权」时给一个一键跳权限的入口 —— 复用本页已有的权限自检目标，
+                    // 不新造一个权限面板。
+                    val needsPermission = summary.byAvailability[
+                        com.hnnujw.course.schedule.ReminderAvailability.NeedsPermission
+                    ] ?: 0
+                    SemesterToggleButtons(
+                        availability = toggleAvailability,
+                        needsPermissionCount = needsPermission,
+                        busy = busy,
+                        onEnable = {
+                            busy = true
+                            scheduler.setAllEnabled(account, state.term, state.courses, true)
+                            semesterRevision++
+                            GlassToaster.show("已开启本学期全部课程提醒")
+                            busy = false
+                        },
+                        onDisable = {
+                            busy = true
+                            scheduler.setAllEnabled(account, state.term, state.courses, false)
+                            semesterRevision++
+                            GlassToaster.show("已关闭本学期全部课程提醒")
+                            busy = false
+                        },
+                        onGrantPermission = openPermissionTarget
+                    )
+                } else {
+                    InsetGroupedRow(
+                        icon = Icons.Outlined.NotificationsActive,
+                        iconTint = Color(0xFF8E8E93),
+                        title = "暂无本学期课表",
+                        subtitle = if (account.isBlank()) "登录后可一键设置" else "先在课表页加载本学期课程",
+                        showDivider = false
+                    )
+                }
             }
 
             InsetGroupedSection(
@@ -340,10 +433,86 @@ fun ReminderSettingsScreen(
     }
 }
 
+/**
+ * 「本学期课程」区块的两个批量按钮。
+ *
+ * 按钮可用性完全由纯函数 [com.hnnujw.course.schedule.SemesterReminderPlan.ToggleAvailability]
+ * 决定，这里只按结果渲染 —— 判断逻辑不许长在 Composable 里（项目红线）。
+ *
+ * 「待授权」时额外给一个跳权限的入口，复用本页已有的 `openPermissionTarget`。
+ */
+@Composable
+private fun SemesterToggleButtons(
+    availability: com.hnnujw.course.schedule.SemesterReminderPlan.ToggleAvailability?,
+    needsPermissionCount: Int,
+    busy: Boolean,
+    onEnable: () -> Unit,
+    onDisable: () -> Unit,
+    onGrantPermission: () -> Unit
+) {
+    androidx.compose.foundation.layout.Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // 缺权限时先把用户引到权限上：开了也排不出闹钟，不如明说。
+        if (needsPermissionCount > 0) {
+            com.hnnujw.course.ui.system.SystemSecondaryButton(
+                text = "有 $needsPermissionCount 门课待授权，去开启",
+                onClick = onGrantPermission,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        when (availability) {
+            is com.hnnujw.course.schedule.SemesterReminderPlan.ToggleAvailability.Ready -> {
+                androidx.compose.foundation.layout.Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    com.hnnujw.course.ui.system.SystemPrimaryButton(
+                        text = "全部开启",
+                        onClick = onEnable,
+                        enabled = availability.canEnable && !busy,
+                        modifier = Modifier.weight(1f)
+                    )
+                    com.hnnujw.course.ui.system.SystemSecondaryButton(
+                        text = "全部关闭",
+                        onClick = onDisable,
+                        enabled = availability.canDisable && !busy,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            is com.hnnujw.course.schedule.SemesterReminderPlan.ToggleAvailability.MasterOff -> {
+                // 总开关关着：给出原因，而不是两个灰按钮让人猜。
+                Text(
+                    text = "提醒总开关已关闭，批量开关不会生效。请先打开上方的「课程提醒」。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                com.hnnujw.course.ui.system.SystemSecondaryButton(
+                    text = "全部关闭",
+                    onClick = onDisable,
+                    enabled = false,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            is com.hnnujw.course.schedule.SemesterReminderPlan.ToggleAvailability.NoSnapshot,
+            null -> {
+                // 无快照：禁用并已在区块 footer 说明原因
+                com.hnnujw.course.ui.system.SystemPrimaryButton(
+                    text = "全部开启",
+                    onClick = onEnable,
+                    enabled = false,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
 /** 权限状态文本。开/关用同一套字重与颜色，避免"未授权"看着像错误。 */
 @Composable
-private fun StatusText(on: Boolean, onText: String, offText: String) {
-    Text(
+private fun StatusText(on: Boolean, onText: String, offText: String) {    Text(
         text = if (on) onText else offText,
         style = MaterialTheme.typography.bodyMedium,
         fontWeight = FontWeight.Medium,
