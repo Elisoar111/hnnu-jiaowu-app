@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,7 +37,9 @@ import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassTextField
 import com.hnnujw.course.ui.system.GlassToaster
 import com.hnnujw.course.ui.system.MarkdownText
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * AI 设置页：填 DeepSeek API Key 与模型名。
@@ -49,12 +52,26 @@ fun AiSettingsScreen(onBack: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     var keyInput by remember { mutableStateOf("") }
-    var modelInput by remember { mutableStateOf(AiKeyStore.model(context)) }
-    var hasKey by remember { mutableStateOf(AiKeyStore.hasApiKey(context)) }
+    // hasApiKey 内部走 apiKey() 解密，要碰 AndroidKeyStore —— remember{} 是主线程
+    // 同步执行的，进页首帧会卡一下。所以只给保守的空初值，再上 IO 线程读回来。
+    var modelInput by remember { mutableStateOf(AiKeyStore.DEFAULT_MODEL) }
+    var hasKey by remember { mutableStateOf(false) }
+    // 读回来之前不能拿 hasKey=false 去渲染状态文案 —— 已配置的用户会先看到
+    // 一闪而过的「尚未配置」，反而像 Key 丢了。keyLoaded 期间显示中性文案。
+    var keyLoaded by remember { mutableStateOf(false) }
     // 候选模型：先给内置候选，点「获取模型列表」再覆盖成服务端返回的。
     var models by remember { mutableStateOf(AiChatClient.FALLBACK_MODELS) }
     var fetching by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val loaded = withContext(Dispatchers.IO) {
+            AiKeyStore.hasApiKey(context) to AiKeyStore.model(context)
+        }
+        hasKey = loaded.first
+        modelInput = loaded.second
+        keyLoaded = true
+    }
 
     GlassPageScaffold(title = "AI 答疑设置", onBack = onBack) { padding ->
         Column(
@@ -77,10 +94,18 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = if (hasKey) "已配置 API Key" else "尚未配置",
+                    text = when {
+                        !keyLoaded -> "正在读取…"
+                        hasKey -> "已配置 API Key"
+                        else -> "尚未配置"
+                    },
                     fontSize = 14.sp,
                     lineHeight = 20.sp,
-                    color = if (hasKey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (keyLoaded && hasKey) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
                 )
             }
 
