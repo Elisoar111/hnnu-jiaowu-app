@@ -70,6 +70,11 @@ dist/
 
 # Logs
 *.log
+# 构建目录锁冲突时的临时隔离产物（init 脚本把 build 挪到 build-fresh/ 绕开被占的
+# mergeDebugResources；.gradle-home/ 是临时 GRADLE_USER_HOME）。都是环境问题的副产物，
+# 不是源码，别提交。
+build-fresh/
+.gradle-home/
 build_error.txt
 build_output.log
 build*.txt
