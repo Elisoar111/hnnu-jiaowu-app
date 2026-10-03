@@ -153,4 +153,27 @@ object BankManageLogic {
     /** 批量删除的确认文案用：把 qids 数量转成一句人话。 */
     fun deleteQuestionsHint(count: Int): String =
         if (count <= 0) "" else "将删除 $count 道题，连同它们的答题记录、错题与收藏一并清除。"
+
+    // ── 批量选择（全选 / 反选）─────────────────────────────────────────
+    // 选择集合操作抽成纯函数：Composable 里直接改 SnapshotStateList 没法单测，
+    // 而且「反选」的差集语义手写容易漏（例如把顺序打乱、把未选中的漏掉）。
+
+    /**
+     * 全选：返回按 [allIds] 顺序的完整 id 列表。
+     *
+     * [current] 只是入参里的陪衬（全选不依赖已选），保留它让三个选择操作签名一致，
+     * 调用点可以无脑换函数名。
+     */
+    fun selectAll(allIds: List<String>, current: Collection<String>): List<String> =
+        allIds.toList()
+
+    /**
+     * 反选：返回「在 [allIds] 里但不在 [current] 里」的 id，**保持 [allIds] 的顺序**。
+     *
+     * 顺序必须稳定 —— 反选后列表若乱跳，用户刚记住的勾选位置就全错了。
+     */
+    fun invertSelection(allIds: List<String>, current: Collection<String>): List<String> {
+        val selected = current.toSet()
+        return allIds.filter { it !in selected }
+    }
 }

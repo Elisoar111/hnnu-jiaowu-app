@@ -112,15 +112,41 @@ fun BankQuestionEditScreen(
                 .padding(top = padding.calculateTopPadding() + 8.dp, start = 16.dp, end = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // 批量选择工具行：**常显**（入口不按状态条件隐藏 —— 项目红线），
+            // 否则「全选」只能在已勾选后出现，用户根本不知道有批量模式。
+            // 集合操作全走 [BankManageLogic] 纯函数，这里只把结果写回 SnapshotStateList。
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SecondaryAction(
+                    text = "全选",
+                    enabled = !busy,
+                    onClick = {
+                        val next = BankManageLogic.selectAll(questions.map { it.id }, selected)
+                        selected.clear()
+                        selected.addAll(next)
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                SecondaryAction(
+                    text = "反选",
+                    enabled = !busy,
+                    onClick = {
+                        val next = BankManageLogic.invertSelection(questions.map { it.id }, selected)
+                        selected.clear()
+                        selected.addAll(next)
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                SecondaryAction(
+                    text = "取消",
+                    enabled = !busy && selected.isNotEmpty(),
+                    onClick = { selected.clear() },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
             // 批量删除栏：只在有勾选时出现，避免常驻占位
             if (selected.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SecondaryAction(
-                        text = "取消选择",
-                        enabled = !busy,
-                        onClick = { selected.clear() },
-                        modifier = Modifier.weight(1f)
-                    )
                     SecondaryAction(
                         text = "删除选中（${selected.size}）",
                         enabled = !busy,

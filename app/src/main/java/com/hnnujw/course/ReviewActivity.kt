@@ -172,7 +172,8 @@ private fun ReviewFlow(onExit: () -> Unit) {
                 onStartPractice = { launch ->
                     startPractice(launch, ReviewPage.BankDetail(bankId))
                 },
-                onOpenStats = { page = ReviewPage.BankStats(bankId) }
+                onOpenStats = { page = ReviewPage.BankStats(bankId) },
+                onEditQuestions = { page = ReviewPage.BankQuestions(bankId) }
             )
         }
         is ReviewPage.BankStats -> {

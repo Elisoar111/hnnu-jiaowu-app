@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,11 +63,19 @@ fun QuestionCard(
      * 决定，本组件不碰数据库。
      */
     memorize: Boolean = false,
+    /**
+     * 作答版本号（见 PracticeScreen 的 answerVersion）。
+     *
+     * [PracticeSession] 内部是普通 Map，改它不触发快照；调用方在
+     * select / judge / unjudge 后把 version+1，下面的 remember 以它为 key
+     * 重新取值 —— 这是选项高亮与「确认答案」亮起的唯一驱动。
+     */
+    version: Int = 0,
     modifier: Modifier = Modifier
 ) {
-    val answer = session.answerOf(question)
-    val judged = session.isJudged(question)
-    val correct = session.isCorrect(question)
+    val answer = remember(question, version) { session.answerOf(question) }
+    val judged = remember(question, version) { session.isJudged(question) }
+    val correct = remember(question, version) { session.isCorrect(question) }
     // 揭晓 = 已判分 或 背题模式。选项着色、答案/解析展示都看它。
     val revealed = judged || memorize
 

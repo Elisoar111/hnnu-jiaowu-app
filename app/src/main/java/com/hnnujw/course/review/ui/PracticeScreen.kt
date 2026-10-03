@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -82,6 +83,12 @@ fun PracticeScreen(
     // 本题是否已斩（同样先给即时反馈，再落库）。
     var slashed by remember { mutableStateOf(false) }
 
+    // 🔴 作答版本号：PracticeSession 内部是普通 LinkedHashMap，select/judge/unjudge
+    // 改它**不会**触发 Compose 重组 —— 选项不高亮、「确认答案」永远不亮（真机报）。
+    // 每次作答相关操作后 version++，QuestionCard 读取答案时引用它即可触发重组。
+    // 判分逻辑本身一行不动。
+    var answerVersion by remember { mutableIntStateOf(0) }
+
     // ── 限时考试：剩余秒数 + 两条"已警告过"标记 ──────────────────────────
     // 只在限时（timing.isTimed）时才真正生效；不限时时下面的循环根本不启动，
     // 也不会显示倒计时。remaining 初始值就是总时长（不限时则是一个极大值，不显示）。
@@ -144,11 +151,18 @@ fun PracticeScreen(
         val owner = lifecycleOwner
         fun refresh() {
             scope.launch {
+                // 🔴 runCatching 必须包：AndroidKeyStore 读取在真机上可能抛异常
+                // （密钥随卸载/恢复备份失效等），这里又在协程里，裸抛就是崩进程。
+                // 失败按「未配置」处理 —— 「问 AI」按钮本来就有未配置的分流。
                 val loaded = withContext(Dispatchers.IO) {
-                    AiKeyStore.apiKey(context) to AiKeyStore.model(context)
+                    runCatching { AiKeyStore.apiKey(context) to AiKeyStore.model(context) }.getOrNull()
                 }
-                aiKey = loaded.first
-                aiModel = loaded.second
+                if (loaded != null) {
+                    aiKey = loaded.first
+                    aiModel = loaded.second
+                } else {
+                    aiKey = null
+                }
             }
         }
         val observer = LifecycleEventObserver { _, event ->
@@ -212,11 +226,14 @@ fun PracticeScreen(
             QuestionCard(
                 question = question,
                 session = session,
+                version = answerVersion,
                 onSelect = { letter ->
                     session.select(question, letter)
+                    answerVersion++
                 },
                 onConfirm = {
                     val correct = session.judge(question)
+                    answerVersion++
                     // 判分即落库：答对答错都要记，否则统计和错题本会漏。
                     // ⚠️ 背题模式（session.recordsAnswers == false）**不落库** ——
                     // 背题不计入统计，否则背一遍就会把题洗成"已掌握"。
@@ -228,7 +245,10 @@ fun PracticeScreen(
                         }
                     }
                 },
-                onUnjudge = { session.unjudge(question) },
+                onUnjudge = {
+                    session.unjudge(question)
+                    answerVersion++
+                },
                 isFavorite = favorite,
                 onToggleFavorite = {
                     // 先翻转本地状态给即时反馈，再落库。

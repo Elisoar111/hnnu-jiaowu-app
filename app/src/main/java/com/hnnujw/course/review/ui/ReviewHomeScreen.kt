@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,14 +35,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.hnnujw.course.review.PracticeEntry
 import com.hnnujw.course.review.AiKeyStore
 import com.hnnujw.course.review.BundledBanks
 import com.hnnujw.course.review.PracticeLaunch
 import com.hnnujw.course.review.ReviewDatabase
-import com.hnnujw.course.review.ReviewMode
 import com.hnnujw.course.review.parseJsonBank
-import com.hnnujw.course.review.resolvePracticeEntry
 import com.hnnujw.course.ui.system.GlassCircleButton
 import com.hnnujw.course.ui.system.GlassLoadingState
 import com.hnnujw.course.ui.system.GlassPageScaffold
@@ -55,10 +53,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 复习模块主屏：题库列表 + 练习入口 + 导入。
+ * 复习模块主屏：AI 入口 + 跨题库错题/收藏 + 题库列表 + 导入。
  *
- * 三个练习入口（顺序/随机/错题）走同一套 [pickQuestions]，只是参数不同 ——
- * 不为每个模式各写一份列表页。
+ * 首页**不再有「开始练习」卡**：开练入口全部集中在题库详情页（BankDetailScreen），
+ * 首页只负责「选题库」。点题库行 → 进详情页，在那里选模式/章节/时长开练。
  */
 @Composable
 fun ReviewHomeScreen(
@@ -176,12 +174,12 @@ fun ReviewHomeScreen(
             // 一进复习页就能看见，且明确带上「已配置 / 未配置」状态。
             item { AiEntryRow(context = context, onOpenSettings = onOpenAiSettings) }
 
-            item { PracticeEntryCard(banks = banks, onStartPractice = onStartPractice) }
-
-            // 提到局部 val：LazyColumn 的 item{} 是延迟求值的 lambda，
-            // 在里面写 overview!! 万一将来 overview 被重置回 null 就会 NPE。
+            // 跨题库入口（错题本 / 收藏）**常显**：数量为 0 也要看得见，
+            // 点进去是空列表也比「功能凭空消失」强（项目红线：入口别按状态条件隐藏）。
+            // 「开始练习」卡已删 —— 开练入口集中在题库详情页（BankDetailScreen），
+            // 首页不再维护一套「默认第一个题库」的隐藏规则。
             val ov = overview
-            if (ov != null && (ov.wrongPending > 0 || ov.favorites > 0)) {
+            if (ov != null) {
                 item {
                     ReviewToolsRow(
                         wrongPending = ov.wrongPending,
@@ -263,48 +261,6 @@ fun ReviewHomeScreen(
 }
 
 @Composable
-private fun PracticeEntryCard(
-    banks: List<ReviewDatabase.BankSummary>,
-    onStartPractice: (PracticeLaunch) -> Unit
-) {
-    // 判空逻辑在纯函数里（resolvePracticeEntry），这里只按结果渲染。
-    // 原来直接 banks.first().id：空列表时抛 NoSuchElementException，
-    // 而按钮 enabled 硬编码 true，题库一空点「顺序练习」就闪退。
-    val entry = remember(banks) { resolvePracticeEntry(banks.map { it.id }) }
-    val ready = entry as? PracticeEntry.Ready
-    Card {
-        Text(
-            text = "开始练习",
-            fontSize = 16.sp,
-            lineHeight = 22.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ConfirmButton("顺序练习", enabled = ready != null, onClick = {
-                // ready 为 null 时按钮已禁用，这里再取一次也只是拿到 null，onStartPractice 不会被调。
-                ready?.let { onStartPractice(PracticeLaunch(bankId = it.bankId, mode = ReviewMode.SEQUENTIAL)) }
-            }, modifier = Modifier.weight(1f))
-            SecondaryAction("随机练习", enabled = ready != null, onClick = {
-                ready?.let { onStartPractice(PracticeLaunch(bankId = it.bankId, mode = ReviewMode.RANDOM)) }
-            }, modifier = Modifier.weight(1f))
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = if (ready == null) {
-                "还没有题库，先在下方导入一个 JSON 题库。"
-            } else {
-                "默认练习第一个题库，点题库行可切换到指定题库。"
-            },
-            fontSize = 12.sp,
-            lineHeight = 17.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
 private fun ReviewToolsRow(
     wrongPending: Int,
     favorites: Int,
@@ -357,6 +313,13 @@ private fun BankRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            // 题数徽标常显在行右侧：不点进去也能看到这个库有多少题。
+            GlassStatChip(
+                value = "${bank.questionCount}",
+                label = "题",
+                valueColor = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.width(8.dp))
             GlassCircleButton(
                 onClick = onDelete,
                 icon = Icons.Filled.Delete,
@@ -380,7 +343,10 @@ private fun AiEntryRow(context: Context, onOpenSettings: () -> Unit) {
     LaunchedEffect(Unit) {
         // 走 AiKeyStore.hasApiKey，不要自己写 !apiKey(...).isNullOrBlank() ——
         // 后者在 apiKey 返回 null 时是个易错的空安全写法，而 hasApiKey 已是唯一口径。
-        configured = withContext(Dispatchers.IO) { AiKeyStore.hasApiKey(context) }
+        // runCatching：Keystore 在真机上可能抛异常（密钥随卸载失效），失败按未配置处理。
+        configured = withContext(Dispatchers.IO) {
+            runCatching { AiKeyStore.hasApiKey(context) }.getOrDefault(false)
+        }
     }
     Card(onClick = onOpenSettings) {
         Column {

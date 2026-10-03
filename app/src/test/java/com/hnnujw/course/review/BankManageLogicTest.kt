@@ -202,4 +202,46 @@ class BankManageLogicTest {
         assertTrue(BankManageLogic.MergeReport(5, 2, listOf("A")).hasRenamed)
         assertEquals(false, BankManageLogic.MergeReport(5, 0, listOf("A")).hasRenamed)
     }
+
+    // ── selectAll / invertSelection ─────────────────────────────────
+
+    @Test
+    fun `select all returns every id in order`() {
+        val all = listOf("q1", "q2", "q3")
+        assertEquals(all, BankManageLogic.selectAll(all, emptySet()))
+        // 已选不影响全选结果
+        assertEquals(all, BankManageLogic.selectAll(all, setOf("q2")))
+    }
+
+    @Test
+    fun `select all on empty bank yields empty`() {
+        assertEquals(emptyList<String>(), BankManageLogic.selectAll(emptyList(), setOf("q1")))
+    }
+
+    @Test
+    fun `invert picks exactly the unselected ids`() {
+        val all = listOf("q1", "q2", "q3", "q4")
+        assertEquals(listOf("q2", "q4"), BankManageLogic.invertSelection(all, setOf("q1", "q3")))
+    }
+
+    @Test
+    fun `invert keeps all-ids order rather than selection order`() {
+        // 用户按 q3→q1 的顺序勾选，反选结果仍按题库顺序，不让列表乱跳
+        val all = listOf("q1", "q2", "q3")
+        assertEquals(listOf("q2"), BankManageLogic.invertSelection(all, listOf("q3", "q1")))
+    }
+
+    @Test
+    fun `invert with full selection yields empty and vice versa`() {
+        val all = listOf("q1", "q2")
+        assertEquals(emptyList<String>(), BankManageLogic.invertSelection(all, all))
+        assertEquals(all, BankManageLogic.invertSelection(all, emptyList()))
+    }
+
+    @Test
+    fun `invert ignores selected ids that no longer exist`() {
+        // 选中项里混着已删除的 qid：反选只看「在 allIds 里但没被选中」的
+        val all = listOf("q1", "q2")
+        assertEquals(listOf("q2"), BankManageLogic.invertSelection(all, setOf("q1", "ghost")))
+    }
 }
