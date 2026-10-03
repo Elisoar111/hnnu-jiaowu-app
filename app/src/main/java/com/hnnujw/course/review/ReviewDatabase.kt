@@ -235,6 +235,226 @@ class ReviewDatabase private constructor(context: Context) :
         }
     }
 
+    // —— 题库管理：创建 / 重命名 / 逐题编辑 / 批量删题 / 合并 ——
+
+    /**
+     * 创建一个空题库。重名返回 null（由调用方先走 [BankManageLogic.validateBankName]）。
+     *
+     * 这里**再查一次重名**而不是只信上层：上层校验到落库之间隔着用户操作，
+     * 而且 DB 层自己也该守住「不产生同名库」这条底线。
+     */
+    fun createBank(name: String): String? {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return null
+        if (bankExists(trimmed)) return null
+        val bankId = UUID.randomUUID().toString().replace("-", "").take(16)
+        writableDatabase.insertWithOnConflict(
+            "banks", null,
+            ContentValues().apply {
+                put("id", bankId)
+                put("name", trimmed)
+                put("question_count", 0)
+                put("created_at", System.currentTimeMillis())
+            },
+            SQLiteDatabase.CONFLICT_ABORT
+        )
+        Log.i(TAG, "createBank: bankId=$bankId")
+        return bankId
+    }
+
+    /**
+     * 重命名题库。重名或不存在返回 false，成功返回 true。
+     *
+     * **只动 banks.name**：题目靠 `bank_id` 关联，records/wrong_book/favorites 同理，
+     * 改名不涉及任何一张表的关联字段，所以题与记录一题都不会丢。
+     * 这正是「改名」和「合并」在数据层上的本质区别。
+     */
+    fun renameBank(bankId: String, newName: String): Boolean {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return false
+        val db = writableDatabase
+        // 排掉自己再判重名，否则「不改名直接保存」会被自己挡下
+        val clash = db.rawQuery(
+            "SELECT 1 FROM banks WHERE name = ? AND id <> ? LIMIT 1",
+            arrayOf(trimmed, bankId)
+        ).use { it.moveToFirst() }
+        if (clash) return false
+        val rows = db.update(
+            "banks", ContentValues().apply { put("name", trimmed) },
+            "id = ?", arrayOf(bankId)
+        )
+        if (rows > 0) Log.i(TAG, "renameBank: bankId=$bankId")
+        return rows > 0
+    }
+
+    /**
+     * 逐题编辑。只改该 `(bankId, qid)` 一行的内容，不动答题记录 ——
+     * 改的是题干/选项/答案，不是「这道题用户答得怎么样」。
+     *
+     * `options` / `tags` 用 JSON 数组存（与 [insertQuestion] 同一口径）。
+     */
+    fun updateQuestion(
+        bankId: String,
+        qid: String,
+        stem: String,
+        options: List<String>,
+        answer: String,
+        analysis: String
+    ): Boolean {
+        val rows = writableDatabase.update(
+            "questions",
+            ContentValues().apply {
+                put("stem", stem)
+                put("options", JSONArray(options).toString())
+                put("answer", answer)
+                put("explanation", analysis)
+            },
+            "bank_id = ? AND qid = ?", arrayOf(bankId, qid)
+        )
+        return rows > 0
+    }
+
+    /**
+     * 按 qid 读取某库的题目，供编辑页预填。
+     *
+     * 列顺序必须与 [readQuestion] 一致（`bank_id` 在第 0 列），否则字段会整体错位。
+     */
+    fun questionById(bankId: String, qid: String): ReviewQuestion? =
+        readableDatabase.rawQuery(
+            "SELECT bank_id, qid, type, stem, options, answer, chapter, explanation, source, tags " +
+                "FROM questions WHERE bank_id = ? AND qid = ? LIMIT 1",
+            arrayOf(bankId, qid)
+        ).use { c -> if (c.moveToFirst()) readQuestion(c) else null }
+
+    /**
+     * 列出某库的全部题目，供逐题编辑页展示。按 qid 稳定排序。
+     *
+     * 同样保持 [readQuestion] 的列顺序（`bank_id` 在第 0 列）。
+     */
+    fun listQuestions(bankId: String): List<ReviewQuestion> =
+        readableDatabase.rawQuery(
+            "SELECT bank_id, qid, type, stem, options, answer, chapter, explanation, source, tags " +
+                "FROM questions WHERE bank_id = ? ORDER BY qid",
+            arrayOf(bankId)
+        ).use { c ->
+            val out = ArrayList<ReviewQuestion>()
+            while (c.moveToNext()) out.add(readQuestion(c))
+            out
+        }
+
+    /**
+     * 批量删题（按 qid 列表），**同时清掉这些题的 records / wrong_book / favorites**。
+     *
+     * 不清就是「指向不存在题目的孤儿行」：错题本会显示一道打不开的题、
+     * 首页错题计数会永远减不下去。整批放在一个事务里，中途失败不会只删一半。
+     */
+    fun deleteQuestions(bankId: String, qids: List<String>): Int {
+        if (qids.isEmpty()) return 0
+        val db = writableDatabase
+        var deleted = 0
+        db.beginTransaction()
+        try {
+            for (qid in qids) {
+                // whereArgs 签名是 Array<out String>?，不是 execSQL 的 Array<out Any> ——
+                // 这里必须让 Kotlin 推断成 Array<String>，写 arrayOf<Any> 编译不过。
+                db.delete("questions", "bank_id = ? AND qid = ?", arrayOf(bankId, qid))
+                db.delete("records", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
+                db.delete("wrong_book", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
+                db.delete("favorites", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
+                deleted++
+            }
+            refreshQuestionCount(db, bankId)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        Log.i(TAG, "deleteQuestions: bankId=$bankId count=$deleted")
+        return deleted
+    }
+
+    /** 按 banks 里实际剩余的题目行数刷新 question_count，避免计数与内容漂移。 */
+    private fun refreshQuestionCount(db: SQLiteDatabase, bankId: String) {
+        val count = db.rawQuery(
+            "SELECT COUNT(*) FROM questions WHERE bank_id = ?", arrayOf(bankId)
+        ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        db.update(
+            "banks", ContentValues().apply { put("question_count", count) },
+            "id = ?", arrayOf(bankId)
+        )
+    }
+
+    /**
+     * 把 [sourceBankIds] 的**题目**合并进 [targetBankId]，返回报告。
+     *
+     * 合并语义（硬约束，见 [BankManageLogic.planQidRemap] 的注释）：
+     * 1. **只搬题，不搬答题记录**。records / wrong_book / favorites 是 `(bank_id, qid)` 维度，
+     *    跨库迁移会让两个库同号题的错题本串在一起 —— 用户会看到别人的错题。所以一律不迁移。
+     * 2. **qid 冲突重分配**。撞上目标库已有 qid 的源题走 `planQidRemap` 分配新号，
+     *    绝不能靠 `INSERT OR REPLACE` 把目标库原题覆盖掉。
+     * 3. **整批一个事务**：中途失败不能留下半合并状态（一部分题进了目标库、一部分还在源库）。
+     * 4. **不自动删源库**：由 UI 拿 [BankManageLogic.MergeReport] 弹二次确认再调 [deleteBank]。
+     *
+     * 幂等性：同一源题重复合并会被重分配到不同 qid，所以调用方应在成功后立刻删源库
+     * （或至少不要让用户对同一对库连点两次）。这也是要求 UI 防重复点击的原因。
+     */
+    fun mergeBanks(targetBankId: String, sourceBankIds: List<String>): BankManageLogic.MergeReport {
+        val db = writableDatabase
+        val sources = sourceBankIds.filter { it.isNotBlank() && it != targetBankId }.distinct()
+        if (sources.isEmpty()) return BankManageLogic.MergeReport(0, 0, emptyList())
+
+        val sourceNames = ArrayList<String>(sources.size)
+        var moved = 0
+        var renamed = 0
+
+        db.beginTransaction()
+        try {
+            // 目标库现有 qid 集合（含本次已分配的），用于冲突判定
+            val taken = HashSet<String>()
+            db.rawQuery(
+                "SELECT qid FROM questions WHERE bank_id = ?", arrayOf(targetBankId)
+            ).use { c -> while (c.moveToNext()) taken.add(c.getString(0)) }
+
+            for (srcId in sources) {
+                db.rawQuery(
+                    "SELECT name FROM banks WHERE id = ? LIMIT 1", arrayOf(srcId)
+                ).use { c -> if (c.moveToFirst()) sourceNames.add(c.getString(0)) }
+
+                // 读源库全部题目（按 qid 稳定排序，保证重分配结果可复现）
+                // 列顺序同 [readQuestion]：bank_id 必须在第 0 列
+                val incoming = ArrayList<ReviewQuestion>()
+                db.rawQuery(
+                    "SELECT bank_id, qid, type, stem, options, answer, chapter, explanation, source, tags " +
+                        "FROM questions WHERE bank_id = ? ORDER BY qid",
+                    arrayOf(srcId)
+                ).use { c ->
+                    while (c.moveToNext()) incoming.add(readQuestion(c))
+                }
+
+                // 目标库已有 qid + 源库内部可能自带的重复，一次性交给纯函数算重映射。
+                // 注意：重分配只保证「不与目标库已有冲突」，源库之间的重复由同一张 remap 保证一致。
+                val remap = BankManageLogic.planQidRemap(taken, incoming.map { it.id })
+                for (q in incoming) {
+                    val newQid = remap[q.id] ?: q.id
+                    if (newQid != q.id) renamed++
+                    taken.add(newQid)
+                    insertQuestion(db, targetBankId, q.copy(id = newQid, bankId = targetBankId), System.currentTimeMillis())
+                    moved++
+                }
+            }
+
+            refreshQuestionCount(db, targetBankId)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        Log.i(TAG, "mergeBanks: target=$targetBankId sources=${sources.size} moved=$moved renamed=$renamed")
+        return BankManageLogic.MergeReport(
+            totalMoved = moved,
+            renamedCount = renamed,
+            sourceNames = sourceNames
+        )
+    }
+
     // —— 取题
 
     fun chapters(bankId: String? = null): List<String> {

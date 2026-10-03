@@ -1,0 +1,355 @@
+package com.hnnujw.course.review.ui
+
+import android.content.Context
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.hnnujw.course.review.BankManageLogic
+import com.hnnujw.course.review.ReviewDatabase
+import com.hnnujw.course.review.ReviewQuestion
+import com.hnnujw.course.ui.system.GlassLoadingState
+import com.hnnujw.course.ui.system.GlassPageScaffold
+import com.hnnujw.course.ui.system.GlassTextField
+import com.hnnujw.course.ui.system.GlassToaster
+import com.hnnujw.course.ui.system.SystemDialog
+import com.hnnujw.course.ui.system.SystemPrimaryButton
+import com.hnnujw.course.ui.system.SystemSecondaryButton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * 逐题编辑 + 多选批量删除。
+ *
+ * 列表勾选 → 批量删（走 [ReviewDatabase.deleteQuestions]，连带清记录）；
+ * 点某一行 → 进单题编辑（题干 / 选项 / 答案 / 解析），保存走 [ReviewDatabase.updateQuestion]。
+ *
+ * 长耗时操作走 IO + [busy] 防重复点击。
+ */
+@Composable
+fun BankQuestionEditScreen(
+    context: Context,
+    bankId: String,
+    onBack: () -> Unit
+) {
+    val db = remember { ReviewDatabase.get(context) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val questions = remember { mutableStateListOf<ReviewQuestion>() }
+    val selected = remember { mutableStateListOf<String>() }
+    var bankName by remember { mutableStateOf("") }
+    var loaded by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+
+    // 当前正在编辑的单题 qid（null = 不在编辑）；用 qid 而不是对象，避免列表刷新后对象失联
+    var editingQid by remember { mutableStateOf<String?>(null) }
+    var pendingDelete by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    suspend fun reload() {
+        val result = withContext(Dispatchers.IO) {
+            db.listBanks().firstOrNull { it.id == bankId }?.name.orEmpty() to db.listQuestions(bankId)
+        }
+        bankName = result.first
+        questions.clear()
+        questions.addAll(result.second)
+        selected.clear()
+        loaded = true
+    }
+
+    LaunchedEffect(bankId) { reload() }
+
+    GlassPageScaffold(
+        title = bankName.ifBlank { "题库题目" },
+        subtitle = if (loaded) "${questions.size} 题" else null,
+        onBack = onBack
+    ) { padding ->
+        if (!loaded) {
+            GlassLoadingState(text = "正在读取题目…")
+            return@GlassPageScaffold
+        }
+        if (questions.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = padding.calculateTopPadding() + 8.dp, start = 16.dp, end = 16.dp)
+            ) {
+                Card {
+                    Text(
+                        text = "这个题库还没有题目。回到首页导入 JSON 题库即可批量加题。",
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            return@GlassPageScaffold
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = padding.calculateTopPadding() + 8.dp, start = 16.dp, end = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // 批量删除栏：只在有勾选时出现，避免常驻占位
+            if (selected.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SecondaryAction(
+                        text = "取消选择",
+                        enabled = !busy,
+                        onClick = { selected.clear() },
+                        modifier = Modifier.weight(1f)
+                    )
+                    SecondaryAction(
+                        text = "删除选中（${selected.size}）",
+                        enabled = !busy,
+                        onClick = { pendingDelete = selected.toList() },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Text(
+                    text = BankManageLogic.deleteQuestionsHint(selected.size),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                questions.forEach { q ->
+                    Card {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.Top
+                        ) {
+                            // 勾选框（自绘，不用 Material Checkbox）
+                            Text(
+                                text = if (q.id in selected) "◉" else "○",
+                                fontSize = 16.sp,
+                                color = if (q.id in selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = q.stem,
+                                    fontSize = 14.sp,
+                                    lineHeight = 19.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "${q.chapter} · ${if (q.isMulti) "多选" else "单选"} · 答案 ${q.answer}",
+                                    fontSize = 12.sp,
+                                    lineHeight = 17.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    SecondaryAction(
+                                        text = "勾选",
+                                        enabled = !busy,
+                                        onClick = {
+                                            if (q.id in selected) selected.remove(q.id) else selected.add(q.id)
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    SecondaryAction(
+                                        text = "编辑",
+                                        enabled = !busy,
+                                        onClick = { editingQid = q.id },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+
+        // 单题编辑弹窗
+        editingQid?.let { qid ->
+            val question = questions.firstOrNull { it.id == qid }
+            if (question != null) {
+                QuestionEditDialog(
+                    question = question,
+                    onSave = { stem, options, answer, analysis ->
+                        busy = true
+                        editingQid = null
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                db.updateQuestion(bankId, qid, stem, options, answer, analysis)
+                            }
+                            busy = false
+                            GlassToaster.show(if (ok) "已保存" else "保存失败")
+                            if (ok) reload()
+                        }
+                    },
+                    onDismiss = { editingQid = null }
+                )
+            } else {
+                editingQid = null
+            }
+        }
+
+        // 批量删除的二次确认 —— 删题连带清记录，必须确认
+        if (pendingDelete.isNotEmpty()) {
+            SystemDialog(
+                onDismissRequest = { pendingDelete = emptyList() },
+                title = { Text("删除题目", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface) },
+                confirmButton = {
+                    SystemPrimaryButton(
+                        text = "删除",
+                        onClick = {
+                            val ids = pendingDelete
+                            pendingDelete = emptyList()
+                            busy = true
+                            scope.launch {
+                                val n = withContext(Dispatchers.IO) { db.deleteQuestions(bankId, ids) }
+                                busy = false
+                                GlassToaster.show("已删除 $n 道题")
+                                reload()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                dismissButton = {
+                    SystemSecondaryButton(
+                        text = "取消",
+                        onClick = { pendingDelete = emptyList() },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            ) {
+                Text(
+                    text = BankManageLogic.deleteQuestionsHint(pendingDelete.size),
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/** 单题编辑弹窗：题干 / 选项（每行一个）/ 答案 / 解析。 */
+@Composable
+private fun QuestionEditDialog(
+    question: ReviewQuestion,
+    onSave: (stem: String, options: List<String>, answer: String, analysis: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var stem by remember(question.id) { mutableStateOf(question.stem) }
+    var optionsText by remember(question.id) { mutableStateOf(question.options.joinToString("\n")) }
+    var answer by remember(question.id) { mutableStateOf(question.answer) }
+    var analysis by remember(question.id) { mutableStateOf(question.explanation) }
+
+    val options = remember(optionsText) {
+        optionsText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+    }
+    // 至少要有题干和非空答案才能存
+    val canSave = stem.isNotBlank() && answer.isNotBlank()
+
+    SystemDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("编辑题目", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface) },
+        confirmButton = {
+            SystemPrimaryButton(
+                text = "保存",
+                onClick = { onSave(stem.trim(), options, answer.trim().uppercase(), analysis.trim()) },
+                enabled = canSave,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        dismissButton = {
+            SystemSecondaryButton(text = "取消", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 460.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            FieldLabel("题干")
+            GlassTextField(
+                value = stem,
+                onValueChange = { stem = it },
+                placeholder = "题目内容",
+                singleLine = false,
+                minHeight = 72.dp,
+                modifier = Modifier.fillMaxWidth().testTag("edit-stem")
+            )
+            FieldLabel("选项（每行一个）")
+            GlassTextField(
+                value = optionsText,
+                onValueChange = { optionsText = it },
+                placeholder = "选项一\n选项二\n选项三\n选项四",
+                singleLine = false,
+                minHeight = 96.dp,
+                modifier = Modifier.fillMaxWidth().testTag("edit-options")
+            )
+            FieldLabel("答案（如 A 或 ABD）")
+            GlassTextField(
+                value = answer,
+                onValueChange = { answer = it },
+                placeholder = "A",
+                singleLine = true,
+                isError = answer.isBlank(),
+                modifier = Modifier.fillMaxWidth().testTag("edit-answer")
+            )
+            FieldLabel("解析（可留空）")
+            GlassTextField(
+                value = analysis,
+                onValueChange = { analysis = it },
+                placeholder = "答案解析",
+                singleLine = false,
+                minHeight = 72.dp,
+                modifier = Modifier.fillMaxWidth().testTag("edit-analysis")
+            )
+        }
+    }
+}
+
+@Composable
+private fun FieldLabel(text: String) {
+    Text(
+        text = text,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.onSurface
+    )
+}

@@ -20,6 +20,8 @@ import com.hnnujw.course.review.ReviewMode
 import com.hnnujw.course.review.ui.AiSettingsScreen
 import com.hnnujw.course.review.ui.BankDetailScreen
 import com.hnnujw.course.review.ui.BankFormatHelpScreen
+import com.hnnujw.course.review.ui.BankManageScreen
+import com.hnnujw.course.review.ui.BankQuestionEditScreen
 import com.hnnujw.course.review.ui.BankStatsScreen
 import com.hnnujw.course.review.ui.PracticeScreen
 import com.hnnujw.course.review.ui.ReviewHomeScreen
@@ -69,6 +71,12 @@ private sealed interface ReviewPage {
 
     /** 某个题库的统计页。 */
     data class BankStats(val bankId: String) : ReviewPage
+
+    /** 题库管理页（创建 / 改名 / 删除 / 合并）。 */
+    data object BankManage : ReviewPage
+
+    /** 某个题库的逐题编辑页（改题干/选项/答案/解析 + 批量删题）。 */
+    data class BankQuestions(val bankId: String) : ReviewPage
 }
 
 @Composable
@@ -130,7 +138,22 @@ private fun ReviewFlow(onExit: () -> Unit) {
                     aiSettingsReturnTo = ReviewPage.Home
                     page = ReviewPage.AiSettings
                 },
-                onOpenTemplate = { page = ReviewPage.FormatHelp }
+                onOpenTemplate = { page = ReviewPage.FormatHelp },
+                onOpenBankManage = { page = ReviewPage.BankManage }
+            )
+        }
+        is ReviewPage.BankManage -> {
+            BankManageScreen(
+                context = context,
+                onBack = { page = ReviewPage.Home },
+                onEditQuestions = { bankId -> page = ReviewPage.BankQuestions(bankId) }
+            )
+        }
+        is ReviewPage.BankQuestions -> {
+            BankQuestionEditScreen(
+                context = context,
+                bankId = current.bankId,
+                onBack = { page = ReviewPage.BankManage }
             )
         }
         is ReviewPage.BankDetail -> {

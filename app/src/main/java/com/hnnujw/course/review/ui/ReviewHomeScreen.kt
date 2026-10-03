@@ -46,6 +46,9 @@ import com.hnnujw.course.ui.system.GlassLoadingState
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassStatChip
 import com.hnnujw.course.ui.system.GlassToaster
+import com.hnnujw.course.ui.system.SystemDialog
+import com.hnnujw.course.ui.system.SystemPrimaryButton
+import com.hnnujw.course.ui.system.SystemSecondaryButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -63,7 +66,9 @@ fun ReviewHomeScreen(
     onStartPractice: (bankId: String?, chapter: String?, mode: ReviewMode, onlyWrong: Boolean, onlyFavorite: Boolean) -> Unit,
     onOpenBankDetail: (bankId: String) -> Unit,
     onOpenAiSettings: () -> Unit,
-    onOpenTemplate: () -> Unit
+    onOpenTemplate: () -> Unit,
+    /** 打开题库管理页（创建 / 改名 / 删除 / 合并）。 */
+    onOpenBankManage: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val db = remember { ReviewDatabase.get(context) }
@@ -74,6 +79,8 @@ fun ReviewHomeScreen(
     // 内置题库自动导入只做一次：reloadKey 会在导入后自增，靠这个标记挡住第二次触发。
     // 不加的话每轮 reload 都会重新进 importAll，白跑一遍 700KB 解析。
     var bundledImportTried by remember { mutableStateOf(false) }
+    // 待确认删除的题库（首页行内删除的二次确认）。null = 没有待确认项。
+    var pendingDeleteBank by remember { mutableStateOf<ReviewDatabase.BankSummary?>(null) }
 
     // 每次 reloadKey 变化就重读一次库状态。数据量小（几千题），直接全量读。
     LaunchedEffect(reloadKey) {
@@ -186,6 +193,8 @@ fun ReviewHomeScreen(
 
             item {
                 SectionTitle("题库", trailing = {
+                    // 管理入口挨着导入：两者都是"对题库整体做点什么"。
+                    SecondaryAction("管理", enabled = !importing, onClick = onOpenBankManage)
                     SecondaryAction("导入题库", enabled = !importing, onClick = {
                         importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
                     })
@@ -197,12 +206,55 @@ fun ReviewHomeScreen(
                     bank = bank,
                     onOpen = { onOpenBankDetail(bank.id) },
                     onDelete = {
-                        scope.launch {
-                            withContext(Dispatchers.IO) { db.deleteBank(bank.id) }
-                            reloadKey++
-                            GlassToaster.show("已删除「${bank.name}」")
-                        }
+                        // 首页行内删除**必须二次确认**：题库带着用户的答题记录与错题本，
+                        // 误触即丢（和「删自定义课程不加确认」性质不同，那条已驳回的
+                        // 只是课程）。这里走 pendingDelete 弹确认，不直接删。
+                        pendingDeleteBank = bank
                     }
+                )
+            }
+        }
+
+        // 删除题库的二次确认。放在 scaffold 内容末尾，
+        // SystemDialog 会自己找 DialogHost 渲染成玻璃弹窗。
+        pendingDeleteBank?.let { bank ->
+            SystemDialog(
+                onDismissRequest = { pendingDeleteBank = null },
+                title = {
+                    Text(
+                        text = "删除题库",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                confirmButton = {
+                    SystemPrimaryButton(
+                        text = "删除",
+                        onClick = {
+                            pendingDeleteBank = null
+                            scope.launch {
+                                withContext(Dispatchers.IO) { db.deleteBank(bank.id) }
+                                reloadKey++
+                                GlassToaster.show("已删除「${bank.name}」")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                dismissButton = {
+                    SystemSecondaryButton(
+                        text = "取消",
+                        onClick = { pendingDeleteBank = null },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            ) {
+                Text(
+                    text = "将删除「${bank.name}」及其全部题目、答题记录、错题与收藏。此操作不可撤销。",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
