@@ -61,6 +61,7 @@ fun ReviewHomeScreen(
     context: Context,
     onBack: () -> Unit,
     onStartPractice: (bankId: String?, chapter: String?, mode: ReviewMode, onlyWrong: Boolean, onlyFavorite: Boolean) -> Unit,
+    onOpenBankDetail: (bankId: String) -> Unit,
     onOpenAiSettings: () -> Unit,
     onOpenTemplate: () -> Unit
 ) {
@@ -68,7 +69,6 @@ fun ReviewHomeScreen(
     val db = remember { ReviewDatabase.get(context) }
     var banks by remember { mutableStateOf<List<ReviewDatabase.BankSummary>>(emptyList()) }
     var overview by remember { mutableStateOf<ReviewDatabase.Overview?>(null) }
-    var chapters by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
     var importing by remember { mutableStateOf(false) }
     var reloadKey by remember { mutableIntStateOf(0) }
     // 内置题库自动导入只做一次：reloadKey 会在导入后自增，靠这个标记挡住第二次触发。
@@ -78,11 +78,10 @@ fun ReviewHomeScreen(
     // 每次 reloadKey 变化就重读一次库状态。数据量小（几千题），直接全量读。
     LaunchedEffect(reloadKey) {
         val loaded = withContext(Dispatchers.IO) {
-            Triple(db.listBanks(), db.overview(), db.chaptersWithCount())
+            db.listBanks() to db.overview()
         }
         banks = loaded.first
         overview = loaded.second
-        chapters = loaded.third
 
         // 库里一个题库都没有 = 首次进入（或用户清空），自动导入随包内置题库。
         // 判定用 bankCount == 0 而不是「内置库缺失就补」——importBank 对同名库是覆盖语义，
@@ -196,7 +195,7 @@ fun ReviewHomeScreen(
             items(banks, key = { it.id }) { bank ->
                 BankRow(
                     bank = bank,
-                    onPractice = { onStartPractice(bank.id, null, ReviewMode.SEQUENTIAL, false, false) },
+                    onOpen = { onOpenBankDetail(bank.id) },
                     onDelete = {
                         scope.launch {
                             withContext(Dispatchers.IO) { db.deleteBank(bank.id) }
@@ -205,17 +204,6 @@ fun ReviewHomeScreen(
                         }
                     }
                 )
-            }
-
-            if (chapters.isNotEmpty()) {
-                item { SectionTitle("按章节练习") }
-                items(chapters, key = { it.first }) { (name, count) ->
-                    ChapterRow(
-                        name = name,
-                        count = count,
-                        onClick = { onStartPractice(null, name, ReviewMode.RANDOM, false, false) }
-                    )
-                }
             }
         }
     }
@@ -289,10 +277,13 @@ private fun StatCard(label: String, value: String, onClick: () -> Unit, modifier
 @Composable
 private fun BankRow(
     bank: ReviewDatabase.BankSummary,
-    onPractice: () -> Unit,
+    onOpen: () -> Unit,
     onDelete: () -> Unit
 ) {
-    Card(onClick = onPractice) {
+    // 点行 = **进题库详情页**，不是直接开练。
+    // 之前是 Card(onClick = onPractice)，用户点题库名后直接跳进做题，
+    // 体感就是「进不去题库」（2026-10 用户报）。
+    Card(onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
@@ -318,27 +309,6 @@ private fun BankRow(
                 icon = Icons.Filled.Delete,
                 contentDescription = "删除题库",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun ChapterRow(name: String, count: Int, onClick: () -> Unit) {
-    Card(onClick = onClick) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = name,
-                fontSize = 15.sp,
-                lineHeight = 21.sp,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f)
-            )
-            Text(
-                text = "$count 题",
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

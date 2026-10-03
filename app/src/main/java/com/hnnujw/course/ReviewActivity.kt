@@ -16,8 +16,11 @@ import com.hnnujw.course.manager.AppThemeCoordinator
 import com.hnnujw.course.manager.UserManager
 import com.hnnujw.course.review.PracticeSession
 import com.hnnujw.course.review.ReviewDatabase
+import com.hnnujw.course.review.ReviewMode
 import com.hnnujw.course.review.ui.AiSettingsScreen
+import com.hnnujw.course.review.ui.BankDetailScreen
 import com.hnnujw.course.review.ui.BankFormatHelpScreen
+import com.hnnujw.course.review.ui.BankStatsScreen
 import com.hnnujw.course.review.ui.PracticeScreen
 import com.hnnujw.course.review.ui.ReviewHomeScreen
 import com.hnnujw.course.ui.system.GlassToaster
@@ -60,6 +63,12 @@ private sealed interface ReviewPage {
     data object Practice : ReviewPage
     data object AiSettings : ReviewPage
     data object FormatHelp : ReviewPage
+
+    /** 某个题库的详情页（练习/统计都从这里进出）。 */
+    data class BankDetail(val bankId: String) : ReviewPage
+
+    /** 某个题库的统计页。 */
+    data class BankStats(val bankId: String) : ReviewPage
 }
 
 @Composable
@@ -71,39 +80,50 @@ private fun ReviewFlow(onExit: () -> Unit) {
     var page by remember { mutableStateOf<ReviewPage>(ReviewPage.Home) }
     // AI 设置页的来处，默认 Home；只有从练习页点「配置 AI」进来时才改成 Practice。
     var aiSettingsReturnTo by remember { mutableStateOf<ReviewPage>(ReviewPage.Home) }
+    // 练习结束/返回时回到哪个题库详情页（从哪个库进去的就回哪儿）。
+    var practiceReturnTo by remember { mutableStateOf<ReviewPage>(ReviewPage.Home) }
 
-    when (page) {
+    // 开练的公共逻辑，Home 与 BankDetail 两处入口共用。
+    val startPractice: (String?, String?, ReviewMode, Boolean, Boolean, ReviewPage) -> Unit =
+        { bankId, chapter, mode, onlyWrong, onlyFavorite, returnTo ->
+            scope.launch {
+                // 抽题在 IO 线程（几千题的库不该卡住点击反馈）。
+                val questions = withContext(Dispatchers.IO) {
+                    ReviewDatabase.get(context).pickQuestions(
+                        bankId = bankId,
+                        chapter = chapter,
+                        mode = mode,
+                        onlyWrong = onlyWrong,
+                        onlyFavorite = onlyFavorite
+                    )
+                }
+                val title = when {
+                    onlyWrong -> "错题本"
+                    onlyFavorite -> "收藏"
+                    !chapter.isNullOrBlank() -> chapter
+                    else -> mode.label
+                }
+                if (questions.isEmpty()) {
+                    GlassToaster.show("这里还没有题目")
+                } else {
+                    practiceTitle = title
+                    practiceReturnTo = returnTo
+                    session = PracticeSession(questions, oneByOne = true)
+                    page = ReviewPage.Practice
+                }
+            }
+        }
+
+    when (val current = page) {
         is ReviewPage.Home -> {
             ReviewHomeScreen(
                 context = context,
                 onBack = onExit,
                 onStartPractice = { bankId, chapter, mode, onlyWrong, onlyFavorite ->
-                    scope.launch {
-                        // 抽题在 IO 线程（几千题的库不该卡住点击反馈）。
-                        val questions = withContext(Dispatchers.IO) {
-                            ReviewDatabase.get(context).pickQuestions(
-                                bankId = bankId,
-                                chapter = chapter,
-                                mode = mode,
-                                onlyWrong = onlyWrong,
-                                onlyFavorite = onlyFavorite
-                            )
-                        }
-                        val title = when {
-                            onlyWrong -> "错题本"
-                            onlyFavorite -> "收藏"
-                            !chapter.isNullOrBlank() -> chapter
-                            else -> mode.label
-                        }
-                        if (questions.isEmpty()) {
-                            GlassToaster.show("这里还没有题目")
-                        } else {
-                            practiceTitle = title
-                            session = PracticeSession(questions, oneByOne = true)
-                            page = ReviewPage.Practice
-                        }
-                    }
+                    startPractice(bankId, chapter, mode, onlyWrong, onlyFavorite, ReviewPage.Home)
                 },
+                // 点题库行 → 进详情页（不再直接开练）。
+                onOpenBankDetail = { bankId -> page = ReviewPage.BankDetail(bankId) },
                 // 从首页进来时把来处重置成 Home —— 否则「练习页进去配过一次」之后
                 // 再从首页进设置页，按返回会莫名其妙跳回练习页。
                 onOpenAiSettings = {
@@ -113,24 +133,44 @@ private fun ReviewFlow(onExit: () -> Unit) {
                 onOpenTemplate = { page = ReviewPage.FormatHelp }
             )
         }
+        is ReviewPage.BankDetail -> {
+            val bankId = current.bankId
+            BankDetailScreen(
+                context = context,
+                bankId = bankId,
+                onBack = { page = ReviewPage.Home },
+                onStartPractice = { b, chapter, mode, onlyWrong, onlyFavorite ->
+                    startPractice(b, chapter, mode, onlyWrong, onlyFavorite, ReviewPage.BankDetail(b))
+                },
+                onOpenStats = { page = ReviewPage.BankStats(bankId) }
+            )
+        }
+        is ReviewPage.BankStats -> {
+            BankStatsScreen(
+                context = context,
+                bankId = current.bankId,
+                onBack = { page = ReviewPage.BankDetail(current.bankId) }
+            )
+        }
         is ReviewPage.Practice -> {
-            val current = session
-            if (current == null) {
+            val active = session
+            if (active == null) {
                 // 会话被回收（极端情况下）时安全回首页，不要卡在空练习页。
                 page = ReviewPage.Home
             } else {
                 PracticeScreen(
                     context = context,
-                    session = current,
+                    session = active,
                     title = practiceTitle,
                     onBack = {
                         session = null
-                        page = ReviewPage.Home
+                        // 回到进练习时记下的来处（题库详情页 / 首页）。
+                        page = practiceReturnTo
                     },
                     onFinished = {
-                        // 成绩在判分那一刻已逐题落库，这里直接回首页。
+                        // 成绩在判分那一刻已逐题落库，这里回到来处。
                         session = null
-                        page = ReviewPage.Home
+                        page = practiceReturnTo
                     },
                     // 练习页「问 AI」在未配置 Key 时点了要能到设置页。
                     // 记下来处，返回时回练习页而不是首页（否则这一轮作答就白做了）。

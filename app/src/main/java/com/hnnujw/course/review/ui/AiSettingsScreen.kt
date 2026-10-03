@@ -1,11 +1,15 @@
 package com.hnnujw.course.review.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -15,18 +19,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hnnujw.course.review.AiChatClient
 import com.hnnujw.course.review.AiKeyStore
+import com.hnnujw.course.ui.screen.GlassFilterChip
+import com.hnnujw.course.ui.system.GlassLoadingIndicator
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassTextField
 import com.hnnujw.course.ui.system.GlassToaster
 import com.hnnujw.course.ui.system.MarkdownText
+import kotlinx.coroutines.launch
 
 /**
  * AI 设置页：填 DeepSeek API Key 与模型名。
@@ -37,9 +47,14 @@ import com.hnnujw.course.ui.system.MarkdownText
 @Composable
 fun AiSettingsScreen(onBack: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
     var keyInput by remember { mutableStateOf("") }
     var modelInput by remember { mutableStateOf(AiKeyStore.model(context)) }
     var hasKey by remember { mutableStateOf(AiKeyStore.hasApiKey(context)) }
+    // 候选模型：先给内置候选，点「获取模型列表」再覆盖成服务端返回的。
+    var models by remember { mutableStateOf(AiChatClient.FALLBACK_MODELS) }
+    var fetching by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
 
     GlassPageScaffold(title = "AI 答疑设置", onBack = onBack) { padding ->
         Column(
@@ -91,12 +106,85 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(12.dp))
+
+                // —— 模型列表（可点选）+ 自定义输入并存。
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "选择模型",
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (fetching) {
+                        GlassLoadingIndicator(size = 20.dp)
+                    } else {
+                        // 必须具名传 onClick：SecondaryAction 最后一个参数是 modifier，
+                        // 尾随 lambda 会绑到 modifier 上而不是 onClick。
+                        SecondaryAction("获取模型列表", enabled = hasKey, onClick = {
+                            val key = AiKeyStore.apiKey(context)
+                            if (key.isNullOrBlank()) {
+                                GlassToaster.show("请先保存 API Key")
+                            } else {
+                                fetching = true
+                                scope.launch {
+                                    val result = AiChatClient.listModels(key)
+                                    fetching = false
+                                    when (result) {
+                                        is AiChatClient.Result.Success -> {
+                                            val ids = result.text.lines().filter { it.isNotBlank() }
+                                            if (ids.isNotEmpty()) {
+                                                models = ids
+                                                GlassToaster.show("已获取 ${ids.size} 个模型")
+                                            } else {
+                                                models = AiChatClient.FALLBACK_MODELS
+                                                GlassToaster.show("无法从服务端获取，已列出常用模型")
+                                            }
+                                        }
+                                        is AiChatClient.Result.Failure -> {
+                                            // 端点不可用/结构不同都不能让用户卡死 —— 退化到内置候选。
+                                            models = AiChatClient.FALLBACK_MODELS
+                                            GlassToaster.show("无法从服务端获取，已列出常用模型")
+                                        }
+                                    }
+                                }
+                            }
+                        })
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    models.forEach { name ->
+                        GlassFilterChip(
+                            label = name,
+                            selected = name == modelInput,
+                            onClick = { modelInput = name }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                // 仍保留手填能力：服务端模型名可能变，列表未必覆盖。
                 GlassTextField(
                     value = modelInput,
                     onValueChange = { modelInput = it },
                     placeholder = AiKeyStore.DEFAULT_MODEL,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "点上方芯片选择，或在输入框手填模型名。",
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(14.dp))
                 ConfirmButton(
@@ -120,6 +208,48 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(10.dp))
+                if (testing) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        GlassLoadingIndicator(size = 20.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "正在测试连接…",
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    SecondaryAction(
+                        text = "测试连接",
+                        enabled = hasKey,
+                        onClick = {
+                            val key = AiKeyStore.apiKey(context)
+                            if (key.isNullOrBlank()) {
+                                GlassToaster.show("请先保存 API Key")
+                            } else {
+                                // 防重复点击：置位后按钮分支切到 loading，点不到第二次。
+                                testing = true
+                                scope.launch {
+                                    val result = AiChatClient.testConnection(key, modelInput)
+                                    testing = false
+                                    when (result) {
+                                        is AiChatClient.Result.Success ->
+                                            GlassToaster.show("连接正常（模型 ${result.text}）")
+                                        is AiChatClient.Result.Failure ->
+                                            GlassToaster.show(result.message)
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
 
             Spacer(Modifier.height(12.dp))

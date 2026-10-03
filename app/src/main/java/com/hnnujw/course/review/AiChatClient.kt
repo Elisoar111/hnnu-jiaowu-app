@@ -28,6 +28,15 @@ object AiChatClient {
     private const val TAG = "AiChatClient"
     const val BASE_URL = "https://api.deepseek.com"
     private const val PATH_CHAT = "/chat/completions"
+    private const val PATH_MODELS = "/models"
+
+    /**
+     * 服务端模型列表不可用时的兜底候选。
+     *
+     * `GET /models` 是 DeepSeek 文档里的端点，但**不保证一定可用**（网关改动、
+     * 返回结构变化都可能）。拿不到时不能让用户卡在空列表上，直接列这两个常用模型。
+     */
+    val FALLBACK_MODELS = listOf("deepseek-chat", "deepseek-reasoner")
 
     /**
      * 最多带多少轮历史。
@@ -160,6 +169,117 @@ object AiChatClient {
         val first = choices.optJSONObject(0) ?: return ""
         val message = first.optJSONObject("message") ?: return ""
         return message.optString("content")
+    }
+
+    /**
+     * 从 `GET /models` 响应里取出模型 id 列表。
+     *
+     * 期望结构：`{"object":"list","data":[{"id":"deepseek-chat",...},...]}`。
+     * **容错是本方法的唯一职责**：`data` 缺失 / 为 null / 非数组、元素缺 `id`、
+     * 响应不是 JSON、空串 —— 一律返回空列表，**绝不抛异常**。
+     * 上层（[listModels] / UI）看到空列表就退化到 [FALLBACK_MODELS]。
+     *
+     * 抽成纯函数是为了能脱离网络单测这几条退化路径。
+     */
+    internal fun parseModelIds(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return try {
+            val data = JSONObject(raw).optJSONArray("data") ?: return emptyList()
+            val out = ArrayList<String>(data.length())
+            for (i in 0 until data.length()) {
+                val id = data.optJSONObject(i)?.optString("id").orEmpty().trim()
+                if (id.isNotEmpty()) out.add(id)
+            }
+            out
+        } catch (e: Exception) {
+            // 非 JSON / 结构异常：只记类别，不打原始响应（可能含敏感信息）。
+            Log.w(TAG, "parseModelIds failed: ${e.javaClass.simpleName}")
+            emptyList()
+        }
+    }
+
+    /**
+     * 拉取服务端模型列表。
+     *
+     * 成功且解析出非空 id 列表时返回 [Result.Success]（内容为换行拼接的 id）；
+     * 任何失败或空列表都返回 [Result.Failure]，由 UI 决定是否退化到 [FALLBACK_MODELS]。
+     */
+    suspend fun listModels(apiKey: String): Result = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext Result.Failure("还没有配置 API Key")
+        val request = Request.Builder()
+            .url(BASE_URL + PATH_MODELS)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .addHeader("Accept", "application/json")
+            .get()
+            .build()
+        try {
+            client.newCall(request).execute().use { response ->
+                val raw = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "listModels failed http=${response.code}")
+                    return@withContext Result.Failure(httpMessage(response.code, raw))
+                }
+                val ids = parseModelIds(raw)
+                if (ids.isEmpty()) {
+                    return@withContext Result.Failure("服务端未返回可用的模型列表")
+                }
+                Result.Success(ids.joinToString("\n"))
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "listModels io error: ${e.javaClass.simpleName}")
+            Result.Failure("网络请求失败：${e.message ?: "请检查网络后重试"}")
+        } catch (e: Exception) {
+            Log.w(TAG, "listModels error: ${e.javaClass.simpleName}")
+            Result.Failure("获取模型列表失败：${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * 测试连通性：发一条**极短**的 chat 请求，只关心鉴权与端点是否可用。
+     *
+     * 为什么不拿 [listModels] 冒充连通性测试：那只证明 `/models` 鉴权通过，
+     * 不证明 `/chat/completions` 可用（配额、模型下线、网关差异都可能让它单独失败）。
+     *
+     * 🔴 `max_tokens = 1`：只验证 2xx 与错误信息，不产出实质内容 ——
+     * 绝不能复用 [ask] 的 1200，那是在烧用户的钱包。
+     */
+    suspend fun testConnection(apiKey: String, model: String): Result = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext Result.Failure("还没有配置 API Key")
+        val effectiveModel = model.ifBlank { AiKeyStore.DEFAULT_MODEL }
+        val body = JSONObject().apply {
+            put("model", effectiveModel)
+            put("stream", false)
+            put("max_tokens", 1)
+            put("messages", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", "hi")
+                })
+            })
+        }
+        val request = Request.Builder()
+            .url(BASE_URL + PATH_CHAT)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Accept", "application/json")
+            .post(body.toString().toRequestBody(JSON_MEDIA))
+            .build()
+        try {
+            client.newCall(request).execute().use { response ->
+                val raw = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "testConnection failed http=${response.code}")
+                    return@withContext Result.Failure(httpMessage(response.code, raw))
+                }
+                Result.Success(effectiveModel)
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "testConnection io error: ${e.javaClass.simpleName}")
+            Result.Failure("网络请求失败：${e.message ?: "请检查网络后重试"}")
+        } catch (e: Exception) {
+            Log.w(TAG, "testConnection error: ${e.javaClass.simpleName}")
+            Result.Failure("测试连接失败：${e.message ?: e.javaClass.simpleName}")
+        }
     }
 
     /**
