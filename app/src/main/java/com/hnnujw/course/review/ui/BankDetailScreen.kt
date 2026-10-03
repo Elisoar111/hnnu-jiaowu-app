@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hnnujw.course.review.ExamDurationOptions
 import com.hnnujw.course.review.ReviewDatabase
 import com.hnnujw.course.review.ReviewMode
 import com.hnnujw.course.review.accuracyPercent
@@ -53,7 +54,7 @@ fun BankDetailScreen(
     context: Context,
     bankId: String,
     onBack: () -> Unit,
-    onStartPractice: (bankId: String, chapter: String?, mode: ReviewMode, onlyWrong: Boolean, onlyFavorite: Boolean) -> Unit,
+    onStartPractice: (bankId: String, chapter: String?, mode: ReviewMode, onlyWrong: Boolean, onlyFavorite: Boolean, durationSeconds: Int) -> Unit,
     onOpenStats: () -> Unit
 ) {
     val db = remember { ReviewDatabase.get(context) }
@@ -65,6 +66,8 @@ fun BankDetailScreen(
     // 模式与章节下标是界面状态；真正的 chapter / mode 值由纯函数在渲染时解析。
     var modeIdx by remember { mutableIntStateOf(0) }
     var chapterIdx by remember { mutableIntStateOf(0) }
+    // 限时考试的时长档位下标（0=不限时，其余按 ExamDurationOptions 取）。
+    var durationIdx by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(bankId) {
         val result = withContext(Dispatchers.IO) {
@@ -188,6 +191,34 @@ fun BankDetailScreen(
                 }
             }
 
+            // —— 限时考试时长
+            Card {
+                SectionHeader("限时考试")
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ExamDurationOptions.forEachIndexed { index, option ->
+                        GlassFilterChip(
+                            label = option.label,
+                            selected = index == durationIdx,
+                            onClick = { durationIdx = index }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "选「不限时」就是普通练习；选 20 / 30 / 60 分钟即为限时考试，" +
+                        "倒计时到点自动交卷（未作答的题计为未作答，不判错）。",
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             // —— 入口
             ConfirmButton(
                 text = "开始练习",
@@ -198,7 +229,9 @@ fun BankDetailScreen(
                         resolveSelectedChapter(options, safeChapterIdx),
                         modeAt(modeIdx),
                         false,
-                        false
+                        false,
+                        // 首页按钮「开始练习」按当前时长档走：不限时=0，否则取秒数。
+                        ExamDurationOptions[durationIdx.coerceIn(0, ExamDurationOptions.lastIndex)].seconds
                     )
                 },
                 modifier = Modifier.fillMaxWidth()
@@ -208,7 +241,7 @@ fun BankDetailScreen(
                 SecondaryAction(
                     text = "错题本（${ov.wrongPending}）",
                     onClick = {
-                        onStartPractice(bankId, null, modeAt(modeIdx), true, false)
+                        onStartPractice(bankId, null, modeAt(modeIdx), true, false, 0)
                     },
                     modifier = Modifier.fillMaxWidth()
                 )

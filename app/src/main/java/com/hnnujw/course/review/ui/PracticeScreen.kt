@@ -31,12 +31,18 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.hnnujw.course.review.AiChatClient
 import com.hnnujw.course.review.AiKeyStore
+import com.hnnujw.course.review.ExamTimeoutAction
 import com.hnnujw.course.review.PracticeResult
 import com.hnnujw.course.review.PracticeSession
 import com.hnnujw.course.review.ReviewDatabase
+import com.hnnujw.course.review.examTimeouts
+import com.hnnujw.course.review.formatRemaining
+import com.hnnujw.course.review.remainingSeconds
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassProgressBar
+import com.hnnujw.course.ui.system.GlassToaster
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -73,6 +79,52 @@ fun PracticeScreen(
     // 收藏状态放这里（界面状态），初始值从库里读一次；点完立刻改本地值，
     // 不用等数据库回来 —— 星星的反馈必须是即时的。
     var favorite by remember { mutableStateOf(false) }
+
+    // ── 限时考试：剩余秒数 + 两条"已警告过"标记 ──────────────────────────
+    // 只在限时（timing.isTimed）时才真正生效；不限时时下面的循环根本不启动，
+    // 也不会显示倒计时。remaining 初始值就是总时长（不限时则是一个极大值，不显示）。
+    var remaining by remember { mutableStateOf(Int.MAX_VALUE) }
+    var warnedFive by remember { mutableStateOf(false) }
+    var warnedOne by remember { mutableStateOf(false) }
+    // 用 session 的 startedAt 作 key 之一：换一轮考试（新的 session）时重置状态。
+    // 墙钟换算 elapsed（见下），不用累加计数 —— 后台回来计数会漂。
+    LaunchedEffect(session.timing.durationSeconds, session.startedAt) {
+        if (!session.timing.isTimed) return@LaunchedEffect
+        warnedFive = false
+        warnedOne = false
+        val total = session.timing.durationSeconds
+        val startedAt = session.startedAt.takeIf { it > 0L }
+            // startedAt 未设定（<= 0）时以进入本屏为起点，至少让倒计时能走。
+            ?: System.currentTimeMillis()
+        while (true) {
+            val now = System.currentTimeMillis()
+            val elapsedSec = ((now - startedAt) / 1000L).toInt()
+            val left = remainingSeconds(total, elapsedSec)
+            remaining = left
+            val actions = examTimeouts(left, warnedFive, warnedOne)
+            for (action in actions) {
+                when (action) {
+                    ExamTimeoutAction.Submit -> {
+                        // 到点自动交卷：未判分的题计为未作答（resultForTimeout）。
+                        // 交完立即 return 结束循环，避免重复触发。
+                        GlassToaster.show("时间到，已自动交卷")
+                        onFinished(session.resultForTimeout())
+                        return@LaunchedEffect
+                    }
+                    ExamTimeoutAction.WarnFiveMinutes -> {
+                        warnedFive = true
+                        GlassToaster.show("还剩 5 分钟")
+                    }
+                    ExamTimeoutAction.WarnOneMinute -> {
+                        warnedOne = true
+                        GlassToaster.show("还剩 1 分钟")
+                    }
+                }
+            }
+            // 对齐到下一秒边界再醒：避免忙等，也让抖动不至于累积成漂移。
+            delay(1000L - (now % 1000L))
+        }
+    }
 
     val question = session.questions.getOrNull(index)
     var aiKey by remember { mutableStateOf<String?>(null) }
@@ -116,7 +168,17 @@ fun PracticeScreen(
 
     GlassPageScaffold(
         title = title,
-        subtitle = if (session.total == 0) null else "第 ${index + 1} / ${session.total} 题 · 正确率 ${(session.accuracy * 100).toInt()}%",
+        subtitle = if (session.total == 0) {
+            null
+        } else {
+            buildString {
+                append("第 ${index + 1} / ${session.total} 题 · 正确率 ${(session.accuracy * 100).toInt()}%")
+                // 限时才追加倒计时；不限时 subtitle 与从前逐字一致。
+                if (session.timing.isTimed) {
+                    append(" · ⏱ ${formatRemaining(remaining)}")
+                }
+            }
+        },
         onBack = onBack
     ) { padding ->
         if (question == null) {

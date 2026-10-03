@@ -11,7 +11,21 @@ package com.hnnujw.course.review
 class PracticeSession(
     val questions: List<ReviewQuestion>,
     /** 答完一题才切下一题（顺序练习）；false = 全部题目同时铺开（自测模式）。 */
-    val oneByOne: Boolean = true
+    val oneByOne: Boolean = true,
+    /**
+     * 限时考试配置，默认 [ExamTiming]`(0)` = 不限时（普通练习行为不变）。
+     *
+     * ⚠️ 本参数**带默认值**：新增调用点时不会因为漏传而报编译错。凡是"限时考试"
+     * 的场景，务必在创建会话处**显式回传** `timing`（本项目踩过带默认值参数的坑）。
+     */
+    val timing: ExamTiming = ExamTiming(0),
+    /**
+     * 会话开始时刻（毫秒墙钟），用于按真实时间算已用时长。
+     *
+     * 默认 `0L` 表示"未设定"——此时 [isExpired] 视为未开始、恒 false，普通练习
+     * 不需要关心它。限时考试必须在开练时传入 `System.currentTimeMillis()`。
+     */
+    val startedAt: Long = 0L
 ) {
     /** 每题的用户作答。key 仍用 bankId::qid 作复合键，跟数据库主键一致。 */
     private val answers = LinkedHashMap<String, String>()
@@ -97,6 +111,31 @@ class PracticeSession(
         wrong = questions.count { key(it) in judged && !isCorrect(it) },
         unjudged = total - judgedCount
     )
+
+    /**
+     * 到点没到点（按墙钟判断）。
+     *
+     * 不限时恒 false；`startedAt == 0L`（未设定开始时刻）也恒 false，避免把"没记
+     * 开始时间"误判成"立刻过期"。到点后返回 true 由调用方触发自动交卷。
+     *
+     * 用**真实时间差**而非累加计数：应用被切到后台、系统把 tick 挂起时，累加计数
+     * 会停在原地（回来后还显示剩很多），而墙钟差值不会漂。
+     */
+    fun isExpired(nowMillis: Long): Boolean {
+        if (!timing.isTimed || startedAt <= 0L) return false
+        val elapsedMillis = nowMillis - startedAt
+        if (elapsedMillis < 0L) return false
+        return elapsedMillis >= timing.durationSeconds * 1000L
+    }
+
+    /**
+     * 超时交卷的结果。
+     *
+     * 与"正常做完"共用 [result]：**已判分的题照算，没判分的题自然计为未作答**
+     * （`unjudged = total - judgedCount`）。这样超时交卷不会把没答的题算成答错，
+     * 正确率的分母仍是"已判分数"。
+     */
+    fun resultForTimeout(): PracticeResult = result()
 }
 
 data class PracticeResult(
