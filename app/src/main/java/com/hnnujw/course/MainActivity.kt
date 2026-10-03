@@ -138,6 +138,8 @@ import com.hnnujw.course.ui.system.SystemPrimaryButton
 import com.hnnujw.course.ui.system.SystemSecondaryButton
 import kotlinx.coroutines.delay
 import com.hnnujw.course.manager.StartupPage
+import com.hnnujw.course.manager.NavBarLayout
+import com.hnnujw.course.manager.NavBarLayoutSignal
 import com.hnnujw.course.manager.StartupPagePreferences
 import com.hnnujw.course.ui.system.GlassRecipe
 import com.hnnujw.course.ui.system.glass.drawBlurred
@@ -364,7 +366,21 @@ sealed class BottomNavItem(
     object Settings : BottomNavItem(StartupPage.Settings, AppSymbolSpec.Settings)
 
     companion object {
-        val entries: List<BottomNavItem> get() = listOf(Schedule, Xuegong, Grades, SecondClass, Settings)
+        /**
+         * 第 14 轮：底栏顺序/显隐由用户偏好决定，所以需要一个「页面 → 底栏项」的映射，
+         * 把 [com.hnnujw.course.manager.NavBarLayout] 解析出的有序 [StartupPage] 列表
+         * 还原成 [BottomNavItem] 列表去喂给底栏。
+         *
+         * 图标口径与 5 个 object 完全一致（见各 object 的构造参数），
+         * 新增页面时两边都要改 —— 这是刻意保持「一处定义、一处派生」。
+         */
+        fun of(page: StartupPage): BottomNavItem = when (page) {
+            StartupPage.Schedule -> Schedule
+            StartupPage.Xuegong -> Xuegong
+            StartupPage.Grades -> Grades
+            StartupPage.SecondClass -> SecondClass
+            StartupPage.Settings -> Settings
+        }
     }
 }
 
@@ -378,7 +394,27 @@ fun MainScreen(
     val appWallpaper = com.hnnujw.course.ui.theme.rememberAppWallpaperStyle()
     val isDemoMode = remember { UserManager.getInstance().isDemoMode }
     val startupPagePreferences = remember(context) { StartupPagePreferences.from(context) }
-    val items = remember { BottomNavItem.entries }
+
+    /**
+     * 底栏布局版本号。编辑弹窗写入偏好后 [NavBarLayoutSignal.bump] 自增，这里跟着重算 [items]。
+     *
+     * 为什么不用 `StartupPagePreferences` 自己的 state：它是普通 SharedPreferences 封装，
+     * 没有可观察性；而底栏必须在**同一帧内**跟着重排，否则会出现「顺序变了但内容还是旧的」。
+     * 用一个全局 revision 计数器最直接（编辑入口在设置页，不在本文件里）。
+     */
+    val navBarRevision = NavBarLayoutSignal.revision.intValue
+    /** 第 14 轮：底栏编辑弹窗是否可见。 */
+    var navBarDialogVisible by remember { mutableStateOf(false) }
+    /**
+     * 当前底栏项 —— 由用户偏好驱动，不再是硬编码的 5 项。
+     *
+     * `resolve` 负责一切容错（未知 route 丢弃、去重、过短/缺「我的」回退默认），
+     * 所以这里拿到的永远是一份可直接渲染的可信布局。
+     */
+    val items = remember(navBarRevision) {
+        NavBarLayout.resolve(startupPagePreferences.readNavBarRoutes())
+            .map { BottomNavItem.of(it) }
+    }
     
     var startupOverlaysReady by remember { mutableStateOf(false) }
 
@@ -393,13 +429,34 @@ fun MainScreen(
         pageDataViewModel.forAccount(currentAccountStorageKey, reset = pageDataRevision > 0)
     }
     // Resolve before creating the motion state so the first frame is already on the chosen page.
-    var selectedTab by remember(pageData) {
-        pageData.state("navigation.tab") {
-            val startupPage = startupPagePreferences.read()
-            items.indexOfFirst { it.page == startupPage }.coerceAtLeast(0)
-        }
+    //
+    // 第 14 轮：`items` 现在由用户偏好决定，而 `navigation.tab` 存的是**下标**。
+    //
+    // ⚠️ 澄清一处此前的误解：`PageDataState.state()` 是**内存态**（`PageDataState` 用一个
+    // mutableMap 按账号持有，不落盘），所以 `navigation.tab` **只跨重组/配置变更存活，
+    // 不跨进程死亡**。冷启动时的初始页由「启动首屏」偏好（`startup_page`，是真落盘的）
+    // 决定，下面 initial lambda 里用 `indexOfFirst { it.page == startupPage }` **按页面**定位 ——
+    // 这正好绕开了「底栏被重排后下标含义变化」的问题。
+    //
+    // 下标只在**同一进程内的重排**里会错位，而重排事件被 onNavBarLayoutChange 就地同步了
+    // （见那里按 route 重定位）；这里再夹一次 `coerceIn` 是兜底：用户把 5 项删到 2 项后，
+    // 内存里的旧下标 `4` 已越界，直接拿去索引会当场崩。
+    val tabState = pageData.state("navigation.tab") {
+        val startupPage = startupPagePreferences.read()
+        items.indexOfFirst { it.page == startupPage }.coerceAtLeast(0)
     }
+    val selectedTab: Int = tabState.value.coerceIn(0, (items.size - 1).coerceAtLeast(0))
     val navigationMotion = com.hnnujw.course.ui.theme.rememberNavigationMotionState(selectedTab, currentAccountStorageKey, accessibility.reduceMotion)
+
+    /**
+     * 第 14 轮：底栏顺序由用户决定，凡是「跳到某个页面」的请求**必须按 route 定位**，
+     * 不能再假设「课表是第 0 个」。跳一个不在底栏里的页面（用户把它藏了）时静默忽略 ——
+     * 页面本身还在，只是没有入口，硬跳过去会让底栏指示器指向一个不存在的项。
+     */
+    fun selectPage(page: StartupPage) {
+        val index = items.indexOfFirst { it.page == page }
+        if (index >= 0) tabState.value = index
+    }
 
     // 冷启动进入应用时弹一条「欢迎回来」（仅首次 ON_RESUME，进程存活期内只弹一次；
     // 从后台切回不再弹，避免打扰）。
@@ -423,8 +480,9 @@ fun MainScreen(
     val reminderRequest = com.hnnujw.course.schedule.CourseReminderNavigation.requestedId
     LaunchedEffect(reminderRequest, currentAccountStorageKey) {
         if (reminderRequest != null) {
-            // 课程提醒落到课表页；课程页已移除，课表是第 0 个 Tab
-            if (com.hnnujw.course.schedule.ScheduleReminderScheduler.get(context).findById(reminderRequest) != null) selectedTab = 0
+            // 课程提醒落到课表页。**按 route 定位**，不是写死的 0 ——
+            // 用户可能把课表挪到别的位次（见 selectPage 的注释）。
+            if (com.hnnujw.course.schedule.ScheduleReminderScheduler.get(context).findById(reminderRequest) != null) selectPage(StartupPage.Schedule)
             else {
                 com.hnnujw.course.ui.system.GlassToaster.show("这条课程提醒已失效或属于其他账号")
                 com.hnnujw.course.schedule.CourseReminderNavigation.consume()
@@ -436,8 +494,7 @@ fun MainScreen(
     val requestedTabPage = AppTabNavigation.requestedPage
     LaunchedEffect(requestedTabPage) {
         if (requestedTabPage != null) {
-            val index = items.indexOfFirst { it.page == requestedTabPage }
-            if (index >= 0 && index != selectedTab) selectedTab = index
+            selectPage(requestedTabPage)
             AppTabNavigation.consume()
         }
     }
@@ -805,13 +862,21 @@ fun MainScreen(
                                     alpha = 1f - 0.03f * dialogHostState.pageProgress
                                 }
                             ) { page ->
+                              // ⚠️ 第 14 轮关键改动：分发**按 route 字符串**，不再是 Int 下标。
+                              // 用户重排底栏后下标含义就变了（把「成绩」拖到第一位时，
+                              // 下标 0 若不按 route 分发就会渲染 ScheduleRoute —— 典型的错位崩）。
+                              // route 是随页面走的稳定标识，`SaveableStateProvider` 也一直用它做 key。
                               savedPages.SaveableStateProvider(items[page].route) {
-                                when (page) {
-                                    0 -> com.hnnujw.course.ui.route.ScheduleRoute()
-                                    1 -> com.hnnujw.course.ui.route.XuegongRoute()
-                                    2 -> com.hnnujw.course.ui.route.GradesRoute()
-                                    3 -> com.hnnujw.course.ui.route.SecondClassroomRoute()
-                                    4 -> com.hnnujw.course.ui.route.SettingsRoute()
+                                when (items[page].route) {
+                                    StartupPage.Schedule.route -> com.hnnujw.course.ui.route.ScheduleRoute()
+                                    StartupPage.Xuegong.route -> com.hnnujw.course.ui.route.XuegongRoute()
+                                    StartupPage.Grades.route -> com.hnnujw.course.ui.route.GradesRoute()
+                                    StartupPage.SecondClass.route -> com.hnnujw.course.ui.route.SecondClassroomRoute()
+                                    StartupPage.Settings.route -> com.hnnujw.course.ui.route.SettingsRoute(
+                                        onNavBarEdit = { navBarDialogVisible = true }
+                                    )
+                                    // 兜底：不认识的 route（理论不可达，resolve 已过滤）走课表，
+                                    // 至少不会白屏
                                     else -> com.hnnujw.course.ui.route.ScheduleRoute()
                                 }
                               }
@@ -829,7 +894,7 @@ fun MainScreen(
                 selectedTab = selectedTab,
                 onTabSelect = { targetTab ->
                     if (targetTab != selectedTab) {
-                        selectedTab = targetTab
+                        tabState.value = targetTab
                     }
                 },
                 // 关掉「自动收起」时恒传 false：底栏自己不需要知道原因（见上面 navBarAutoCollapseEnabled 的注释）
@@ -838,8 +903,13 @@ fun MainScreen(
                 backdrop = navBarBackdrop,
                 lensFreshness = lensFreshness,
                 // 消息中心藏在「我的」页里，未读时至少让「我的」这个 tab 有红点，
-                // 否则用户没有任何理由点进去
-                badgeTabs = if (messageUnread > 0) setOf(items.indexOf(BottomNavItem.Settings)) else emptySet(),
+                // 否则用户没有任何理由点进去。下标按当前 items 现算 —— 用户重排后
+                // 「我的」可能不在最后一位；用户把它藏了则下标为 -1，红点自然消失
+                // （这正是我们想要的：没有入口就别报红点）。
+                badgeTabs = if (messageUnread > 0) {
+                    val settingsIndex = items.indexOfFirst { it.page == StartupPage.Settings }
+                    if (settingsIndex >= 0) setOf(settingsIndex) else emptySet()
+                } else emptySet(),
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
             }
@@ -874,13 +944,33 @@ fun MainScreen(
             if (showOnboarding) {
                 OnboardingDialog(
                     onNavigate = { targetPage ->
-                        val targetIndex = items.indexOfFirst { it.page == targetPage }
-                        if (targetIndex >= 0 && targetIndex != selectedTab) {
-                            selectedTab = targetIndex
-                        }
+                        selectPage(targetPage)
                         onOnboardingFinish()
                     },
                     onFinish = onOnboardingFinish
+                )
+            }
+
+            // 第 14 轮：底栏编辑弹窗。挂在最外层 —— 它要盖住底栏一起改，
+            // 放进页面内容里会被底栏的捕获层裁掉。
+            if (navBarDialogVisible) {
+                com.hnnujw.course.ui.screen.NavBarSettingsDialog(
+                    pages = items.map { it.page },
+                    onPagesChange = { nextPages ->
+                        // 落盘 + 通知底栏重算
+                        startupPagePreferences.writeNavBar(nextPages)
+                        // 重排后必须**把当前 tab 按 route 重新定位**：
+                        // 旧下标 `selectedTab` 在新顺序里可能已经是另一个页面了。
+                        // 先记住正在看的 route，再在新列表里找回来。
+                        val currentRoute = items.getOrNull(selectedTab)?.route
+                        // 用刚写入的 nextPages 直接算新下标 —— 不依赖 items 何时重算
+                        val newIndex = currentRoute?.let { route ->
+                            nextPages.indexOfFirst { it.route == route }
+                        } ?: -1
+                        tabState.value = if (newIndex >= 0) newIndex else 0
+                        NavBarLayoutSignal.bump()
+                    },
+                    onDismiss = { navBarDialogVisible = false }
                 )
             }
         }

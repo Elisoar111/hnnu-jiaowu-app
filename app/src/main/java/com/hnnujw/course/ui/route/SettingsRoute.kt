@@ -91,7 +91,9 @@ private const val TAG = "SettingsRoute"
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsRoute(
-    onAccountChanged: () -> Unit = {}
+    onAccountChanged: () -> Unit = {},
+    /** 第 14 轮：打开「底部导航」编辑弹窗（弹窗挂在 MainActivity 里，见其注释）。 */
+    onNavBarEdit: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val isDemoMode = remember { UserManager.getInstance().isDemoMode }
@@ -122,6 +124,21 @@ fun SettingsRoute(
     var showStartupPageDialog by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     val startupPagePreferences = remember(context) { StartupPagePreferences.from(context) }
     var startupPage by remember(startupPagePreferences) { mutableStateOf(startupPagePreferences.read()) }
+    // 第 14 轮：底栏布局摘要。读原始 route 串 → 交给纯函数归一 → 拼一句人话。
+    // 不做任何判断在这里（容错全在 NavBarLayout.resolve 里，那才需要单测）。
+    // 订阅全局 revision：编辑弹窗改完布局后，本页摘要要跟着变。
+    val navBarRevision = com.hnnujw.course.manager.NavBarLayoutSignal.revision.intValue
+    val navBarLayout = remember(navBarRevision) {
+        com.hnnujw.course.manager.NavBarLayout.resolve(startupPagePreferences.readNavBarRoutes())
+    }
+    val navBarLayoutSummary = remember(navBarLayout) {
+        if (navBarLayout.size == com.hnnujw.course.manager.NavBarLayout.default.size) {
+            ""  // 默认布局不啰嗦摘要，副标题回退成中性说明
+        } else {
+            navBarLayout.joinToString(" · ") { it.label } +
+                "（${navBarLayout.size}/${com.hnnujw.course.manager.StartupPage.entries.size} 项）"
+        }
+    }
     val currentWallpaperName = com.hnnujw.course.manager.AppearanceSettingsManager.currentWallpaperName
     
     // 身份标识：配额展示已按要求整体移除，这里只保留"超级用户"徽标所需的判断
@@ -526,6 +543,8 @@ fun SettingsRoute(
         onGlassEffectChange = { AppearanceSettingsManager.updateGlassEffect(it) },
         navBarAutoCollapseEnabled = AppearanceSettingsManager.navBarAutoCollapseEnabled,
         onNavBarAutoCollapseChange = { AppearanceSettingsManager.updateNavBarAutoCollapse(it) },
+        navBarLayoutSummary = navBarLayoutSummary,
+        onNavBarEdit = { onNavBarEdit() },
         messageUnread = messageUnread,
         announcementUnread = announcementUnread,
         onAnnouncements = { context.startActivity(Intent(context, com.hnnujw.course.AnnouncementActivity::class.java)) },

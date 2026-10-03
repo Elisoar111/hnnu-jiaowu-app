@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Assignment
+import androidx.compose.material.icons.automirrored.outlined.ViewList
 import androidx.compose.material.icons.outlined.AssignmentInd
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.AutoAwesome
@@ -119,6 +120,10 @@ fun SettingsScreen(
     /** 底部导航栏是否随滚动自动收起（默认开）。 */
     navBarAutoCollapseEnabled: Boolean = true,
     onNavBarAutoCollapseChange: (Boolean) -> Unit = {},
+    /** 底栏当前布局的文字摘要（如「课表 · 成绩 · 二课 · 我的（4/5 项）」）。 */
+    navBarLayoutSummary: String = "",
+    /** 打开「底部导航」编辑弹窗。 */
+    onNavBarEdit: () -> Unit = {},
     /** 消息中心未读数；> 0 时入口显示红点。 */
     messageUnread: Int = 0,
     isSuper: Boolean = false,
@@ -349,7 +354,7 @@ fun SettingsScreen(
                     } else {
                         "始终保持展开"
                     },
-                    showDivider = false,
+                    showDivider = !navBarLayoutSummary.isBlank(),
                     trailing = {
                         LiquidSwitch(
                             checked = navBarAutoCollapseEnabled,
@@ -357,6 +362,27 @@ fun SettingsScreen(
                         )
                     }
                 )
+                // 第 14 轮：底栏顺序 / 显隐由用户自己定（「我的」常驻不可移除）。
+                // 放在「自动收起」旁边 —— 两条都是"底栏长什么样"，挨着更好找。
+                if (navBarLayoutSummary.isNotBlank()) {
+                    SettingsRow(
+                        icon = Icons.AutoMirrored.Outlined.ViewList,
+                        iconTint = Color(0xFF5E5CE6),
+                        title = "底部导航",
+                        subtitle = navBarLayoutSummary,
+                        onClick = onNavBarEdit,
+                        showDivider = false
+                    )
+                } else {
+                    SettingsRow(
+                        icon = Icons.AutoMirrored.Outlined.ViewList,
+                        iconTint = Color(0xFF5E5CE6),
+                        title = "底部导航",
+                        subtitle = "调整顺序、收起不常用的页面",
+                        onClick = onNavBarEdit,
+                        showDivider = false
+                    )
+                }
             }
 
             InsetGroupedSection(Modifier.moduleEntrance(3), header = "应用与支持") {
