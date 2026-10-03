@@ -1,0 +1,35 @@
+{
+  "name": "示例题库",
+  "questions": [
+    {
+      "id": "1",
+      "type": "single",
+      "stem": "本应用接入的 AI 服务商是？",
+      "options": ["DeepSeek", "OpenAI", "百度文心", "通义千问"],
+      "answer": "A",
+      "chapter": "示例",
+      "explanation": "复习模块的 AI 答疑接入的是 DeepSeek（OpenAI 兼容协议），API Key 由用户自己在设置页填写，本应用不内置任何密钥。",
+      "tags": ["示例"]
+    },
+    {
+      "id": "2",
+      "type": "multi",
+      "stem": "以下哪些属于本应用的本地功能（不联网）？",
+      "options": ["课表查看", "题库练习", "错题本", "课表同步"],
+      "chapter": "示例",
+      "answer": "ABC",
+      "explanation": "题库、练习、错题本全部落在本机 SQLite；只有课表同步需要连教务系统。AI 答疑则需要用户主动点击后才会把题目发给 DeepSeek。",
+      "tags": ["示例"]
+    },
+    {
+      "id": "3",
+      "type": "single",
+      "stem": "导入题库时，若某道题的答案为空会怎样？",
+      "options": ["整份题库导入失败", "该题被跳过并提示", "自动填 A", "该题答案视为任意选项都对"],
+      "chapter": "示例",
+      "answer": "B",
+      "explanation": "不合规的题目会被单独跳过，导入完成后会提示「已导入 N 题，M 条被跳过」，其余题目照常入库。",
+      "tags": ["示例"]
+    }
+  ]
+}

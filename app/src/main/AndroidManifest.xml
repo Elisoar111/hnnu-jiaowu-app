@@ -163,6 +163,12 @@
             android:configChanges="uiMode"
             android:exported="false"
             android:screenOrientation="portrait" />
+        <!-- 复习模块：题库导入 / 练习 / AI 答疑。数据全部本地，AI 请求走 https。 -->
+        <activity
+            android:name=".ReviewActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
 
         <!-- 一卡通（yktapp.hnnu.edu.cn）：校园卡余额 + 宿舍电费查看，只读。
              认证走独立的 synjones-auth 令牌，不复用教务会话。

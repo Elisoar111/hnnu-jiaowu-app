@@ -548,6 +548,10 @@ fun SettingsRoute(
             runCatching { context.startActivity(Intent(context, com.hnnujw.course.EmptyRoomActivity::class.java)) }
                 .onFailure { GlassToaster.show("无法打开空闲教室查询") }
         },
+        onReview = {
+            runCatching { context.startActivity(Intent(context, com.hnnujw.course.ReviewActivity::class.java)) }
+                .onFailure { GlassToaster.show("无法打开复习模块") }
+        },
         onCheckUpdate = { checkForUpdate() },
         onOpenManual = {
             runCatching { context.startActivity(Intent(context, com.hnnujw.course.ManualActivity::class.java)) }

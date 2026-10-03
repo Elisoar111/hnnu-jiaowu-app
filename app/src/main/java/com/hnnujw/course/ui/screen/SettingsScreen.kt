@@ -32,6 +32,7 @@ import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.ContentPasteSearch
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.ImportContacts
+import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarBorder
@@ -139,6 +140,8 @@ fun SettingsScreen(
     onEmptyRoom: () -> Unit = {},
     /** 一卡通（校园卡余额 / 宿舍电费，只读）。 */
     onCampusCard: () -> Unit = {},
+    /** 复习（导入 JSON 题库刷题 + AI 答疑）。 */
+    onReview: () -> Unit = {},
     onMessageCenter: () -> Unit = {},
     /** 公告中心未读数；> 0 时入口显示红点。 */
     announcementUnread: Int = 0,
@@ -287,6 +290,14 @@ fun SettingsScreen(
                     title = "一卡通",
                     subtitle = "余额、消费与宿舍电费查询",
                     onClick = onCampusCard,
+                    showDivider = false
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.MenuBook,
+                    iconTint = Color(0xFFAF52DE),
+                    title = "复习",
+                    subtitle = "导入 JSON 题库刷题，可让 AI 讲解",
+                    onClick = onReview,
                     showDivider = false
                 )
             }
