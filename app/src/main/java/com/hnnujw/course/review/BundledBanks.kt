@@ -47,10 +47,22 @@ object BundledBanks {
      * 改名字会让 [pendingSpecs] 的去重失效，进而触发覆盖导入。
      */
     val SPECS: List<Spec> = listOf(
-        Spec("review/mao_zhuyi_principles.json", "马克思主义基本原理（选择题）", 300),
+        Spec("review/mao_zhuyi_principles.json", "马克思主义基本原理", 300),
         Spec("review/sixiang_dedao_fazhi.json", "思想道德与法治", 258),
         Spec("review/mao_ze_lishi.json", "中国近现代史纲要", 320),
-        Spec("review/mao_gai_dan_xuan.json", "毛概（2023版）", 181)
+        Spec("review/mao_gai_dan_xuan.json", "毛泽东思想和中国特色社会主义理论体系概论", 181)
+    )
+
+    /**
+     * 内置库改名对照（旧名 → 新名，2026-10 起启用正式课名）。
+     *
+     * 老设备上已按旧名导入的库不会因改名被重复导入（导入门槛是「一个库都没有」），
+     * 但库名会停留在旧名 —— 由 [ReviewDatabase.migrateBundledBankNames] 在首次取库时
+     * 一次性改名（幂等，新名被占用时跳过）。**改 SPECS 名字时必须同步在这里登记旧名**。
+     */
+    val RENAMED_BANKS: Map<String, String> = mapOf(
+        "毛概（2023版）" to "毛泽东思想和中国特色社会主义理论体系概论",
+        "马克思主义基本原理（选择题）" to "马克思主义基本原理"
     )
 
     /** 随包内置题目的总数，用于「已内置 N 题」提示。 */

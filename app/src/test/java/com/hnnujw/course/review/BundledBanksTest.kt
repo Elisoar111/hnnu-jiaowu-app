@@ -1,6 +1,7 @@
 package com.hnnujw.course.review
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -75,11 +76,27 @@ class BundledBanksTest {
     }
 
     @Test
-    fun `全角括号库名逐字一致`() {
-        // 「马克思主义基本原理（选择题）」含全角括号，少一个字就匹配不上 → 覆盖导入。
+    fun `库名与 JSON name 逐字一致才判得出重复`() {
+        // 改名后的「马克思主义基本原理」少一个字就匹配不上 → 覆盖导入（清答题记录）。
         val target = BundledBanks.SPECS.first { it.bankName.startsWith("马克思主义") }
-        assertEquals("马克思主义基本原理（选择题）", target.bankName)
+        assertEquals("马克思主义基本原理", target.bankName)
         assertEquals("review/mao_zhuyi_principles.json", target.assetPath)
         assertTrue(BundledBanks.pendingSpecs(setOf(target.bankName)).none { it.assetPath == target.assetPath })
+    }
+
+    @Test
+    fun `改名对照的新名都在 SPECS 且旧名已不在`() {
+        // RENAMED_BANKS 是存量设备改名的依据：新名必须与 SPECS 逐字一致，
+        // 否则迁移会把库改成和内置清单对不上的名字；旧名再出现会导致重复导入。
+        BundledBanks.RENAMED_BANKS.forEach { (oldName, newName) ->
+            assertTrue(
+                "新名「$newName」必须存在于 SPECS",
+                BundledBanks.SPECS.any { it.bankName == newName }
+            )
+            assertFalse(
+                "旧名「$oldName」不应再出现在 SPECS",
+                BundledBanks.SPECS.any { it.bankName == oldName }
+            )
+        }
     }
 }

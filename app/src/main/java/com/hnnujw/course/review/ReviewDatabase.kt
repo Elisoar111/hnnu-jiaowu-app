@@ -220,6 +220,23 @@ class ReviewDatabase private constructor(context: Context) :
             "SELECT 1 FROM banks WHERE name = ? LIMIT 1", arrayOf(name)
         ).use { it.moveToFirst() }
 
+    /**
+     * 内置题库改名的存量迁移（2026-10 两个内置库启用正式课名，对照表在 [BundledBanks.RENAMED_BANKS]）。
+     *
+     * 老设备已按旧名导入的库不会因改名被重复导入（自动导入门槛是「一个库都没有」），
+     * 但库名会一直停留在旧名 —— 首次取库时在这里一次性改过来。幂等：
+     *  - 旧名不存在 → 跳过；
+     *  - 新名已被用户自建的库占用 → [renameBank] 的排己查重挡下，跳过，不硬改。
+     */
+    fun migrateBundledBankNames() {
+        BundledBanks.RENAMED_BANKS.forEach { (oldName, newName) ->
+            val bankId = readableDatabase.rawQuery(
+                "SELECT id FROM banks WHERE name = ? LIMIT 1", arrayOf(oldName)
+            ).use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: return@forEach
+            renameBank(bankId, newName)
+        }
+    }
+
     data class BankSummary(
         val id: String,
         val name: String,
@@ -912,10 +929,26 @@ class ReviewDatabase private constructor(context: Context) :
         @Volatile
         private var instance: ReviewDatabase? = null
 
-        fun get(context: Context): ReviewDatabase =
-            instance ?: synchronized(this) {
+        /** 内置库改名迁移是否已执行过（每进程一次，见 [ReviewDatabase.migrateBundledBankNames]）。 */
+        @Volatile
+        private var bundledNamesMigrated = false
+
+        fun get(context: Context): ReviewDatabase {
+            val db = instance ?: synchronized(this) {
                 instance ?: ReviewDatabase(context).also { instance = it }
             }
+            // 内置库改名的存量迁移：首次取库时顺手跑一次。幂等、两次 SELECT 量级，
+            // runCatching 兜住 —— 迁移失败绝不能影响取库本身。
+            if (!bundledNamesMigrated) {
+                synchronized(this) {
+                    if (!bundledNamesMigrated) {
+                        bundledNamesMigrated = true
+                        runCatching { db.migrateBundledBankNames() }
+                    }
+                }
+            }
+            return db
+        }
     }
 }
 
