@@ -491,7 +491,7 @@ object YktBalance {
      *
      * **必须归一**：服务端大量字段是可空对象（`consumeTypeName: null`、
      * `labelName: ""`），直接用 `optString` 会在界面上渲染出字面量 "null"。
-     * 姓名类字段还带尾部空格（实测 `userName="胡敏翔     "`），一并 trim。
+     * 姓名类字段还带尾部空格（实测 userName 姓名后跟多个空格），一并 trim。
      */
     internal fun billText(item: org.json.JSONObject, key: String): String {
         val raw = item.opt(key) ?: return ""

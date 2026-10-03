@@ -143,8 +143,8 @@ class EmptyRoomContractTest {
         "xqm" to "12",
         "cdyysqkz" to "0",
         "xqFlag" to "0",
-        "syr" to "2505050111",
-        "syrxm" to "胡敏翔/2505050111",
+        "syr" to "2505999999",
+        "syrxm" to "测试用户/2505999999",
         "yuyjsctbj" to "1",
         "jylysfbt" to "",
         "cdjylx" to "",
@@ -193,8 +193,8 @@ class EmptyRoomContractTest {
         // 服务端按 syr 认人。丢了这个字段，查询会变成"以匿名身份查"，
         // 学校侧可能按无权限处理。
         val fields = fieldsOf(valid())
-        assertEquals("2505050111", fields["syr"])
-        assertEquals("胡敏翔/2505050111", fields["syrxm"])
+        assertEquals("2505999999", fields["syr"])
+        assertEquals("测试用户/2505999999", fields["syrxm"])
         assertEquals("cx", fields["fwzt"])
     }
 
@@ -239,8 +239,8 @@ class EmptyRoomContractTest {
           <input type="hidden" id="fwzt" value="cx" name="fwzt"/>
           <input type="hidden" name="xnm" value="2026" id="xnm"/>
           <input type="hidden" name="xqm" value="3" id="xqm"/>
-          <input type="hidden" id="syr" name="syr" value="2505050111"/>
-          <input type="hidden" id="syrxm" name="syrxm" value="胡敏翔/2505050111"/>
+          <input type="hidden" id="syr" name="syr" value="2505999999"/>
+          <input type="hidden" id="syrxm" name="syrxm" value="测试用户/2505999999"/>
           <select name="dm" id="dm_cx" class="form-control chosen-select">
             <option value="2026-3" selected="selected">2026-2027-1</option>
           </select>
@@ -303,8 +303,8 @@ class EmptyRoomContractTest {
     @Test
     fun `隐藏域里带着登录人身份`() {
         val hidden = EmptyRoomParser.hiddenFields(pageHtml)
-        assertEquals("2505050111", hidden["syr"])
-        assertEquals("胡敏翔/2505050111", hidden["syrxm"])
+        assertEquals("2505999999", hidden["syr"])
+        assertEquals("测试用户/2505999999", hidden["syrxm"])
         assertEquals("cx", hidden["fwzt"])
     }
 
