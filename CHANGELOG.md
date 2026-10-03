@@ -4,6 +4,18 @@
 > 自 1.0.68 起，每个版本的更新日志以 `release-notes/vX.Y.Z.md` 为唯一数据源，由 CI 扇出到本文件、GitHub Release 与应用内更新提示。
 > 1.0.67 未发布：该 tag 的流水线在版本号校验步骤失败，未产出任何 Release，内容顺延至 1.0.68。
 
+## [Unreleased]
+
+### 新增
+
+- 底部导航栏支持重排与显隐：`manager/NavBarLayout`（纯函数 —— `default` / `MIN_ITEMS=2` / `pinned=Settings` / `resolve` 容错解析已存路由、丢弃未知项并去重、缺「我的」或不足 2 项则回退默认 / `move`·`moveUp`·`moveDown` 越界返回 null / `canRemove` 返回 `RemoveCheck` 判定）、`manager/NavBarLayoutSignal`（全局修订号，编辑后通知底栏重渲染）、`manager/StartupPagePreferences` 新增 `readNavBar` / `readNavBarRoutes` / `writeNavBar` / `clearNavBar`（有序路由列表持久化）。编辑器 `ui/screen/NavBarSettingsDialog`（上移 / 下移 / 移除 / 恢复默认，全玻璃件），入口「我的 → 外观 → 底部导航」。**「我的」固定不可移除**（唯一设置入口，防止藏没后无法改回），**至少保留 2 项**。`MainActivity` 页签派发由 `Int` 下标改为**路由字符串**，重排后按路由重新对齐当前页，杜绝串页（由 `NavBarLayoutTest` 22 项覆盖）。
+- 复习模块新增题库管理：创建 / 改名 / 逐题编辑 / 多选批量删除 / 合并题库。判据抽成纯函数 `review/BankManageLogic`（`validateBankName` → `NameCheck`、`resolveMerge` → `MergeCheck`、`planQidRemap` 题号冲突自动重分配），`ReviewDatabase` 补 `createBank` / `renameBank` / `updateQuestion` / `questionById` / `listQuestions` / `deleteQuestions` / `refreshQuestionCount` / `mergeBanks`。**合并口径**：只搬题目，**不迁移练习记录、错题本、收藏**；题号冲突自动重分配、绝不覆盖目标题库已有题目；**不自动删除源题库**，由用户二次确认后自行删除（由 `BankManageLogicTest` 25 项覆盖）。
+- 课前提醒新增「按学期一键全开 / 全关」：纯函数 `schedule/SemesterReminderPlan`（`planSemesterToggle` 幂等 —— 状态未变则 revision 不变；`summarize` → 已开启 N/M 与状态分组；`toggleAvailability` 区分 Ready / NoSnapshot / MasterOff），`ScheduleReminderScheduler` 补 `setAllEnabled`（整批**只调一次 `reconcile()`**）/ `semesterSummary` / `semesterCourses`，提醒设置页新增「本学期课程」区块（进度 + 全部开启 / 关闭，无快照时禁用并提示）。**提前量沿用设备级全局设置**（不逐条存），复用既有 `updateSnapshot` 课表快照（不另造存储）（由 `SemesterReminderPlanTest` 26 项覆盖）。
+
+### 变更
+
+- 用户手册（`用户手册.md`）补三处：10.4.1「底部导航（可重排 / 可隐藏）」、10.3.3 复习模块「题库管理」小节、11.3「本学期课程（批量开关）」。
+
 ## [1.2.6] - 2026-09-26
 
 ### 新增
