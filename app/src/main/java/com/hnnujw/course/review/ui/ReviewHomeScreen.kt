@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,13 +13,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -40,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hnnujw.course.review.PracticeEntry
 import com.hnnujw.course.review.AiKeyStore
+import com.hnnujw.course.review.BundledBanks
 import com.hnnujw.course.review.ReviewDatabase
 import com.hnnujw.course.review.ReviewMode
 import com.hnnujw.course.review.parseJsonBank
@@ -74,6 +71,9 @@ fun ReviewHomeScreen(
     var chapters by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
     var importing by remember { mutableStateOf(false) }
     var reloadKey by remember { mutableIntStateOf(0) }
+    // 内置题库自动导入只做一次：reloadKey 会在导入后自增，靠这个标记挡住第二次触发。
+    // 不加的话每轮 reload 都会重新进 importAll，白跑一遍 700KB 解析。
+    var bundledImportTried by remember { mutableStateOf(false) }
 
     // 每次 reloadKey 变化就重读一次库状态。数据量小（几千题），直接全量读。
     LaunchedEffect(reloadKey) {
@@ -83,6 +83,22 @@ fun ReviewHomeScreen(
         banks = loaded.first
         overview = loaded.second
         chapters = loaded.third
+
+        // 库里一个题库都没有 = 首次进入（或用户清空），自动导入随包内置题库。
+        // 判定用 bankCount == 0 而不是「内置库缺失就补」——importBank 对同名库是覆盖语义，
+        // 会在删旧题时连带清掉 records / wrong_book / favorites，答题途中触发就是丢数据。
+        if (loaded.second.bankCount == 0 && !bundledImportTried) {
+            bundledImportTried = true
+            importing = true
+            val imported = BundledBanks.importAll(context, db)
+            importing = false
+            if (imported > 0) {
+                reloadKey++
+                GlassToaster.show("已内置 $imported 题，可直接练习")
+            } else {
+                GlassToaster.show("内置题库导入失败，可用「导入题库」手动选择文件")
+            }
+        }
     }
 
     // 导入：系统文件选择器 → 读文本 → 解析 → 落库。
@@ -339,7 +355,9 @@ private fun AiEntryRow(context: Context, onOpenSettings: () -> Unit) {
     // Key 存在 AndroidKeyStore 里，读它要碰 Keystore，不能在每次重组都同步读。
     var configured by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        configured = withContext(Dispatchers.IO) { !AiKeyStore.apiKey(context).isNullOrBlank() }
+        // 走 AiKeyStore.hasApiKey，不要自己写 !apiKey(...).isNullOrBlank() ——
+        // 后者在 apiKey 返回 null 时是个易错的空安全写法，而 hasApiKey 已是唯一口径。
+        configured = withContext(Dispatchers.IO) { AiKeyStore.hasApiKey(context) }
     }
     Card(onClick = onOpenSettings) {
         Column {
@@ -396,8 +414,8 @@ private fun EmptyState(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "导入一个 JSON 题库文件即可开始练习。支持 {" +
-                "\"name\": \"题库名\", \"questions\": [...]} 或直接一个题目数组。",
+            text = "已内置 ${BundledBanks.SPECS.size} 个题库（${BundledBanks.TOTAL_QUESTION_COUNT} 题）无需导入即可练习。" +
+                "也可导入自己的 JSON 题库，支持 {\"name\": \"题库名\", \"questions\": [...]} 或直接一个题目数组。",
             fontSize = 13.sp,
             lineHeight = 20.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant

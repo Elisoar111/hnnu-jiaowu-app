@@ -34,8 +34,6 @@ import com.hnnujw.course.review.AiKeyStore
 import com.hnnujw.course.review.PracticeResult
 import com.hnnujw.course.review.PracticeSession
 import com.hnnujw.course.review.ReviewDatabase
-import com.hnnujw.course.review.ReviewMode
-import com.hnnujw.course.review.ReviewQuestion
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassProgressBar
 import kotlinx.coroutines.Dispatchers
@@ -70,6 +68,8 @@ fun PracticeScreen(
     var index by remember { mutableStateOf(0) }
     var showAi by remember { mutableStateOf(false) }
     var aiState by remember { mutableStateOf<AiUiState>(AiUiState.Idle) }
+    // AI 对话历史（换题即清空 —— 上一题的问答对下一题是噪声，还白烧 token）
+    var aiHistory by remember { mutableStateOf<List<AiTurn>>(emptyList()) }
     // 收藏状态放这里（界面状态），初始值从库里读一次；点完立刻改本地值，
     // 不用等数据库回来 —— 星星的反馈必须是即时的。
     var favorite by remember { mutableStateOf(false) }
@@ -104,12 +104,14 @@ fun PracticeScreen(
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
 
-    // 换题时重置本题的界面状态：收藏读库、AI 面板收起。
+    // 换题时重置本题的界面状态：收藏读库、AI 面板收起、**对话历史清空**。
     LaunchedEffect(index) {
         val q = session.questions.getOrNull(index) ?: return@LaunchedEffect
         favorite = withContext(Dispatchers.IO) { db.isFavorite(q.bankId, q.id) }
         showAi = false
         aiState = AiUiState.Idle
+        // 历史必须随题清：把上一题的问答带进下一题，模型会被无关上下文带偏。
+        aiHistory = emptyList()
     }
 
     GlassPageScaffold(
@@ -179,6 +181,7 @@ fun PracticeScreen(
                     state = aiState,
                     userAnswer = session.answerOf(question),
                     aiConfigured = !aiKey.isNullOrBlank(),
+                    history = aiHistory,
                     onAsk = { extra ->
                         val key = aiKey
                         if (key.isNullOrBlank()) {
@@ -186,17 +189,29 @@ fun PracticeScreen(
                             return@AiExplainPanel
                         }
                         aiState = AiUiState.Loading
+                        // 先把「用户问了什么」记进历史，请求回来再补上 AI 的回答。
+                        // 用户追问「为什么」时模型能看到上几轮在聊什么（2026-10 用户要求）。
+                        val asked = extra.ifBlank { "请帮我讲解这道题。" }
                         scope.launch {
                             val result = AiChatClient.askAboutQuestion(
                                 apiKey = key,
                                 model = aiModel,
                                 question = question,
                                 userAnswer = session.answerOf(question),
-                                extraPrompt = extra
+                                extraPrompt = extra,
+                                history = aiHistory.map { AiChatClient.Turn(it.role, it.text) }
                             )
-                            aiState = when (result) {
-                                is AiChatClient.Result.Success -> AiUiState.Done(result.text)
-                                is AiChatClient.Result.Failure -> AiUiState.Failed(result.message)
+                            when (result) {
+                                is AiChatClient.Result.Success -> {
+                                    aiHistory = (aiHistory + AiTurn(asked, true) + AiTurn(result.text, false))
+                                        .takeLast(AiChatClient.HISTORY_LIMIT)
+                                    aiState = AiUiState.Done(result.text)
+                                }
+                                is AiChatClient.Result.Failure -> {
+                                    // 失败**不入历史**：失败的那句不是有效上下文，留在里面
+                                    // 会让模型以为用户问过一个根本没得到答案的问题。
+                                    aiState = AiUiState.Failed(result.message)
+                                }
                             }
                         }
                     },

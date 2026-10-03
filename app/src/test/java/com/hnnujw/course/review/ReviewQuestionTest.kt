@@ -242,4 +242,84 @@ class ReviewQuestionTest {
         assertTrue(prompt.contains("回答正确"))
         assertFalse(prompt.contains("为什么会选错"))
     }
+
+    // —— AI 输入框预填（用户「看到哪题就把题目作为提示词，等我补充」）
+
+    private fun sampleQuestion(stem: String = "中国近现代史，是指（　）年以来的历史。") = ReviewQuestion(
+        id = "1", type = ReviewQuestion.TYPE_SINGLE, stem = stem,
+        options = listOf("1840", "1919", "1937", "1949"), answer = "A", chapter = "绪论"
+    )
+
+    @Test
+    fun `预填文本带题干与作答但不含正确答案`() {
+        val text = AiChatClient.buildPrefillText(sampleQuestion(), userAnswer = "C")
+        assertTrue(text.contains("中国近现代史"))
+        assertTrue(text.contains("我选了 C"))
+        // 🔴 答案不能提前剧透 —— 它由 buildQuestionPrompt 在发请求时才给模型。
+        assertFalse(text.contains("正确答案"))
+        assertFalse(text.contains("1840"))
+    }
+
+    @Test
+    fun `未作答时预填文本不含我选了`() {
+        val text = AiChatClient.buildPrefillText(sampleQuestion())
+        assertFalse(text.contains("我选了"))
+    }
+
+    @Test
+    fun `预填以我想问结尾作为光标停靠点`() {
+        val text = AiChatClient.buildPrefillText(sampleQuestion())
+        assertTrue(text.trimEnd().endsWith("我想问："))
+    }
+
+    @Test
+    fun `剥离预填后只剩用户补充`() {
+        val q = sampleQuestion()
+        val input = AiChatClient.buildPrefillText(q, "C") + "为什么 1937 年也算开端？"
+        val extra = AiChatClient.stripPrefill(input, q, "C")
+        // 剥干净后不能还留着题干（否则模型会把题干当用户提问重复收一遍）
+        assertFalse(extra.contains("中国近现代史"))
+        assertEquals("为什么 1937 年也算开端？", extra)
+    }
+
+    @Test
+    fun `用户未改动预填时剥离结果为空`() {
+        val q = sampleQuestion()
+        // 原样发送（用户只想让 AI 讲题）⇒ 补充内容为空，走默认讲解分支
+        assertEquals("", AiChatClient.stripPrefill(AiChatClient.buildPrefillText(q, "C"), q, "C"))
+    }
+
+    @Test
+    fun `剥离不因正文含我想问而误伤`() {
+        val q = sampleQuestion()
+        val extra = "我想问：是不是1919年"
+        val input = AiChatClient.buildPrefillText(q, "C") + extra
+        // 用「前缀整体 removePrefix」而非「找最后一个『我想问：』」，
+        // 用户正文里再写一次『我想问：』必须原样保留
+        assertEquals(extra, AiChatClient.stripPrefill(input, q, "C"))
+    }
+
+    @Test
+    fun `超长题干预填要截断`() {
+        val long = "题".repeat(200)
+        val text = AiChatClient.buildPrefillText(sampleQuestion(long))
+        // 截断到 60 字 + 省略号，后面再跟「\n\n我想问：」
+        assertTrue(text.contains("…"))
+        assertTrue(
+            "题干应被截断，实际长度 ${text.length}",
+            text.length <= 60 + 1 + "\n\n我想问：".length
+        )
+        // 短题干不截断
+        assertFalse(AiChatClient.buildPrefillText(sampleQuestion("短题干")).contains("…"))
+    }
+
+    @Test
+    fun `对话历史长度受上限约束`() {
+        // 8 轮足够覆盖单题追问，又不会把请求撑爆
+        assertEquals(8, AiChatClient.HISTORY_LIMIT)
+        val history = (1..20).map { AiChatClient.Turn.user("第${it}轮") }
+        assertEquals(8, history.takeLast(AiChatClient.HISTORY_LIMIT).size)
+        // 保留的是最近 8 轮，不是最早 8 轮
+        assertEquals("第20轮", history.takeLast(AiChatClient.HISTORY_LIMIT).last().content)
+    }
 }

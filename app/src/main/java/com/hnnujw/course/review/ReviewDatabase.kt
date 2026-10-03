@@ -7,7 +7,6 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
 import org.json.JSONArray
-import org.json.JSONObject
 import java.util.UUID
 
 /**
@@ -179,6 +178,18 @@ class ReviewDatabase private constructor(context: Context) :
             SQLiteDatabase.CONFLICT_REPLACE
         )
     }
+
+    /**
+     * 是否已存在同名题库。
+     *
+     * 给「内置题库自动导入」做前置检查用：[importBank] 对同名库是**覆盖语义**
+     * （会连带 records / wrong_book / favorites 一起删），所以自动导入前必须先问一句，
+     * 否则用户答题途中的一次自动补库就能把记录清空。
+     */
+    fun bankExists(name: String): Boolean =
+        readableDatabase.rawQuery(
+            "SELECT 1 FROM banks WHERE name = ? LIMIT 1", arrayOf(name)
+        ).use { it.moveToFirst() }
 
     data class BankSummary(
         val id: String,

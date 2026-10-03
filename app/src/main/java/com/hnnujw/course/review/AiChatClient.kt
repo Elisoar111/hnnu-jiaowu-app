@@ -29,6 +29,17 @@ object AiChatClient {
     const val BASE_URL = "https://api.deepseek.com"
     private const val PATH_CHAT = "/chat/completions"
 
+    /**
+     * 最多带多少轮历史。
+     *
+     * 8 轮足够覆盖一道题的追问（讲不清 → 追问 → 再纠错…），又不会把请求撑爆。
+     * 再长对单题讲解也没意义，用户早就该换下一题了。
+     */
+    const val HISTORY_LIMIT = 8
+
+    /** 预填到输入框里的题干最大字数，超出部分截断。 */
+    const val PREFILL_STEM_LIMIT = 60
+
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
     private val client: OkHttpClient by lazy {
@@ -51,29 +62,45 @@ object AiChatClient {
      * @param question 题目（题干/选项/正确答案/章节），传给模型做讲解。
      * @param userAnswer 用户本次所选；为空表示用户还没作答就问 AI。
      * @param extraPrompt 用户自己补的追问，可空。
+     * @param history 本题此前的对话（AI 上一轮说了什么、用户又问了什么）。
+     *   🔴 **必须带历史**（2026-10 用户要求「AI 配置时把题目作为提示词，等用户补充发送」）：
+     *   不带历史时每次追问都是**全新单轮请求**，AI 不知道上文，
+     *   用户「继续追问」问「为什么」时它会答非所问。历史条数封顶（见 HISTORY_LIMIT），
+     *   防止长对话把 token 撑爆。
      */
     suspend fun askAboutQuestion(
         apiKey: String,
         model: String,
         question: ReviewQuestion,
         userAnswer: String = "",
-        extraPrompt: String = ""
+        extraPrompt: String = "",
+        history: List<Turn> = emptyList()
     ): Result = ask(
         apiKey = apiKey,
         model = model,
         systemPrompt = SYSTEM_PROMPT,
-        userPrompt = buildQuestionPrompt(question, userAnswer, extraPrompt)
+        userPrompt = buildQuestionPrompt(question, userAnswer, extraPrompt),
+        history = history
     )
 
     /** 自由提问（问知识点、问为什么错等）。 */
     suspend fun askFreeform(apiKey: String, model: String, prompt: String): Result =
         ask(apiKey, model, SYSTEM_PROMPT, prompt)
 
+    /** 一轮对话。role 只用 "user" / "assistant"，与 OpenAI 兼容协议一致。 */
+    data class Turn(val role: String, val content: String) {
+        companion object {
+            fun user(content: String) = Turn("user", content)
+            fun assistant(content: String) = Turn("assistant", content)
+        }
+    }
+
     private suspend fun ask(
         apiKey: String,
         model: String,
         systemPrompt: String,
-        userPrompt: String
+        userPrompt: String,
+        history: List<Turn> = emptyList()
     ): Result = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext Result.Failure("还没有配置 API Key")
         val body = JSONObject().apply {
@@ -86,6 +113,13 @@ object AiChatClient {
                     put("role", "system")
                     put("content", systemPrompt)
                 })
+                // 历史在前、当前提问在后 —— 顺序反了模型会把当前问题当成回顾。
+                history.takeLast(HISTORY_LIMIT).forEach { turn ->
+                    put(JSONObject().apply {
+                        put("role", turn.role)
+                        put("content", turn.content)
+                    })
+                }
                 put(JSONObject().apply {
                     put("role", "user")
                     put("content", userPrompt)
@@ -187,4 +221,43 @@ object AiChatClient {
             append("请帮我讲解这道题的考查点和解题思路。")
         }
     }.trim()
+
+    /**
+     * 输入框里的**预填文案**：把当前题目的关键信息摆出来，让用户「看到哪题就聊哪题」。
+     *
+     * 2026-10 用户要求：「AI 配置的时候，用户看到哪题，软件就将题目作为提示词，
+     * 然后等用户补充发送」。所以打开 AI 面板时输入框不是空的 —— 已经带上了这道题，
+     * 用户可以在后面接着写「为什么选 B」「这个考点在哪章」再发送。
+     *
+     * 只放**题干摘要 + 我的作答**，不放正确答案：答案由 [buildQuestionPrompt]
+     * 在真正发请求时附给模型，输入框里提前剧透会让用户以为自己已经知道答案了。
+     */
+    fun buildPrefillText(question: ReviewQuestion, userAnswer: String = ""): String =
+        buildString {
+            // 真截断，不是「原样贴完再补个省略号」—— 后者对超长题干毫无作用，
+            // 200 字的题干会整整塞进输入框，把用户自己要写的内容挤到屏幕外。
+            append(
+                if (question.stem.length > PREFILL_STEM_LIMIT) {
+                    question.stem.take(PREFILL_STEM_LIMIT) + "…"
+                } else {
+                    question.stem
+                }
+            )
+            if (userAnswer.isNotBlank()) append("\n（我选了 ").append(userAnswer).append("）")
+            append("\n\n我想问：")
+        }
+
+    /**
+     * 把输入框里**预填的题干部分剥掉**，只留用户自己写的补充。
+     *
+     * 剥不干净会有两个后果：一是题干被当成用户提问重复发一遍（白烧 token），
+     * 二是模型看到「我还想问：中国近现代史…」这种话会答非所问。
+     *
+     * 做法是原样重建 [buildPrefillText] 的前缀再按长度截掉 —— 比"找 '我想问：'
+     * 最后一个位置"稳，用户若在前面正文里也写了「我想问：」不会误伤。
+     */
+    fun stripPrefill(input: String, question: ReviewQuestion, userAnswer: String = ""): String {
+        val prefix = buildPrefillText(question, userAnswer)
+        return input.removePrefix(prefix).trim()
+    }
 }
