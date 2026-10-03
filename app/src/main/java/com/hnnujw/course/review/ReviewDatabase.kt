@@ -18,6 +18,7 @@ import java.util.UUID
  *  - records      每题的对错次数
  *  - wrong_book   错题本（含掌握标记与连对次数）
  *  - favorites    收藏
+ *  - slashed      斩题本（一眼会的题，移出后续练习，可恢复）
  *  - daily_stats  每日答题量，统计页用
  *  - meta         杂项键值
  *
@@ -78,6 +79,7 @@ class ReviewDatabase private constructor(context: Context) :
                 last_wrong_at INTEGER NOT NULL,
                 mastered     INTEGER NOT NULL DEFAULT 0,
                 streak       INTEGER NOT NULL DEFAULT 0,
+                due_at       INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (bank_id, question_id)
             )
             """.trimIndent()
@@ -85,6 +87,16 @@ class ReviewDatabase private constructor(context: Context) :
         db.execSQL(
             """
             CREATE TABLE IF NOT EXISTS favorites (
+                bank_id     TEXT NOT NULL,
+                question_id TEXT NOT NULL,
+                created_at  INTEGER NOT NULL,
+                PRIMARY KEY (bank_id, question_id)
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS slashed (
                 bank_id     TEXT NOT NULL,
                 question_id TEXT NOT NULL,
                 created_at  INTEGER NOT NULL,
@@ -114,7 +126,24 @@ class ReviewDatabase private constructor(context: Context) :
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         // 全部建表语句都是 IF NOT EXISTS，幂等重跑即可；将来加列再按版本补 ALTER。
         onCreate(db)
+        // v2 → v3：wrong_book 增加 due_at（间隔复习的下次到期时刻）。
+        // 🔴 **幂等迁移、绝不删表重建** —— 既有 wrong_book 数据必须原样保住。
+        // 先 `PRAGMA table_info` 判列是否存在，避免了在"新建库直接建到最新版本"的路径上
+        // 重复 ADD COLUMN（那会抛 duplicate column name）。
+        if (!hasColumn(db, "wrong_book", "due_at")) {
+            db.execSQL("ALTER TABLE wrong_book ADD COLUMN due_at INTEGER NOT NULL DEFAULT 0")
+        }
     }
+
+    /** 某张表是否已经有这一列（用于幂等迁移）。 */
+    private fun hasColumn(db: SQLiteDatabase, table: String, column: String): Boolean =
+        db.rawQuery("PRAGMA table_info($table)", null).use { c ->
+            val nameIdx = c.getColumnIndex("name")
+            while (c.moveToNext()) {
+                if (nameIdx >= 0 && c.getString(nameIdx) == column) return true
+            }
+            false
+        }
 
     // —— 题库
 
@@ -143,7 +172,7 @@ class ReviewDatabase private constructor(context: Context) :
             // 同名库重导：先清掉旧题（records/wrong_book/favorites 里的旧行一并清，
             // 留着就变成指向不存在题目的孤儿行）。
             if (existing != null) {
-                listOf("questions", "records", "wrong_book", "favorites").forEach { t ->
+                listOf("questions", "records", "wrong_book", "favorites", "slashed").forEach { t ->
                     db.delete(t, "bank_id = ?", arrayOf(bankId))
                 }
                 db.update(
@@ -225,7 +254,7 @@ class ReviewDatabase private constructor(context: Context) :
         val db = writableDatabase
         db.beginTransaction()
         try {
-            listOf("questions", "records", "wrong_book", "favorites").forEach { t ->
+            listOf("questions", "records", "wrong_book", "favorites", "slashed").forEach { t ->
                 db.delete(t, "bank_id = ?", arrayOf(bankId))
             }
             db.delete("banks", "id = ?", arrayOf(bankId))
@@ -361,6 +390,7 @@ class ReviewDatabase private constructor(context: Context) :
                 db.delete("records", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
                 db.delete("wrong_book", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
                 db.delete("favorites", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
+                db.delete("slashed", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
                 deleted++
             }
             refreshQuestionCount(db, bankId)
@@ -499,14 +529,34 @@ class ReviewDatabase private constructor(context: Context) :
         mode: ReviewMode = ReviewMode.SEQUENTIAL,
         onlyWrong: Boolean = false,
         onlyFavorite: Boolean = false,
-        limit: Int = 0
+        limit: Int = 0,
+        /** 是否把已斩的题排除在练习之外。默认排除 —— 斩题的意思就是"别再让我练它"。 */
+        excludeSlashed: Boolean = true,
+        /** 只练已斩的题（从斩题本开练时用）；与 [excludeSlashed] 互斥，本参数优先。 */
+        onlySlashed: Boolean = false,
+        /** 只练**今日到期**的错题（间隔复习的「今日待复习」入口）。 */
+        dueOnly: Boolean = false
     ): List<ReviewQuestion> {
         val where = ArrayList<String>()
         val args = ArrayList<String>()
         if (bankId != null) { where.add("bank_id = ?"); args.add(bankId) }
         if (chapter != null) { where.add("chapter = ?"); args.add(chapter) }
-        if (onlyWrong) where.add("qid IN (SELECT question_id FROM wrong_book WHERE bank_id = questions.bank_id AND mastered = 0)")
+        if (dueOnly) {
+            // 到期口径与 ReviewScheduling.isDue 一致：due_at=0（未排期）也算到期。
+            val now = System.currentTimeMillis().toString()
+            where.add(
+                "qid IN (SELECT question_id FROM wrong_book WHERE bank_id = questions.bank_id " +
+                    "AND mastered = 0 AND (due_at = 0 OR due_at <= $now))"
+            )
+        } else if (onlyWrong) {
+            where.add("qid IN (SELECT question_id FROM wrong_book WHERE bank_id = questions.bank_id AND mastered = 0)")
+        }
         if (onlyFavorite) where.add("qid IN (SELECT question_id FROM favorites WHERE bank_id = questions.bank_id)")
+        if (onlySlashed) {
+            where.add("qid IN (SELECT question_id FROM slashed WHERE bank_id = questions.bank_id)")
+        } else if (excludeSlashed) {
+            where.add("qid NOT IN (SELECT question_id FROM slashed WHERE bank_id = questions.bank_id)")
+        }
         val sql = buildString {
             append("SELECT bank_id, qid, type, stem, options, answer, chapter, explanation, source, tags FROM questions")
             if (where.isNotEmpty()) append(" WHERE ").append(where.joinToString(" AND "))
@@ -617,17 +667,25 @@ class ReviewDatabase private constructor(context: Context) :
                 val entry = wrongEntry(bankId, qid)
                 if (entry != null && !entry.mastered) {
                     val streak = entry.streak + 1
+                    val level = masteryLevelOf(streak, entry.wrongCount)
+                    // 答对即"复习过一次"：按新等级排下次到期时间（间隔重复的核心）。
+                    val nextDue = dueAt(level, now)
                     db.execSQL(
-                        "UPDATE wrong_book SET streak = ?, mastered = ? WHERE bank_id = ? AND question_id = ?",
-                        arrayOf<Any>(streak, if (streak >= MASTER_STREAK) 1 else 0, bankId, qid)
+                        "UPDATE wrong_book SET streak = ?, mastered = ?, due_at = ? " +
+                            "WHERE bank_id = ? AND question_id = ?",
+                        arrayOf<Any>(streak, if (streak >= MASTER_STREAK) 1 else 0, nextDue, bankId, qid)
                     )
                 }
             } else {
+                // 答错：回炉。错误次数 +1，连对清零，等级回到 Learning，到期时间按新等级重排。
+                val wrongCount = cur.wrongCount + 1
+                val level = masteryLevelOf(0, wrongCount)
+                val nextDue = dueAt(level, now)
                 db.execSQL(
                     "INSERT OR REPLACE INTO wrong_book " +
-                        "(bank_id, question_id, wrong_count, last_wrong_at, mastered, streak) " +
-                        "VALUES (?, ?, ?, ?, 0, 0)",
-                    arrayOf<Any>(bankId, qid, cur.wrongCount + 1, now)
+                        "(bank_id, question_id, wrong_count, last_wrong_at, mastered, streak, due_at) " +
+                        "VALUES (?, ?, ?, ?, 0, 0, ?)",
+                    arrayOf<Any>(bankId, qid, wrongCount, now, nextDue)
                 )
             }
             db.execSQL(
@@ -681,6 +739,120 @@ class ReviewDatabase private constructor(context: Context) :
             arrayOf(bankId, qid)
         ).use { c -> c.moveToFirst() }
 
+    // —— 斩题本
+
+    /**
+     * 斩一道题（移出后续练习）。幂等：已斩过再斩不会重复写、也不报错。
+     *
+     * 🔴 **只写 `slashed` 表**，绝不碰 `wrong_book` / `records` / `mastered` ——
+     * 「斩题 ≠ 已掌握」，斩是主观跳过，掌握是客观答对，两者不能混（见 [SlashPolicy]）。
+     *
+     * @return true = 本次真的斩了；false = 之前就已斩（幂等命中）。
+     */
+    fun slashQuestion(bankId: String, qid: String): Boolean {
+        if (isSlashed(bankId, qid)) return false
+        writableDatabase.insertWithOnConflict(
+            "slashed", null,
+            ContentValues().apply {
+                put("bank_id", bankId)
+                put("question_id", qid)
+                put("created_at", System.currentTimeMillis())
+            },
+            SQLiteDatabase.CONFLICT_REPLACE
+        )
+        return true
+    }
+
+    /** 取消斩题（放回后续练习）。返回 true = 本次真的放回了。 */
+    fun unslashQuestion(bankId: String, qid: String): Boolean =
+        writableDatabase.delete("slashed", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid)) > 0
+
+    fun isSlashed(bankId: String, qid: String): Boolean =
+        readableDatabase.rawQuery(
+            "SELECT 1 FROM slashed WHERE bank_id = ? AND question_id = ?",
+            arrayOf(bankId, qid)
+        ).use { c -> c.moveToFirst() }
+
+    /** 斩题数；[bankId] 为 null 时统计全部题库。 */
+    fun slashedCount(bankId: String? = null): Int {
+        val sql = if (bankId == null) {
+            "SELECT COUNT(*) FROM slashed"
+        } else {
+            "SELECT COUNT(*) FROM slashed WHERE bank_id = ?"
+        }
+        val args = if (bankId == null) emptyArray() else arrayOf(bankId)
+        return readableDatabase.rawQuery(sql, args).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+    }
+
+    /** 斩题本列表；[bankId] 为 null 时跨题库取。 */
+    fun listSlashedQuestions(bankId: String? = null): List<ReviewQuestion> {
+        val where = if (bankId == null) "" else " WHERE q.bank_id = ?"
+        val args = if (bankId == null) emptyArray() else arrayOf(bankId)
+        return readableDatabase.rawQuery(
+            "SELECT q.bank_id, q.qid, q.type, q.stem, q.options, q.answer, q.chapter, " +
+                "q.explanation, q.source, q.tags FROM questions q " +
+                "JOIN slashed s ON s.bank_id = q.bank_id AND s.question_id = q.qid$where " +
+                "ORDER BY s.created_at DESC",
+            args
+        ).use { c ->
+            val out = ArrayList<ReviewQuestion>()
+            while (c.moveToNext()) out.add(readQuestion(c))
+            out
+        }
+    }
+
+    // —— 间隔复习（今日到期）
+
+    /**
+     * 今日到期的错题（未掌握 且 `due_at` 已到）。
+     *
+     * 到期判据与 [ReviewScheduling.isDue] 一致，但 SQL 里用条件表达：
+     *  - `due_at = 0`（从未排期 / 老数据）视为**立即到期**；
+     *  - 否则 `now >= due_at` 即到期。
+     *
+     * 只取**未掌握**的题（已掌握的不该再进复习队列）；[bankId] 为 null 时跨库取。
+     */
+    fun dueWrongQuestions(bankId: String? = null, now: Long = System.currentTimeMillis()): List<ReviewQuestion> {
+        val where = ArrayList<String>()
+        val args = ArrayList<String>()
+        if (bankId != null) {
+            where.add("q.bank_id = ?")
+            args.add(bankId)
+        }
+        where.add("w.mastered = 0")
+        where.add("(w.due_at = 0 OR w.due_at <= ?)")
+        args.add(now.toString())
+        return readableDatabase.rawQuery(
+            "SELECT q.bank_id, q.qid, q.type, q.stem, q.options, q.answer, q.chapter, " +
+                "q.explanation, q.source, q.tags FROM questions q " +
+                "JOIN wrong_book w ON w.bank_id = q.bank_id AND w.question_id = q.qid " +
+                "WHERE ${where.joinToString(" AND ")} " +
+                "ORDER BY w.last_wrong_at ASC",
+            args.toTypedArray()
+        ).use { c ->
+            val out = ArrayList<ReviewQuestion>()
+            while (c.moveToNext()) out.add(readQuestion(c))
+            out
+        }
+    }
+
+    /** 今日到期的错题数（只数不取题，给入口角标用）。 */
+    fun dueWrongCount(bankId: String? = null, now: Long = System.currentTimeMillis()): Int {
+        val where = ArrayList<String>()
+        val args = ArrayList<String>()
+        if (bankId != null) {
+            where.add("bank_id = ?")
+            args.add(bankId)
+        }
+        where.add("mastered = 0")
+        where.add("(due_at = 0 OR due_at <= ?)")
+        args.add(now.toString())
+        return readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM wrong_book WHERE ${where.joinToString(" AND ")}",
+            args.toTypedArray()
+        ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+    }
+
     data class Overview(
         val total: Int,
         val answered: Int,
@@ -732,7 +904,7 @@ class ReviewDatabase private constructor(context: Context) :
     companion object {
         private const val TAG = "ReviewDatabase"
         private const val DB_NAME = "review.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 3
 
         /** 错题连续答对多少次算「已掌握」。 */
         const val MASTER_STREAK = 3

@@ -17,7 +17,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -49,11 +51,24 @@ fun QuestionCard(
     onToggleFavorite: () -> Unit,
     onAskAi: () -> Unit,
     aiEnabled: Boolean,
+    /** 本题是否已斩（只影响按钮图标与提示，不影响作答）。 */
+    slashed: Boolean = false,
+    onToggleSlash: () -> Unit = {},
+    /**
+     * 背题模式：进来就直接摊开答案与解析，不要求作答。
+     *
+     * 与"已判分"共用同一套"揭晓"渲染（[revealed]），但**语义不同**：判分揭晓是
+     * "你答完了"，背题揭晓是"我直接给你看"。落库与否由 [PracticeSession.recordsAnswers]
+     * 决定，本组件不碰数据库。
+     */
+    memorize: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val answer = session.answerOf(question)
     val judged = session.isJudged(question)
     val correct = session.isCorrect(question)
+    // 揭晓 = 已判分 或 背题模式。选项着色、答案/解析展示都看它。
+    val revealed = judged || memorize
 
     Column(
         modifier = modifier
@@ -70,6 +85,16 @@ fun QuestionCard(
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            // 斩题：一眼就会的题一刀移出后续练习。**斩 ≠ 已掌握** —— 只影响练习范围，
+            // 不改变掌握度与错题本（见 SlashPolicy）。
+            GlassCircleButton(
+                onClick = onToggleSlash,
+                icon = if (slashed) Icons.Filled.Delete else Icons.Outlined.Delete,
+                contentDescription = if (slashed) "放回练习" else "斩题（移出后续练习）",
+                tint = if (slashed) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.width(8.dp))
             GlassCircleButton(
@@ -100,12 +125,12 @@ fun QuestionCard(
                 letter = letter,
                 text = option,
                 state = when {
-                    !judged && picked -> OptionState.PICKED
-                    judged && letter in question.answer -> OptionState.CORRECT
-                    judged && picked -> OptionState.WRONG
+                    !revealed && picked -> OptionState.PICKED
+                    revealed && letter in question.answer -> OptionState.CORRECT
+                    revealed && picked -> OptionState.WRONG
                     else -> OptionState.IDLE
                 },
-                enabled = !judged,
+                enabled = !revealed,
                 multi = question.isMulti,
                 onClick = { onSelect(letter) }
             )
@@ -113,7 +138,7 @@ fun QuestionCard(
         }
 
         // 确认 / 撤回
-        if (!judged) {
+        if (!revealed) {
             Spacer(Modifier.height(4.dp))
             ConfirmButton(
                 enabled = answer.isNotBlank(),
@@ -122,7 +147,12 @@ fun QuestionCard(
             )
         } else {
             Spacer(Modifier.height(8.dp))
-            VerdictBanner(correct = correct, answer = question.answer, userAnswer = answer)
+            if (judged) {
+                VerdictBanner(correct = correct, answer = question.answer, userAnswer = answer)
+            } else {
+                // 背题模式：用户没作答，所以不判对错，直接摊开正确答案。
+                AnswerBanner(answer = question.answer)
+            }
             if (question.explanation.isNotBlank()) {
                 Spacer(Modifier.height(10.dp))
                 Text(
@@ -145,7 +175,10 @@ fun QuestionCard(
                     onClick = onAskAi,
                     modifier = Modifier.weight(1f)
                 )
-                SecondaryAction("再想一下", onClick = onUnjudge, modifier = Modifier.weight(1f))
+                // 背题模式没有"判定"可撤回，就不显示「再想一下」。
+                if (judged) {
+                    SecondaryAction("再想一下", onClick = onUnjudge, modifier = Modifier.weight(1f))
+                }
             }
         }
 
@@ -232,5 +265,40 @@ private fun VerdictBanner(correct: Boolean, answer: String, userAnswer: String) 
                 color = scheme.onSurfaceVariant
             )
         }
+    }
+}
+
+/**
+ * 背题模式的答案条。
+ *
+ * 刻意**不判对错**（用户根本没作答，判了就是编造），只把正确答案摊开。
+ * 配色走主色而非错误色，避免让人误以为"答错了"。
+ */
+@Composable
+private fun AnswerBanner(answer: String) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(scheme.primary.copy(alpha = 0.12f))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "正确答案",
+            fontSize = 15.sp,
+            lineHeight = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = scheme.primary
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = answer,
+            fontSize = 15.sp,
+            lineHeight = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = scheme.onSurface
+        )
     }
 }

@@ -79,6 +79,8 @@ fun PracticeScreen(
     // 收藏状态放这里（界面状态），初始值从库里读一次；点完立刻改本地值，
     // 不用等数据库回来 —— 星星的反馈必须是即时的。
     var favorite by remember { mutableStateOf(false) }
+    // 本题是否已斩（同样先给即时反馈，再落库）。
+    var slashed by remember { mutableStateOf(false) }
 
     // ── 限时考试：剩余秒数 + 两条"已警告过"标记 ──────────────────────────
     // 只在限时（timing.isTimed）时才真正生效；不限时时下面的循环根本不启动，
@@ -160,6 +162,7 @@ fun PracticeScreen(
     LaunchedEffect(index) {
         val q = session.questions.getOrNull(index) ?: return@LaunchedEffect
         favorite = withContext(Dispatchers.IO) { db.isFavorite(q.bankId, q.id) }
+        slashed = withContext(Dispatchers.IO) { db.isSlashed(q.bankId, q.id) }
         showAi = false
         aiState = AiUiState.Idle
         // 历史必须随题清：把上一题的问答带进下一题，模型会被无关上下文带偏。
@@ -215,9 +218,13 @@ fun PracticeScreen(
                 onConfirm = {
                     val correct = session.judge(question)
                     // 判分即落库：答对答错都要记，否则统计和错题本会漏。
-                    scope.launch {
-                        withContext(Dispatchers.IO) {
-                            db.recordAnswer(question.bankId, question.id, correct)
+                    // ⚠️ 背题模式（session.recordsAnswers == false）**不落库** ——
+                    // 背题不计入统计，否则背一遍就会把题洗成"已掌握"。
+                    if (session.recordsAnswers) {
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                db.recordAnswer(question.bankId, question.id, correct)
+                            }
                         }
                     }
                 },
@@ -232,6 +239,23 @@ fun PracticeScreen(
                         }
                     }
                 },
+                // 斩题：只写 slashed 表，绝不碰掌握度（斩题 ≠ 已掌握）。
+                slashed = slashed,
+                onToggleSlash = {
+                    slashed = !slashed
+                    val nowSlashed = slashed
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            if (nowSlashed) {
+                                db.slashQuestion(question.bankId, question.id)
+                            } else {
+                                db.unslashQuestion(question.bankId, question.id)
+                            }
+                        }
+                    }
+                    GlassToaster.show(if (nowSlashed) "已斩，移出后续练习" else "已放回练习")
+                },
+                memorize = session.memorize,
                 // 没配 Key 时点「配置 AI」直接去设置页，不打开讲解面板。
                 onAskAi = { if (aiKey.isNullOrBlank()) onOpenAiSettings() else showAi = true },
                 aiEnabled = !aiKey.isNullOrBlank()

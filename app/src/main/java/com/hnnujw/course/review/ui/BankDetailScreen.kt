@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hnnujw.course.review.ExamDurationOptions
+import com.hnnujw.course.review.PracticeLaunch
 import com.hnnujw.course.review.ReviewDatabase
 import com.hnnujw.course.review.ReviewMode
 import com.hnnujw.course.review.accuracyPercent
@@ -54,7 +55,7 @@ fun BankDetailScreen(
     context: Context,
     bankId: String,
     onBack: () -> Unit,
-    onStartPractice: (bankId: String, chapter: String?, mode: ReviewMode, onlyWrong: Boolean, onlyFavorite: Boolean, durationSeconds: Int) -> Unit,
+    onStartPractice: (PracticeLaunch) -> Unit,
     onOpenStats: () -> Unit
 ) {
     val db = remember { ReviewDatabase.get(context) }
@@ -68,6 +69,10 @@ fun BankDetailScreen(
     var chapterIdx by remember { mutableIntStateOf(0) }
     // 限时考试的时长档位下标（0=不限时，其余按 ExamDurationOptions 取）。
     var durationIdx by remember { mutableIntStateOf(0) }
+    // 斩题数（0 时不显示斩题本入口）。
+    var slashedCount by remember { mutableIntStateOf(0) }
+    // 今日到期错题数（0 时不显示「今日待复习」入口）。
+    var dueCount by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(bankId) {
         val result = withContext(Dispatchers.IO) {
@@ -80,6 +85,8 @@ fun BankDetailScreen(
         overview = result.first
         chapters = result.second
         bankName = result.third
+        slashedCount = withContext(Dispatchers.IO) { db.slashedCount(bankId) }
+        dueCount = withContext(Dispatchers.IO) { db.dueWrongCount(bankId) }
         loaded = true
     }
 
@@ -225,23 +232,80 @@ fun BankDetailScreen(
                 enabled = ov.total > 0,
                 onClick = {
                     onStartPractice(
-                        bankId,
-                        resolveSelectedChapter(options, safeChapterIdx),
-                        modeAt(modeIdx),
-                        false,
-                        false,
-                        // 首页按钮「开始练习」按当前时长档走：不限时=0，否则取秒数。
-                        ExamDurationOptions[durationIdx.coerceIn(0, ExamDurationOptions.lastIndex)].seconds
+                        PracticeLaunch(
+                            bankId = bankId,
+                            chapter = resolveSelectedChapter(options, safeChapterIdx),
+                            mode = modeAt(modeIdx),
+                            // 「开始练习」按当前时长档走：不限时=0，否则取秒数。
+                            durationSeconds = ExamDurationOptions[
+                                durationIdx.coerceIn(0, ExamDurationOptions.lastIndex)
+                            ].seconds
+                        )
                     )
                 },
                 modifier = Modifier.fillMaxWidth()
             )
+            // 背题模式：直接看答案，不计入统计（不判对错、不进错题本、不改掌握度）。
+            SecondaryAction(
+                text = "背题模式",
+                enabled = ov.total > 0,
+                onClick = {
+                    onStartPractice(
+                        PracticeLaunch(
+                            bankId = bankId,
+                            chapter = resolveSelectedChapter(options, safeChapterIdx),
+                            mode = modeAt(modeIdx),
+                            memorize = true
+                        )
+                    )
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+            // 今日待复习：只在真有到期错题时才出现（间隔复习的口径，见 ReviewScheduling）。
+            if (dueCount > 0) {
+                SecondaryAction(
+                    text = "今日待复习（$dueCount）",
+                    onClick = {
+                        onStartPractice(
+                            PracticeLaunch(
+                                bankId = bankId,
+                                mode = modeAt(modeIdx),
+                                onlyWrong = true,
+                                dueOnly = true
+                            )
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             // 只有真有未掌握错题时才显示「错题本」入口，避免空入口点进去是空列表。
             if (ov.wrongPending > 0) {
                 SecondaryAction(
                     text = "错题本（${ov.wrongPending}）",
                     onClick = {
-                        onStartPractice(bankId, null, modeAt(modeIdx), true, false, 0)
+                        onStartPractice(
+                            PracticeLaunch(
+                                bankId = bankId,
+                                mode = modeAt(modeIdx),
+                                onlyWrong = true
+                            )
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            // 斩题本：只在斩过题时出现，点进去练这些"一眼会"的题（可逐题放回）。
+            if (slashedCount > 0) {
+                SecondaryAction(
+                    text = "斩题本（$slashedCount）",
+                    onClick = {
+                        onStartPractice(
+                            PracticeLaunch(
+                                bankId = bankId,
+                                mode = modeAt(modeIdx),
+                                onlySlashed = true
+                            )
+                        )
                     },
                     modifier = Modifier.fillMaxWidth()
                 )

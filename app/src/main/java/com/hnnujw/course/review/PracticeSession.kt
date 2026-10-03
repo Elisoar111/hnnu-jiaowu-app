@@ -25,7 +25,16 @@ class PracticeSession(
      * 默认 `0L` 表示"未设定"——此时 [isExpired] 视为未开始、恒 false，普通练习
      * 不需要关心它。限时考试必须在开练时传入 `System.currentTimeMillis()`。
      */
-    val startedAt: Long = 0L
+    val startedAt: Long = 0L,
+    /**
+     * 背题模式：**直接看答案与解析**，不要求作答、**不计入任何统计**。
+     *
+     * 与"练习"的区别是根本性的：练习是"先答 → 再判 → 落库"，背题是"直接看"。
+     * 所以背题时 [recordsAnswers] 为 false，界面不得调用 `recordAnswer` ——
+     * 否则背一遍就会把题刷成"已掌握"、把错题洗白，统计全失真（本项目明确守这条：
+     * **背题不计入，斩题不等于已掌握**）。
+     */
+    val memorize: Boolean = false
 ) {
     /** 每题的用户作答。key 仍用 bankId::qid 作复合键，跟数据库主键一致。 */
     private val answers = LinkedHashMap<String, String>()
@@ -39,6 +48,14 @@ class PracticeSession(
     val judgedCount: Int get() = judged.size
     val isEmpty: Boolean get() = questions.isEmpty()
     val isFinished: Boolean get() = questions.isNotEmpty() && judgedCount == questions.size
+
+    /**
+     * 本次会话是否应当把作答落库（records / 错题本 / 每日统计）。
+     *
+     * 背题模式恒为 false —— 抽成属性而不是让每个调用点自己写 `!memorize`，
+     * 是为了让"背题不计入统计"这条不变量**只有一个判定处**、且可被单测钉住。
+     */
+    val recordsAnswers: Boolean get() = !memorize
 
     fun indexOf(question: ReviewQuestion): Int = questions.indexOfFirst { same(it, question) }
 

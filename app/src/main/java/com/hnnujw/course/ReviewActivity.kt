@@ -15,9 +15,9 @@ import androidx.compose.ui.platform.LocalContext
 import com.hnnujw.course.manager.AppThemeCoordinator
 import com.hnnujw.course.manager.UserManager
 import com.hnnujw.course.review.ExamTiming
+import com.hnnujw.course.review.PracticeLaunch
 import com.hnnujw.course.review.PracticeSession
 import com.hnnujw.course.review.ReviewDatabase
-import com.hnnujw.course.review.ReviewMode
 import com.hnnujw.course.review.ui.AiSettingsScreen
 import com.hnnujw.course.review.ui.BankDetailScreen
 import com.hnnujw.course.review.ui.BankFormatHelpScreen
@@ -93,52 +93,49 @@ private fun ReviewFlow(onExit: () -> Unit) {
     var practiceReturnTo by remember { mutableStateOf<ReviewPage>(ReviewPage.Home) }
 
     // 开练的公共逻辑，Home 与 BankDetail 两处入口共用。
-    // durationSeconds：限时考试时长（秒）；<= 0 表示不限时（普通练习）。
-    val startPractice: (String?, String?, ReviewMode, Boolean, Boolean, Int, ReviewPage) -> Unit =
-        { bankId, chapter, mode, onlyWrong, onlyFavorite, durationSeconds, returnTo ->
-            scope.launch {
-                // 抽题在 IO 线程（几千题的库不该卡住点击反馈）。
-                val questions = withContext(Dispatchers.IO) {
-                    ReviewDatabase.get(context).pickQuestions(
-                        bankId = bankId,
-                        chapter = chapter,
-                        mode = mode,
-                        onlyWrong = onlyWrong,
-                        onlyFavorite = onlyFavorite
-                    )
-                }
-                val title = when {
-                    onlyWrong -> "错题本"
-                    onlyFavorite -> "收藏"
-                    !chapter.isNullOrBlank() -> chapter
-                    else -> mode.label
-                }
-                if (questions.isEmpty()) {
-                    GlassToaster.show("这里还没有题目")
-                } else {
-                    practiceTitle = title
-                    practiceReturnTo = returnTo
-                    // ⚠️ timing / startedAt 是带默认值的参数，漏传不会报编译错 ——
-                    // 这里**必须显式回传**，否则限时考试会退化成不限时。
-                    session = PracticeSession(
-                        questions = questions,
-                        oneByOne = true,
-                        timing = ExamTiming(durationSeconds),
-                        startedAt = System.currentTimeMillis()
-                    )
-                    page = ReviewPage.Practice
-                }
+    // 参数收成 PracticeLaunch（具名数据类）—— 位置参数已多到"传错了不报错"。
+    val startPractice: (PracticeLaunch, ReviewPage) -> Unit = { launch, returnTo ->
+        scope.launch {
+            // 抽题在 IO 线程（几千题的库不该卡住点击反馈）。
+            val questions = withContext(Dispatchers.IO) {
+                ReviewDatabase.get(context).pickQuestions(
+                    bankId = launch.bankId,
+                    chapter = launch.chapter,
+                    mode = launch.mode,
+                    onlyWrong = launch.onlyWrong,
+                    onlyFavorite = launch.onlyFavorite,
+                    excludeSlashed = launch.excludeSlashed,
+                    onlySlashed = launch.onlySlashed,
+                    dueOnly = launch.dueOnly
+                )
+            }
+            if (questions.isEmpty()) {
+                GlassToaster.show("这里还没有题目")
+            } else {
+                practiceTitle = launch.title()
+                practiceReturnTo = returnTo
+                // ⚠️ timing / startedAt / memorize 都是带默认值的参数，漏传不报编译错 ——
+                // 这里**必须显式回传**，否则限时考试会退化成不限时、背题会误落库。
+                session = PracticeSession(
+                    questions = questions,
+                    oneByOne = true,
+                    timing = ExamTiming(launch.durationSeconds),
+                    startedAt = System.currentTimeMillis(),
+                    memorize = launch.memorize
+                )
+                page = ReviewPage.Practice
             }
         }
+    }
 
     when (val current = page) {
         is ReviewPage.Home -> {
             ReviewHomeScreen(
                 context = context,
                 onBack = onExit,
-                onStartPractice = { bankId, chapter, mode, onlyWrong, onlyFavorite ->
+                onStartPractice = { launch ->
                     // 首页直接开练一律不限时（限时考试从题库详情页的「限时考试」入口进）。
-                    startPractice(bankId, chapter, mode, onlyWrong, onlyFavorite, 0, ReviewPage.Home)
+                    startPractice(launch, ReviewPage.Home)
                 },
                 // 点题库行 → 进详情页（不再直接开练）。
                 onOpenBankDetail = { bankId -> page = ReviewPage.BankDetail(bankId) },
@@ -172,8 +169,8 @@ private fun ReviewFlow(onExit: () -> Unit) {
                 context = context,
                 bankId = bankId,
                 onBack = { page = ReviewPage.Home },
-                onStartPractice = { b, chapter, mode, onlyWrong, onlyFavorite, durationSeconds ->
-                    startPractice(b, chapter, mode, onlyWrong, onlyFavorite, durationSeconds, ReviewPage.BankDetail(b))
+                onStartPractice = { launch ->
+                    startPractice(launch, ReviewPage.BankDetail(bankId))
                 },
                 onOpenStats = { page = ReviewPage.BankStats(bankId) }
             )

@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import com.hnnujw.course.review.PracticeEntry
 import com.hnnujw.course.review.AiKeyStore
 import com.hnnujw.course.review.BundledBanks
+import com.hnnujw.course.review.PracticeLaunch
 import com.hnnujw.course.review.ReviewDatabase
 import com.hnnujw.course.review.ReviewMode
 import com.hnnujw.course.review.parseJsonBank
@@ -63,7 +64,7 @@ import kotlinx.coroutines.withContext
 fun ReviewHomeScreen(
     context: Context,
     onBack: () -> Unit,
-    onStartPractice: (bankId: String?, chapter: String?, mode: ReviewMode, onlyWrong: Boolean, onlyFavorite: Boolean) -> Unit,
+    onStartPractice: (PracticeLaunch) -> Unit,
     onOpenBankDetail: (bankId: String) -> Unit,
     onOpenAiSettings: () -> Unit,
     onOpenTemplate: () -> Unit,
@@ -185,8 +186,8 @@ fun ReviewHomeScreen(
                     ReviewToolsRow(
                         wrongPending = ov.wrongPending,
                         favorites = ov.favorites,
-                        onWrongBook = { onStartPractice(null, null, ReviewMode.SEQUENTIAL, true, false) },
-                        onFavorites = { onStartPractice(null, null, ReviewMode.SEQUENTIAL, false, true) }
+                        onWrongBook = { onStartPractice(PracticeLaunch(bankId = null, onlyWrong = true)) },
+                        onFavorites = { onStartPractice(PracticeLaunch(bankId = null, onlyFavorite = true)) }
                     )
                 }
             }
@@ -264,7 +265,7 @@ fun ReviewHomeScreen(
 @Composable
 private fun PracticeEntryCard(
     banks: List<ReviewDatabase.BankSummary>,
-    onStartPractice: (String?, String?, ReviewMode, Boolean, Boolean) -> Unit
+    onStartPractice: (PracticeLaunch) -> Unit
 ) {
     // 判空逻辑在纯函数里（resolvePracticeEntry），这里只按结果渲染。
     // 原来直接 banks.first().id：空列表时抛 NoSuchElementException，
@@ -283,10 +284,10 @@ private fun PracticeEntryCard(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ConfirmButton("顺序练习", enabled = ready != null, onClick = {
                 // ready 为 null 时按钮已禁用，这里再取一次也只是拿到 null，onStartPractice 不会被调。
-                ready?.let { onStartPractice(it.bankId, null, ReviewMode.SEQUENTIAL, false, false) }
+                ready?.let { onStartPractice(PracticeLaunch(bankId = it.bankId, mode = ReviewMode.SEQUENTIAL)) }
             }, modifier = Modifier.weight(1f))
             SecondaryAction("随机练习", enabled = ready != null, onClick = {
-                ready?.let { onStartPractice(it.bankId, null, ReviewMode.RANDOM, false, false) }
+                ready?.let { onStartPractice(PracticeLaunch(bankId = it.bankId, mode = ReviewMode.RANDOM)) }
             }, modifier = Modifier.weight(1f))
         }
         Spacer(Modifier.height(8.dp))
