@@ -755,8 +755,18 @@ fun WeekHeaderCompact(
     // 标题旁的注解：只有翻到别的周才标注（非本周）；本周不再重复写「周X」。
     val weekSuffix = if (actualWeek != null && !isCurrentWeek) "(非本周)" else null
     val todayLabel = "${calendar.get(Calendar.YEAR)}/${calendar.get(Calendar.MONTH) + 1}/${calendar.get(Calendar.DAY_OF_MONTH)}"
-    val monthLabel = com.hnnujw.course.schedule.ScheduleDates.date(firstWeekDate, currentWeek, 1)
-        ?.let { "${it.get(Calendar.MONTH) + 1}月" }
+    // 月份**只给周视图**：周视图一屏横跨七天、可能压着月界，「X月」是这个尺度上
+    // 唯一能说明「这是哪个月」的位置（七个日列只写「几号」，月份在这里出现一次）。
+    //
+    // 日视图不要月份（2026-10 要求）：日视图一屏只放一天，日期条里已经逐日标了
+    // 「几号」，顶栏副行也写着完整日期，此时「9月」纯属噪声，还会在翻日时顽固地
+    // 停在那一周的上个月。所以这里直接算成 null，日视图下这一格自然留白。
+    val monthLabel = if (dayView) {
+        null
+    } else {
+        com.hnnujw.course.schedule.ScheduleDates.date(firstWeekDate, currentWeek, 1)
+            ?.let { "${it.get(Calendar.MONTH) + 1}月" }
+    }
     // 学期第一周周一日期没配置时，这一行的日期、月份会一起失效
     // （firstMonday 取不到起点，date() 全返回 null）。
     //
@@ -980,8 +990,12 @@ fun WeekHeaderCompact(
                         .padding(horizontal = scheduleGridPadding()),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 时间列这一格放月份：七个日列只写「几号」，月份在这里出现一次。
-                    // 日视图偏离今天时，这一格让位给「今天」快捷键（参考项目同款位置）。
+                    // 时间列这一格：周视图放月份（日视图不写，见上面 monthLabel 的说明），
+                    // 日视图偏离今天时让位给「今天」快捷键（参考项目同款位置）。
+                    //
+                    // 日视图下这一格共有三态，都在这一行里：偏离今天→「今天」按钮；
+                    // 在今天且第一周日期没配置→「请设置 →」；在今天且日期已配置→留白。
+                    // 留白不突兀，这一列本来就是节次时间（08:00）的位置，星期条行空着很自然。
                     Box(
                         modifier = Modifier.width(scheduleTimeColumnWidth() + ScheduleTimeColumnShadowWidth),
                         contentAlignment = Alignment.CenterStart
