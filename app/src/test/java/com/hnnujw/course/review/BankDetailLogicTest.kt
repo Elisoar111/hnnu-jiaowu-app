@@ -1,92 +1,99 @@
 package com.hnnujw.course.review
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * 题库详情页纯逻辑的回归测试。
  *
- * 覆盖三块容易差一位/越界的映射：
- *  - 「全部章节」(null) + 章节列表 → 选项列表；
- *  - 选中下标 → 传给 pickQuestions 的 chapter；
- *  - 练习模式 ↔ 分段控件下标的互转（保证 pickQuestions 拿到正确模式）。
+ * 2026-10 章节改成**多选**后，本文件覆盖的东西也跟着换了：
+ * 原先测的是「下标 → 章节名」的映射（`chapterOptions` / `resolveSelectedChapter`），
+ * 多选之后选择状态的载体是 `Set<String>`，那套映射整个消失（连同 `ChapterOption`、
+ * `modeIndex`、`modeAt` 三个函数一起删除，理由见 BankDetailLogic 的类注释）。
+ *
+ * 现在钉住的是多选本身的四条不变量：
+ *  - 空集 = 全部章节（与原 `chapter == null` 语义逐字一致）；
+ *  - 切换是**返回新集合**而不是原地改（Compose 靠引用变化重组，原地改界面不刷新）；
+ *  - 题数汇总不能把"选中 3 章"报成"全库题数"；
+ *  - 传进 SQL 的章节列表要滤掉空白项。
  */
 class BankDetailLogicTest {
 
     private val chapters = listOf("绪论" to 10, "第一章" to 20, "第二章" to 5)
 
+    // ── 多选切换 ─────────────────────────────────────────────────────
+
     @Test
-    fun `全部章节是首项且 value 为 null`() {
-        val options = chapterOptions(chapters)
-        assertEquals(ALL_CHAPTERS_LABEL, options.first().label)
-        assertNull(options.first().value)
+    fun `未选中任何章节等于全部章节`() {
+        assertEquals(ALL_CHAPTERS_LABEL, chapterSelectionLabel(emptySet()))
+        assertTrue(resolveSelectedChapters(emptySet()).isEmpty())
     }
 
     @Test
-    fun `全部章节的题数是各章之和`() {
-        val options = chapterOptions(chapters)
-        assertEquals(35, options.first().count)
+    fun `切换返回新集合而不是原地修改`() {
+        val before = setOf("第一章")
+        val after = toggleChapterSelection(before, "第二章")
+        assertEquals(setOf("第一章"), before)
+        assertEquals(setOf("第一章", "第二章"), after)
     }
 
     @Test
-    fun `章节顺序与入参一致`() {
-        val options = chapterOptions(chapters)
-        assertEquals(
-            listOf("绪论", "第一章", "第二章"),
-            options.drop(1).map { it.value }
-        )
-        assertEquals(listOf(10, 20, 5), options.drop(1).map { it.count })
+    fun `再次点击同一章节即取消选中`() {
+        val once = toggleChapterSelection(emptySet(), "第一章")
+        assertEquals(setOf("第一章"), once)
+        assertTrue(toggleChapterSelection(once, "第一章").isEmpty())
+    }
+
+    // ── 汇总 ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `全部章节时题数是各章之和`() {
+        assertEquals(35, selectedChapterQuestionCount(chapters, emptySet()))
     }
 
     @Test
-    fun `空章节只留全部章节一项`() {
-        val options = chapterOptions(emptyList())
-        assertEquals(1, options.size)
-        assertNull(options.first().value)
-        assertEquals(0, options.first().count)
+    fun `多选时只累加选中的章节`() {
+        // 🔴 这条正是"选中 2 章却报出全库题数"那个假数字的护栏。
+        assertEquals(30, selectedChapterQuestionCount(chapters, setOf("绪论", "第一章")))
+        assertEquals(5, selectedChapterQuestionCount(chapters, setOf("第二章")))
     }
 
     @Test
-    fun `选全部章节时 chapter 传 null`() {
-        val options = chapterOptions(chapters)
-        assertNull(resolveSelectedChapter(options, 0))
+    fun `选中集合里有不存在的章节名时忽略它`() {
+        // 章节被重算（题目被删/改名）后选择集合里可能残留旧名，不能因此算错题数。
+        assertEquals(20, selectedChapterQuestionCount(chapters, setOf("第一章", "已删掉的章节")))
     }
 
     @Test
-    fun `选具体章节时 chapter 传该章名`() {
-        val options = chapterOptions(chapters)
-        assertEquals("第一章", resolveSelectedChapter(options, 2))
+    fun `空题库时全部章节题数为零`() {
+        assertEquals(0, selectedChapterQuestionCount(emptyList(), emptySet()))
+    }
+
+    // ── 标题 ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `标题随选择变化`() {
+        assertEquals(ALL_CHAPTERS_LABEL, chapterSelectionLabel(emptySet()))
+        assertEquals("第一章", chapterSelectionLabel(setOf("第一章")))
+        assertEquals("已选 2 章", chapterSelectionLabel(setOf("第一章", "第二章")))
+    }
+
+    // ── 传给 SQL 的列表 ───────────────────────────────────────────────
+
+    @Test
+    fun `解析出的章节列表滤掉空白项`() {
+        // 空白串进 `chapter IN (?)` 只会白跑一趟，且会让"已选 N 章"虚高。
+        assertEquals(listOf("第一章"), resolveSelectedChapters(setOf("第一章", "  ", "")))
     }
 
     @Test
-    fun `下标越界时回退到 null 全部章节`() {
-        val options = chapterOptions(chapters)
-        assertNull(resolveSelectedChapter(options, -1))
-        assertNull(resolveSelectedChapter(options, 99))
-        assertNull(resolveSelectedChapter(emptyList(), 5))
+    fun `解析出的章节列表保留全部有效项`() {
+        val picked = resolveSelectedChapters(setOf("绪论", "第一章", "第二章"))
+        assertEquals(setOf("绪论", "第一章", "第二章"), picked.toSet())
     }
 
-    @Test
-    fun `三个练习模式往返映射一致`() {
-        ReviewMode.entries.forEach { mode ->
-            assertEquals(mode, modeAt(modeIndex(mode)))
-        }
-    }
-
-    @Test
-    fun `modeAt 越界回退到顺序练习`() {
-        assertEquals(ReviewMode.SEQUENTIAL, modeAt(-1))
-        assertEquals(ReviewMode.SEQUENTIAL, modeAt(ReviewMode.entries.size))
-    }
-
-    @Test
-    fun `modeIndex 覆盖全部模式且互不相同`() {
-        val indices = ReviewMode.entries.map { modeIndex(it) }
-        assertEquals(ReviewMode.entries.size, indices.toSet().size)
-        assertTrue(indices.all { it >= 0 })
-    }
+    // ── 正确率 ───────────────────────────────────────────────────────
 
     @Test
     fun `正确率正常换算并四舍五入`() {

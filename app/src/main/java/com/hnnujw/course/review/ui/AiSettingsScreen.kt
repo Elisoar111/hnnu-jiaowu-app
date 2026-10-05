@@ -1,5 +1,8 @@
 package com.hnnujw.course.review.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -22,55 +25,92 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hnnujw.course.review.AiChatClient
-import com.hnnujw.course.review.AiKeyStore
+import com.hnnujw.course.review.AiConfig
+import com.hnnujw.course.review.AiConfigRules
+import com.hnnujw.course.review.AiConfigStore
+import com.hnnujw.course.review.AiEndpoint
 import com.hnnujw.course.ui.screen.GlassFilterChip
 import com.hnnujw.course.ui.system.GlassLoadingIndicator
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassTextField
 import com.hnnujw.course.ui.system.GlassToaster
 import com.hnnujw.course.ui.system.MarkdownText
+import com.hnnujw.course.ui.system.SystemDialog
+import com.hnnujw.course.ui.system.SystemPrimaryButton
+import com.hnnujw.course.ui.system.SystemSecondaryButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** 超时档位（秒）。要落在 [AiConfigRules.TIMEOUT_MIN]..[AiConfigRules.TIMEOUT_MAX] 内。 */
+private val TIMEOUT_CHOICES = listOf(30, 60, 120, 300, 600)
+
+/** 额外重试次数档位。 */
+private val RETRY_CHOICES = listOf(0, 1, 2, 3, 5)
+
 /**
- * AI 设置页：填 DeepSeek API Key 与模型名。
+ * AI 答疑设置页：DeepSeek 官方 API 的 Key / 模型 / 网络参数。
  *
- * Key 用 [AiKeyStore] 加密后落盘（AndroidKeyStore + AES/GCM），
- * 界面上只显示是否已配置，**不回显明文**。
+ * 2026-10 用户要求「只支持 DeepSeek，档案删除」，因此相比上一版：
+ *  - **服务商选择、API 地址输入、档案名、档案切换、删除档案、主备降级全部删除** ——
+ *    端点恒为 [AiEndpoint.BASE_URL]，没有第二个可选项，那些控件点了也没有第二种结果；
+ *  - 页面从「五区（档案 / 端点 / 网络 / 保存 / 帮助）」收成**一张配置卡**：
+ *    API Key + 模型 + 超时 + 重试；
+ *  - 保留「获取可用模型」：模型名会变（官方刚下线过一批旧名），留着它用户能自己
+ *    拉到真实清单，不必等应用更新；
+ *  - 保留「测试连接」与延迟/回复回报，保留「清除配置」。
+ *
+ * 隐私红线（一条不放松）：
+ *  - Key 走 [AiConfigStore] 加密落盘（AndroidKeyStore + AES/GCM）；
+ *  - 界面只显示"是否已保存"，**绝不回显明文**；
+ *  - 已保存的 Key 不会被读出来填进输入框（输入框里只有本次新输入的内容）。
  */
 @Composable
 fun AiSettingsScreen(onBack: () -> Unit) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var keyInput by remember { mutableStateOf("") }
-    // hasApiKey 内部走 apiKey() 解密，要碰 AndroidKeyStore —— remember{} 是主线程
-    // 同步执行的，进页首帧会卡一下。所以只给保守的空初值，再上 IO 线程读回来。
-    var modelInput by remember { mutableStateOf(AiKeyStore.DEFAULT_MODEL) }
-    var hasKey by remember { mutableStateOf(false) }
-    // 读回来之前不能拿 hasKey=false 去渲染状态文案 —— 已配置的用户会先看到
-    // 一闪而过的「尚未配置」，反而像 Key 丢了。keyLoaded 期间显示中性文案。
-    var keyLoaded by remember { mutableStateOf(false) }
-    // 候选模型：先给内置候选，点「获取模型列表」再覆盖成服务端返回的。
-    var models by remember { mutableStateOf(AiChatClient.FALLBACK_MODELS) }
+
+    var loaded by remember { mutableStateOf(false) }
+    /** 已保存的 Key 明文（仅内存中，用于"留空则沿用"）。**绝不显示在界面上。** */
+    var savedKey by remember { mutableStateOf("") }
+    /** 编辑器草稿里的新 Key；空 = 不改动已保存的那条。 */
+    var draftKey by remember { mutableStateOf("") }
+    var model by remember { mutableStateOf(AiEndpoint.DEFAULT_MODEL) }
+    var timeoutSeconds by remember { mutableStateOf(AiConfigRules.DEFAULT_TIMEOUT_SECONDS) }
+    var retries by remember { mutableStateOf(AiConfigRules.DEFAULT_RETRIES) }
+
+    /** 模型芯片清单：初值是预置两项，「获取可用模型」成功后整体替换。 */
+    var models by remember { mutableStateOf(AiEndpoint.MODELS) }
     var fetching by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
+    var testReport by remember { mutableStateOf<String?>(null) }
+    var pendingClear by remember { mutableStateOf(false) }
+
+    val existingHasKey = savedKey.isNotBlank()
+    val keyOk = draftKey.isNotBlank() || existingHasKey
 
     LaunchedEffect(Unit) {
-        val loaded = withContext(Dispatchers.IO) {
-            AiKeyStore.hasApiKey(context) to AiKeyStore.model(context)
+        // 🔴 runCatching 必须包：AndroidKeyStore 读取在真机上可能抛（密钥随卸载 /
+        // 恢复备份失效等），这里又在协程里，裸抛就是崩进程。失败按"没有配置"处理。
+        val config = withContext(Dispatchers.IO) {
+            runCatching { AiConfigStore.load(context) }.getOrNull()
         }
-        hasKey = loaded.first
-        modelInput = loaded.second
-        keyLoaded = true
+        if (config != null) {
+            savedKey = config.apiKey
+            model = config.model
+            timeoutSeconds = config.timeoutSeconds
+            retries = config.retries
+        }
+        loaded = true
     }
 
     GlassPageScaffold(title = "AI 答疑设置", onBack = onBack) { padding ->
@@ -79,14 +119,24 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .padding(
                     top = padding.calculateTopPadding() + 8.dp,
+                    // 🔴 底部必须吃满 scaffold 的 bottom inset：只 pad top 的话，
+                    // 末位内容会被系统导航条压住，表现为"底部内容被截断"。
+                    bottom = padding.calculateBottomPadding() + 24.dp,
                     start = 16.dp,
                     end = 16.dp
                 )
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (!loaded) {
+                Card { GlassLoadingIndicator(size = 22.dp) }
+                return@Column
+            }
+
+            // ── ① 服务与端点（不可改，故只作说明 + 快捷入口） ──────────────
             Card {
                 Text(
-                    text = "状态",
+                    text = "服务商：DeepSeek 官方 API",
                     fontSize = 15.sp,
                     lineHeight = 21.sp,
                     fontWeight = FontWeight.Medium,
@@ -94,52 +144,73 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = when {
-                        !keyLoaded -> "正在读取…"
-                        hasKey -> "已配置 API Key"
-                        else -> "尚未配置"
-                    },
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp,
-                    color = if (keyLoaded && hasKey) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
+                    text = "请求地址：${AiEndpoint.chatUrl()}\n只支持这一家，无需填写地址。",
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SecondaryAction(
+                        text = "查看官方文档",
+                        onClick = { openUrl(context, AiEndpoint.DOC_URL) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    SecondaryAction(
+                        text = "申请 API Key",
+                        onClick = { openUrl(context, AiEndpoint.KEY_URL) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
 
-            Spacer(Modifier.height(12.dp))
-
+            // ── ② API Key ────────────────────────────────────────────────
             Card {
+                Text(
+                    text = "API Key",
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(6.dp))
                 GlassTextField(
-                    value = keyInput,
-                    onValueChange = { keyInput = it },
-                    placeholder = "sk-…",
-                    // Key 是密钥，输入时必须遮蔽 —— 玻璃件没有 label 位，
-                    // 原来 OutlinedTextField 的 label="DeepSeek API Key" 改由 placeholder 承担。
+                    value = draftKey,
+                    onValueChange = {
+                        draftKey = it
+                        testReport = null
+                    },
+                    placeholder = if (existingHasKey) "已保存（留空则不改动）" else "sk-…",
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "留空并保存可清除已配置的 Key。Key 加密后只存在本机，不会上传。",
+                    text = if (existingHasKey) {
+                        "已保存一个 Key（不回显）。填新值会覆盖它，留空则保持原样。"
+                    } else {
+                        "Key 加密后只存在本机，不会上传，也不会回显。"
+                    },
                     fontSize = 12.sp,
                     lineHeight = 17.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.height(12.dp))
+            }
 
-                // —— 模型列表（可点选）+ 自定义输入并存。
+            // ── ③ 模型 ───────────────────────────────────────────────────
+            Card {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "选择模型",
+                        text = "模型",
                         fontSize = 14.sp,
                         lineHeight = 20.sp,
                         fontWeight = FontWeight.Medium,
@@ -148,37 +219,45 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     if (fetching) {
                         GlassLoadingIndicator(size = 20.dp)
                     } else {
-                        // 必须具名传 onClick：SecondaryAction 最后一个参数是 modifier，
-                        // 尾随 lambda 会绑到 modifier 上而不是 onClick。
-                        SecondaryAction("获取模型列表", enabled = hasKey, onClick = {
-                            val key = AiKeyStore.apiKey(context)
-                            if (key.isNullOrBlank()) {
-                                GlassToaster.show("请先保存 API Key")
-                            } else {
+                        // 必须具名传 onClick：SecondaryAction 第二位置参数才是 onClick。
+                        SecondaryAction(
+                            text = "获取可用模型",
+                            enabled = keyOk,
+                            onClick = {
                                 fetching = true
+                                testReport = null
                                 scope.launch {
-                                    val result = AiChatClient.listModels(key)
+                                    val probe = draftConfig(
+                                        key = draftKey.ifBlank { savedKey },
+                                        model = model,
+                                        timeoutSeconds = timeoutSeconds,
+                                        retries = retries
+                                    )
+                                    val result = AiChatClient.listModels(probe, timeoutSeconds)
                                     fetching = false
                                     when (result) {
                                         is AiChatClient.Result.Success -> {
                                             val ids = result.text.lines().filter { it.isNotBlank() }
-                                            if (ids.isNotEmpty()) {
-                                                models = ids
-                                                GlassToaster.show("已获取 ${ids.size} 个模型")
+                                            if (ids.isEmpty()) {
+                                                GlassToaster.show("服务端未返回可用的模型")
                                             } else {
-                                                models = AiChatClient.FALLBACK_MODELS
-                                                GlassToaster.show("无法从服务端获取，已列出常用模型")
+                                                models = ids
+                                                GlassToaster.show(
+                                                    if (model in ids) {
+                                                        "已获取 ${ids.size} 个模型"
+                                                    } else {
+                                                        // 预置名过期时最该说的话：别让用户以为配好了。
+                                                        "已获取 ${ids.size} 个模型，当前模型不在其中"
+                                                    }
+                                                )
                                             }
                                         }
-                                        is AiChatClient.Result.Failure -> {
-                                            // 端点不可用/结构不同都不能让用户卡死 —— 退化到内置候选。
-                                            models = AiChatClient.FALLBACK_MODELS
-                                            GlassToaster.show("无法从服务端获取，已列出常用模型")
-                                        }
+                                        is AiChatClient.Result.Failure ->
+                                            GlassToaster.show("获取失败：${result.message}")
                                     }
                                 }
                             }
-                        })
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -190,50 +269,126 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     models.forEach { name ->
                         GlassFilterChip(
                             label = name,
-                            selected = name == modelInput,
-                            onClick = { modelInput = name }
+                            selected = name == model,
+                            onClick = { model = name }
                         )
                     }
                 }
-                Spacer(Modifier.height(10.dp))
-                // 仍保留手填能力：服务端模型名可能变，列表未必覆盖。
+                Spacer(Modifier.height(8.dp))
+                // 仍保留手填：服务端清单可能取不到（网络/权限），模型名也可能刚改。
                 GlassTextField(
-                    value = modelInput,
-                    onValueChange = { modelInput = it },
-                    placeholder = AiKeyStore.DEFAULT_MODEL,
+                    value = model,
+                    onValueChange = {
+                        model = it
+                        testReport = null
+                    },
+                    placeholder = AiEndpoint.DEFAULT_MODEL,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "点上方芯片选择，或在输入框手填模型名。",
+                    text = "点上方芯片选择，或直接填模型名。官方文档目前给出的取值是 " +
+                        AiEndpoint.MODELS.joinToString(" / ") { "`$it`" } + "。",
                     fontSize = 12.sp,
                     lineHeight = 17.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+
+            // ── ④ 网络参数 ───────────────────────────────────────────────
+            Card {
+                Text(
+                    text = "超时（秒）",
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(8.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TIMEOUT_CHOICES.forEach { choice ->
+                        GlassFilterChip(
+                            label = "$choice",
+                            selected = choice == timeoutSeconds,
+                            onClick = { timeoutSeconds = choice }
+                        )
+                    }
+                }
                 Spacer(Modifier.height(14.dp))
+                Text(
+                    text = "失败重试次数",
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(8.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    RETRY_CHOICES.forEach { choice ->
+                        GlassFilterChip(
+                            label = if (choice == 0) "不重试" else "$choice",
+                            selected = choice == retries,
+                            onClick = { retries = choice }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "超时按「两次收到数据之间的间隔」算，流式回答时只要还在吐字就不会超时。" +
+                        "重试只发生在**一个字都还没吐出来**的时候，避免两段半截回答拼在一起。",
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // ── ⑤ 保存 / 测试 / 清除 ─────────────────────────────────────
+            Card {
                 ConfirmButton(
                     text = "保存",
-                    enabled = true,
+                    enabled = keyOk,
                     onClick = {
-                        if (keyInput.isBlank()) {
-                            AiKeyStore.removeApiKey(context)
-                            hasKey = false
-                            keyInput = ""
-                            GlassToaster.show("已清除 API Key")
-                        } else if (AiKeyStore.saveApiKey(context, keyInput)) {
-                            hasKey = true
-                            keyInput = ""
+                        val config = draftConfig(
+                            key = draftKey.ifBlank { savedKey },
+                            model = model,
+                            timeoutSeconds = timeoutSeconds,
+                            retries = retries
+                        )
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) { AiConfigStore.save(context, config) }
+                            if (!ok) {
+                                // 加密失败（keystore 不可用/损坏）：留在输入框里让用户重试，不崩。
+                                GlassToaster.show("保存失败：本机加密服务不可用")
+                                return@launch
+                            }
+                            // 保存后回读一次：让界面上的值就是"下次真正会用的值"
+                            // （模型空白/超时越界都会被存储层归一化，不回读就会显示假值）。
+                            val reloaded = withContext(Dispatchers.IO) {
+                                runCatching { AiConfigStore.load(context) }.getOrNull()
+                            }
+                            if (reloaded != null) {
+                                savedKey = reloaded.apiKey
+                                model = reloaded.model
+                                timeoutSeconds = reloaded.timeoutSeconds
+                                retries = reloaded.retries
+                            }
+                            draftKey = ""
                             GlassToaster.show("已保存")
-                        } else {
-                            // 加密失败（keystore 不可用/损坏）：留在输入框里让用户重试，不崩。
-                            GlassToaster.show("保存失败：本机加密服务不可用")
                         }
-                        AiKeyStore.setModel(context, modelInput)
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(10.dp))
+
                 if (testing) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -252,55 +407,60 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 } else {
                     SecondaryAction(
                         text = "测试连接",
-                        enabled = hasKey,
+                        enabled = keyOk,
                         onClick = {
-                            val key = AiKeyStore.apiKey(context)
-                            if (key.isNullOrBlank()) {
-                                GlassToaster.show("请先保存 API Key")
-                            } else {
-                                // 防重复点击：置位后按钮分支切到 loading，点不到第二次。
-                                testing = true
-                                scope.launch {
-                                    val result = AiChatClient.testConnection(key, modelInput)
-                                    testing = false
-                                    when (result) {
-                                        is AiChatClient.Result.Success ->
-                                            GlassToaster.show("连接正常（模型 ${result.text}）")
-                                        is AiChatClient.Result.Failure ->
-                                            GlassToaster.show(result.message)
+                            // 防重复点击：置位后按钮分支切到 loading，点不到第二次。
+                            testing = true
+                            testReport = null
+                            scope.launch {
+                                val probe = draftConfig(
+                                    key = draftKey.ifBlank { savedKey },
+                                    model = model,
+                                    timeoutSeconds = timeoutSeconds,
+                                    retries = retries
+                                )
+                                val result = AiChatClient.testConnection(probe, timeoutSeconds)
+                                testing = false
+                                testReport = if (result.ok) {
+                                    buildString {
+                                        append("连接正常 · ${result.latencyMs} ms")
+                                        if (result.reply.isNotBlank()) append("\n模型回复：${result.reply}")
                                     }
+                                } else {
+                                    result.error
                                 }
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+
+                testReport?.let { report ->
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = report,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        color = if (report.startsWith("连接正常")) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        }
+                    )
+                }
+
+                if (existingHasKey) {
+                    Spacer(Modifier.height(10.dp))
+                    SecondaryAction(
+                        text = "清除配置",
+                        enabled = true,
+                        onClick = { pendingClear = true },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
 
-            Spacer(Modifier.height(12.dp))
-
-            Card {
-                Text(
-                    text = "怎么拿 Key",
-                    fontSize = 15.sp,
-                    lineHeight = 21.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(Modifier.height(6.dp))
-                MarkdownText(
-                    text = "1. 打开 platform.deepseek.com，注册并登录。\n" +
-                        "2. 进入「API keys」，新建一个密钥并**保存好**（只显示一次）。\n" +
-                        "3. 在「充值」里给你的账户充值（DeepSeek 按 token 计费，没有免费额度）。\n" +
-                        "4. 把 `sk-` 开头的密钥填到上面。",
-                    fontSize = 13.sp,
-                    lineHeight = 21.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
+            // ── ⑥ 关于隐私 ───────────────────────────────────────────────
             Card {
                 Text(
                     text = "关于隐私",
@@ -319,125 +479,80 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
-            Spacer(Modifier.height(24.dp))
         }
-    }
-}
 
-/** 题库格式说明页。 */
-@Composable
-fun BankFormatHelpScreen(onBack: () -> Unit) {
-    GlassPageScaffold(title = "题库格式说明", onBack = onBack) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(
-                    top = padding.calculateTopPadding() + 8.dp,
-                    start = 16.dp,
-                    end = 16.dp
-                )
-                .verticalScroll(rememberScrollState())
-        ) {
-            Card {
+        if (pendingClear) {
+            SystemDialog(
+                onDismissRequest = { pendingClear = false },
+                title = {
+                    Text(
+                        text = "清除 AI 配置",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                confirmButton = {
+                    SystemPrimaryButton(
+                        text = "清除",
+                        onClick = {
+                            pendingClear = false
+                            scope.launch {
+                                withContext(Dispatchers.IO) { AiConfigStore.clear(context) }
+                                savedKey = ""
+                                draftKey = ""
+                                model = AiEndpoint.DEFAULT_MODEL
+                                timeoutSeconds = AiConfigRules.DEFAULT_TIMEOUT_SECONDS
+                                retries = AiConfigRules.DEFAULT_RETRIES
+                                models = AiEndpoint.MODELS
+                                testReport = null
+                                GlassToaster.show("已清除 AI 配置")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                dismissButton = {
+                    SystemSecondaryButton(
+                        text = "取消",
+                        onClick = { pendingClear = false },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            ) {
                 Text(
-                    text = "JSON 题库结构",
-                    fontSize = 15.sp,
-                    lineHeight = 21.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(Modifier.height(8.dp))
-                MarkdownText(
-                    text = BANK_FORMAT_SAMPLE,
+                    text = "将删除本机保存的 API Key 与模型、超时设置。此操作不可撤销。",
                     fontSize = 13.sp,
-                    lineHeight = 21.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            Card {
-                Text(
-                    text = "字段说明",
-                    fontSize = 15.sp,
-                    lineHeight = 21.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(Modifier.height(8.dp))
-                MarkdownText(
-                    text = "- `id`：题目唯一标识，同一题库内不能重复。\n" +
-                        "- `type`：`single` 单选 / `multi` 多选。也可写「单选」「多选」。\n" +
-                        "- `stem`：题干。\n" +
-                        "- `options`：选项数组，如 `[\"甲\", \"乙\"]`；也支持 `\"甲|乙\"` 这种写法。\n" +
-                        "- `answer`：正确答案字母，如 `\"A\"`、多选 `\"ABD\"`。\n" +
-                        "- `chapter`：章节，用于按章节练习。\n" +
-                        "- `explanation`：解析，答完题会显示。\n" +
-                        "- `source` / `tags`：可选，出处与标签。\n\n" +
-                        "所有中英文键名都认（`stem`/`题干`、`answer`/`答案` 等）。",
-                    fontSize = 13.sp,
-                    lineHeight = 21.sp,
+                    lineHeight = 19.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
-            Spacer(Modifier.height(12.dp))
-
-            Card {
-                Text(
-                    text = "导入规则",
-                    fontSize = 15.sp,
-                    lineHeight = 21.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(Modifier.height(8.dp))
-                MarkdownText(
-                    text = "- 顶层可以是 `{\"name\":..., \"questions\":[...]}`，也可以直接是题目数组。\n" +
-                        "- **单选必须只有一个答案，多选至少两个**；不合规的题会被跳过并在导入后提示跳过条数。\n" +
-                        "- 选项数量 2–8 个，答案不能超出选项范围。\n" +
-                        "- 同名题库重复导入会**覆盖**该库原来的题目与答题记录。",
-                    fontSize = 13.sp,
-                    lineHeight = 21.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Spacer(Modifier.height(24.dp))
         }
     }
 }
 
 /**
- * 题库格式样例。用 [String] 常量而不是 `const val` + `trimIndent()` ——
- * `trimIndent()` 是运行期函数，不能出现在 const 初始化器里。
+ * 用编辑器草稿拼一份 [AiConfig] 供「获取可用模型 / 测试连接 / 保存」使用。
+ *
+ * [key] 由调用方算好（草稿里的新 Key 优先，留空则沿用已保存的那条）——
+ * 与保存逻辑同一口径：界面不回显明文，所以"留空"的语义是"沿用已保存的"，
+ * 而不是"没有 Key"。抽成一处是为了让这个回落口径只有一处。
+ *
+ * [AiConfig.baseUrl] 走默认值 [AiEndpoint.BASE_URL]：端点不可配。
  */
-private val BANK_FORMAT_SAMPLE = """
-```json
-{
-  "name": "我的题库",
-  "questions": [
-    {
-      "id": "1",
-      "type": "single",
-      "stem": "中国近现代史开端是？",
-      "options": ["1840年", "1919年", "1949年"],
-      "answer": "A",
-      "chapter": "绪论",
-      "explanation": "1840年鸦片战争是中国近代史的开端。",
-      "tags": ["时间轴"]
-    },
-    {
-      "id": "2",
-      "type": "multi",
-      "stem": "以下哪些属于抗日战争时期？",
-      "options": ["九一八事变", "西安事变", "七七事变"],
-      "answer": "AC",
-      "chapter": "抗日战争"
+private fun draftConfig(key: String, model: String, timeoutSeconds: Int, retries: Int): AiConfig =
+    AiConfig(
+        apiKey = key,
+        model = model.trim().ifEmpty { AiEndpoint.DEFAULT_MODEL },
+        timeoutSeconds = timeoutSeconds,
+        retries = retries
+    )
+
+/** 用系统浏览器打开链接。没有浏览器时给一句提示，不让 ActivityNotFoundException 崩掉。 */
+private fun openUrl(context: Context, url: String) {
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    }.onFailure {
+        GlassToaster.show("没有可用的浏览器，请手动访问：$url")
     }
-  ]
 }
-```
-""".trimIndent()

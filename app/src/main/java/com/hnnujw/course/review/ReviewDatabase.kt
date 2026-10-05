@@ -18,9 +18,16 @@ import java.util.UUID
  *  - records      每题的对错次数
  *  - wrong_book   错题本（含掌握标记与连对次数）
  *  - favorites    收藏
- *  - slashed      斩题本（一眼会的题，移出后续练习，可恢复）
- *  - daily_stats  每日答题量，统计页用
  *  - meta         杂项键值
+ *
+ * 🔴 `daily_stats`（每日答题量）已随统计页一起下线（2026-10 用户要求删除统计）。
+ * 表**不再创建、不再写入**：它当时只有统计页一个读方，留着就是"只写不读"的黑洞。
+ * 老安装里那张表会作为空壳残留（里面还有历史数据），不影响任何功能；
+ * 想彻底清掉可以卸载重装，或等一次数据库重建。
+ *
+ * 🔴 `slashed`（斩题本）已随斩题功能一起删除（2026-10 用户决定彻底清理）：
+ * 斩题的 UI 入口此前已经移除，留着表和过滤只会让"以前斩过的题永远抽不出来"
+ * 且无入口找回。v5 迁移直接 DROP 这张表 —— 历史被斩的题全部放回练习。
  *
  * 隐私：题干内容不进日志，只记 id 和条数。
  */
@@ -34,7 +41,9 @@ class ReviewDatabase private constructor(context: Context) :
                 id          TEXT PRIMARY KEY,
                 name        TEXT NOT NULL,
                 question_count INTEGER NOT NULL DEFAULT 0,
-                created_at  INTEGER NOT NULL
+                created_at  INTEGER NOT NULL,
+                selected    INTEGER NOT NULL DEFAULT 0,
+                sort_order  INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent()
         )
@@ -96,25 +105,6 @@ class ReviewDatabase private constructor(context: Context) :
         )
         db.execSQL(
             """
-            CREATE TABLE IF NOT EXISTS slashed (
-                bank_id     TEXT NOT NULL,
-                question_id TEXT NOT NULL,
-                created_at  INTEGER NOT NULL,
-                PRIMARY KEY (bank_id, question_id)
-            )
-            """.trimIndent()
-        )
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS daily_stats (
-                day      TEXT PRIMARY KEY,
-                answered INTEGER NOT NULL DEFAULT 0,
-                correct  INTEGER NOT NULL DEFAULT 0
-            )
-            """.trimIndent()
-        )
-        db.execSQL(
-            """
             CREATE TABLE IF NOT EXISTS meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -133,6 +123,23 @@ class ReviewDatabase private constructor(context: Context) :
         if (!hasColumn(db, "wrong_book", "due_at")) {
             db.execSQL("ALTER TABLE wrong_book ADD COLUMN due_at INTEGER NOT NULL DEFAULT 0")
         }
+        // v3 → v4：banks 增加「是否已从题库仓库取出」与「取出后的排序」两列。
+        //
+        // 🔴 存量行必须**迁移成 selected = 1**：升级前所有题库都是直接显示在首页的，
+        // 默认值 0 会让用户升级后打开复习页发现"题库全没了"（数据还在，但一个都不显示）。
+        // sort_order 按 rowid 铺一遍，保持升级前的相对顺序。
+        if (!hasColumn(db, "banks", "selected")) {
+            db.execSQL("ALTER TABLE banks ADD COLUMN selected INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE banks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("UPDATE banks SET selected = 1, sort_order = rowid")
+        } else if (!hasColumn(db, "banks", "sort_order")) {
+            db.execSQL("ALTER TABLE banks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("UPDATE banks SET sort_order = rowid")
+        }
+        // v4 → v5：斩题功能彻底下线，DROP slashed 表。斩题的 UI 入口早已移除，
+        // 表留着只会让历史被斩的题永远抽不出来、且无入口找回 —— 直接删表，
+        // 这些题全部放回练习。DROP IF EXISTS 幂等，老库新库跑一遍都安全。
+        db.execSQL("DROP TABLE IF EXISTS slashed")
     }
 
     /** 某张表是否已经有这一列（用于幂等迁移）。 */
@@ -147,8 +154,18 @@ class ReviewDatabase private constructor(context: Context) :
 
     // —— 题库
 
-    /** 导入一个题库，返回 bankId。已存在同名同数量的题库时直接复用，避免重复导入堆库。 */
-    fun importBank(name: String, questions: List<ReviewQuestion>): String {
+    /**
+     * 导入一个题库，返回 bankId。已存在同名同数量的题库时直接复用，避免重复导入堆库。
+     *
+     * @param selected 是否**同时从题库仓库取出来**（即出现在首页「我的题库」里）。
+     *   默认 true —— 用户主动导入/创建一个库，意图就是要用它，导完什么都不显示
+     *   反而像失败。内置题库的自动导入走 `selected = false`（见 [BundledBanks]）。
+     */
+    fun importBank(
+        name: String,
+        questions: List<ReviewQuestion>,
+        selected: Boolean = true
+    ): String {
         val db = writableDatabase
         val now = System.currentTimeMillis()
         val existing = db.query(
@@ -165,6 +182,9 @@ class ReviewDatabase private constructor(context: Context) :
                         put("name", name)
                         put("question_count", questions.size)
                         put("created_at", now)
+                        put("selected", if (selected) 1 else 0)
+                        // 新取出的库排到末尾（sort_order 取当前最大值 + 1）。
+                        put("sort_order", if (selected) nextSortOrder(db) else 0)
                     },
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
@@ -172,7 +192,7 @@ class ReviewDatabase private constructor(context: Context) :
             // 同名库重导：先清掉旧题（records/wrong_book/favorites 里的旧行一并清，
             // 留着就变成指向不存在题目的孤儿行）。
             if (existing != null) {
-                listOf("questions", "records", "wrong_book", "favorites", "slashed").forEach { t ->
+                listOf("questions", "records", "wrong_book", "favorites").forEach { t ->
                     db.delete(t, "bank_id = ?", arrayOf(bankId))
                 }
                 db.update(
@@ -243,13 +263,25 @@ class ReviewDatabase private constructor(context: Context) :
         val questionCount: Int,
         val createdAt: Long,
         /** 错题本里还没掌握的题数。 */
-        val pendingWrong: Int
+        val pendingWrong: Int,
+        /** 是否已从题库仓库取出（= 出现在首页「我的题库」里）。 */
+        val selected: Boolean = false,
+        /** 取出后的排序权重，越小越靠前。未取出时为 0（无意义）。 */
+        val sortOrder: Int = 0
     )
 
+    /**
+     * 列出**全部**题库（含未取出的），已取出的排在前面且按 [BankSummary.sortOrder] 升序。
+     *
+     * 首页用它一次拿全，再在内存里切成「我的题库 / 仓库」两段 —— 题库数量是十几的量级，
+     * 多查一次不如一次拿全。ORDER BY 里带上 `created_at DESC` 作兜底：
+     * sort_order 全为 0（未取出的行）时仍有稳定顺序。
+     */
     fun listBanks(): List<BankSummary> = readableDatabase.rawQuery(
         "SELECT b.id, b.name, b.question_count, b.created_at, " +
-            "(SELECT COUNT(*) FROM wrong_book w WHERE w.bank_id = b.id AND w.mastered = 0) AS pending " +
-            "FROM banks b ORDER BY b.created_at DESC", null
+            "(SELECT COUNT(*) FROM wrong_book w WHERE w.bank_id = b.id AND w.mastered = 0) AS pending, " +
+            "b.selected, b.sort_order " +
+            "FROM banks b ORDER BY b.selected DESC, b.sort_order ASC, b.created_at DESC", null
     ).use { c ->
         val out = ArrayList<BankSummary>()
         while (c.moveToNext()) {
@@ -259,11 +291,118 @@ class ReviewDatabase private constructor(context: Context) :
                     name = c.getString(1),
                     questionCount = c.getInt(2),
                     createdAt = c.getLong(3),
-                    pendingWrong = c.getInt(4)
+                    pendingWrong = c.getInt(4),
+                    selected = c.getInt(5) != 0,
+                    sortOrder = c.getInt(6)
                 )
             )
         }
         out
+    }
+
+    /** 只取一个题库的名字（不存在时返回空串）。详情页/编辑页只需要个标题，犯不着跑 [listBanks] 全表。 */
+    fun bankName(bankId: String): String =
+        readableDatabase.rawQuery("SELECT name FROM banks WHERE id = ?", arrayOf(bankId)).use { c ->
+            if (c.moveToFirst()) c.getString(0) else ""
+        }
+
+    // —— 题库仓库：取出 / 移出 / 排序 ——
+
+    /** 下一个可用的排序权重（当前最大值 + 1）。 */
+    private fun nextSortOrder(db: SQLiteDatabase): Int =
+        db.rawQuery("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM banks WHERE selected = 1", null)
+            .use { c -> if (c.moveToFirst()) c.getInt(0) else 1 }
+
+    /**
+     * 从仓库取出一个题库（[selected] = true）或移出回仓库（false）。
+     *
+     * **只改显示状态，绝不删数据** —— 题目、答题记录、错题本、收藏全都原样留着，
+     * 所以"移出"是可逆的。取出时排到末尾，符合"刚拿出来的东西放在最后"的直觉。
+     */
+    fun setBankSelected(bankId: String, selected: Boolean) {
+        val db = writableDatabase
+        val values = ContentValues().apply {
+            put("selected", if (selected) 1 else 0)
+            // 取出时排到末尾，符合"刚拿出来的东西放在最后"的直觉。
+            if (selected) put("sort_order", nextSortOrder(db))
+        }
+        db.update("banks", values, "id = ?", arrayOf(bankId))
+    }
+
+    /**
+     * 在「我的题库」里把某个题库上移/下移一位（[delta] = -1 / +1）。
+     *
+     * 用**相邻两条互换 sort_order** 而不是重排整张表：重排要写 N 行，互换只写 2 行，
+     * 且不会因为并发改动而整体错位。
+     */
+    fun moveBank(bankId: String, delta: Int) {
+        if (delta == 0) return
+        val ordered = listBanks().filter { it.selected }
+        val from = ordered.indexOfFirst { it.id == bankId }
+        if (from < 0) return
+        val to = (from + delta).coerceIn(0, ordered.lastIndex)
+        if (to == from) return
+        swapSortOrder(ordered[from].id, ordered[to].id)
+    }
+
+    /**
+     * 按给定顺序重写「我的题库」的排序（拖拽结束后调用）。
+     *
+     * 传进来的 id 里不含的题库不动；不在「我的题库」里的 id 会被 `selected = 1` 条件挡掉。
+     */
+    fun reorderSelectedBanks(orderedIds: List<String>) {
+        if (orderedIds.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            orderedIds.forEachIndexed { index, id ->
+                db.update(
+                    "banks", ContentValues().apply { put("sort_order", index) },
+                    "id = ? AND selected = 1", arrayOf(id)
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /**
+     * 互换两条题库的 sort_order。
+     *
+     * 两者的 sort_order 相同（迁移前的老数据、或都还是 0）时互换等于没动，
+     * 此时退化成「按当前顺序重排一遍」，至少让这次点击有可见效果。
+     */
+    private fun swapSortOrder(firstId: String, secondId: String) {
+        val db = writableDatabase
+        val all = listBanks()
+        val first = all.firstOrNull { it.id == firstId } ?: return
+        val second = all.firstOrNull { it.id == secondId } ?: return
+        if (first.sortOrder == second.sortOrder) {
+            val ordered = all.filter { it.selected }.map { it.id }.toMutableList()
+            val i = ordered.indexOf(firstId)
+            val j = ordered.indexOf(secondId)
+            if (i >= 0 && j >= 0) {
+                ordered[i] = secondId
+                ordered[j] = firstId
+                reorderSelectedBanks(ordered)
+            }
+            return
+        }
+        db.beginTransaction()
+        try {
+            db.update(
+                "banks", ContentValues().apply { put("sort_order", second.sortOrder) },
+                "id = ?", arrayOf(firstId)
+            )
+            db.update(
+                "banks", ContentValues().apply { put("sort_order", first.sortOrder) },
+                "id = ?", arrayOf(secondId)
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     /** 删除题库连带它的题目与全部答题记录。 */
@@ -271,7 +410,7 @@ class ReviewDatabase private constructor(context: Context) :
         val db = writableDatabase
         db.beginTransaction()
         try {
-            listOf("questions", "records", "wrong_book", "favorites", "slashed").forEach { t ->
+            listOf("questions", "records", "wrong_book", "favorites").forEach { t ->
                 db.delete(t, "bank_id = ?", arrayOf(bankId))
             }
             db.delete("banks", "id = ?", arrayOf(bankId))
@@ -281,39 +420,13 @@ class ReviewDatabase private constructor(context: Context) :
         }
     }
 
-    // —— 题库管理：创建 / 重命名 / 逐题编辑 / 批量删题 / 合并 ——
-
-    /**
-     * 创建一个空题库。重名返回 null（由调用方先走 [BankManageLogic.validateBankName]）。
-     *
-     * 这里**再查一次重名**而不是只信上层：上层校验到落库之间隔着用户操作，
-     * 而且 DB 层自己也该守住「不产生同名库」这条底线。
-     */
-    fun createBank(name: String): String? {
-        val trimmed = name.trim()
-        if (trimmed.isEmpty()) return null
-        if (bankExists(trimmed)) return null
-        val bankId = UUID.randomUUID().toString().replace("-", "").take(16)
-        writableDatabase.insertWithOnConflict(
-            "banks", null,
-            ContentValues().apply {
-                put("id", bankId)
-                put("name", trimmed)
-                put("question_count", 0)
-                put("created_at", System.currentTimeMillis())
-            },
-            SQLiteDatabase.CONFLICT_ABORT
-        )
-        Log.i(TAG, "createBank: bankId=$bankId")
-        return bankId
-    }
+    // —— 题库管理：重命名 / 逐题编辑 / 批量删题 ——
 
     /**
      * 重命名题库。重名或不存在返回 false，成功返回 true。
      *
      * **只动 banks.name**：题目靠 `bank_id` 关联，records/wrong_book/favorites 同理，
      * 改名不涉及任何一张表的关联字段，所以题与记录一题都不会丢。
-     * 这正是「改名」和「合并」在数据层上的本质区别。
      */
     fun renameBank(bankId: String, newName: String): Boolean {
         val trimmed = newName.trim()
@@ -407,7 +520,6 @@ class ReviewDatabase private constructor(context: Context) :
                 db.delete("records", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
                 db.delete("wrong_book", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
                 db.delete("favorites", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
-                db.delete("slashed", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid))
                 deleted++
             }
             refreshQuestionCount(db, bankId)
@@ -430,94 +542,16 @@ class ReviewDatabase private constructor(context: Context) :
         )
     }
 
-    /**
-     * 把 [sourceBankIds] 的**题目**合并进 [targetBankId]，返回报告。
-     *
-     * 合并语义（硬约束，见 [BankManageLogic.planQidRemap] 的注释）：
-     * 1. **只搬题，不搬答题记录**。records / wrong_book / favorites 是 `(bank_id, qid)` 维度，
-     *    跨库迁移会让两个库同号题的错题本串在一起 —— 用户会看到别人的错题。所以一律不迁移。
-     * 2. **qid 冲突重分配**。撞上目标库已有 qid 的源题走 `planQidRemap` 分配新号，
-     *    绝不能靠 `INSERT OR REPLACE` 把目标库原题覆盖掉。
-     * 3. **整批一个事务**：中途失败不能留下半合并状态（一部分题进了目标库、一部分还在源库）。
-     * 4. **不自动删源库**：由 UI 拿 [BankManageLogic.MergeReport] 弹二次确认再调 [deleteBank]。
-     *
-     * 幂等性：同一源题重复合并会被重分配到不同 qid，所以调用方应在成功后立刻删源库
-     * （或至少不要让用户对同一对库连点两次）。这也是要求 UI 防重复点击的原因。
-     */
-    fun mergeBanks(targetBankId: String, sourceBankIds: List<String>): BankManageLogic.MergeReport {
-        val db = writableDatabase
-        val sources = sourceBankIds.filter { it.isNotBlank() && it != targetBankId }.distinct()
-        if (sources.isEmpty()) return BankManageLogic.MergeReport(0, 0, emptyList())
-
-        val sourceNames = ArrayList<String>(sources.size)
-        var moved = 0
-        var renamed = 0
-
-        db.beginTransaction()
-        try {
-            // 目标库现有 qid 集合（含本次已分配的），用于冲突判定
-            val taken = HashSet<String>()
-            db.rawQuery(
-                "SELECT qid FROM questions WHERE bank_id = ?", arrayOf(targetBankId)
-            ).use { c -> while (c.moveToNext()) taken.add(c.getString(0)) }
-
-            for (srcId in sources) {
-                db.rawQuery(
-                    "SELECT name FROM banks WHERE id = ? LIMIT 1", arrayOf(srcId)
-                ).use { c -> if (c.moveToFirst()) sourceNames.add(c.getString(0)) }
-
-                // 读源库全部题目（按 qid 稳定排序，保证重分配结果可复现）
-                // 列顺序同 [readQuestion]：bank_id 必须在第 0 列
-                val incoming = ArrayList<ReviewQuestion>()
-                db.rawQuery(
-                    "SELECT bank_id, qid, type, stem, options, answer, chapter, explanation, source, tags " +
-                        "FROM questions WHERE bank_id = ? ORDER BY qid",
-                    arrayOf(srcId)
-                ).use { c ->
-                    while (c.moveToNext()) incoming.add(readQuestion(c))
-                }
-
-                // 目标库已有 qid + 源库内部可能自带的重复，一次性交给纯函数算重映射。
-                // 注意：重分配只保证「不与目标库已有冲突」，源库之间的重复由同一张 remap 保证一致。
-                val remap = BankManageLogic.planQidRemap(taken, incoming.map { it.id })
-                for (q in incoming) {
-                    val newQid = remap[q.id] ?: q.id
-                    if (newQid != q.id) renamed++
-                    taken.add(newQid)
-                    insertQuestion(db, targetBankId, q.copy(id = newQid, bankId = targetBankId), System.currentTimeMillis())
-                    moved++
-                }
-            }
-
-            refreshQuestionCount(db, targetBankId)
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-        Log.i(TAG, "mergeBanks: target=$targetBankId sources=${sources.size} moved=$moved renamed=$renamed")
-        return BankManageLogic.MergeReport(
-            totalMoved = moved,
-            renamedCount = renamed,
-            sourceNames = sourceNames
-        )
-    }
-
     // —— 取题
 
-    fun chapters(bankId: String? = null): List<String> {
-        val sql = StringBuilder("SELECT DISTINCT chapter FROM questions")
-        val args: Array<String>? = if (bankId == null) null else {
-            sql.append(" WHERE bank_id = ?")
-            arrayOf(bankId)
-        }
-        sql.append(" ORDER BY chapter")
-        return readableDatabase.rawQuery(sql.toString(), args).use { c ->
-            val out = ArrayList<String>()
-            while (c.moveToNext()) out.add(c.getString(0))
-            out
-        }
-    }
-
+    /**
+     * 「章节 → 题数」，按**章节自然序**排列。
+     *
+     * 🔴 排序刻意**不在 SQL 里做**（原先的 `ORDER BY chapter` 已删除）：SQLite 是逐字节
+     * 比较，而章节名里的编号是中文数字，排出来是「第一章、第七章、第三章…」这种错乱顺序
+     * （2026-10 用户报「章节顺序问题」）。改由 [sortChaptersWithCount] 在 Kotlin 层按
+     * 解析出的编号排序 —— 见 `ChapterOrder.kt` 的说明。
+     */
     fun chaptersWithCount(bankId: String? = null): List<Pair<String, Int>> {
         val sql = StringBuilder(
             "SELECT chapter, COUNT(*) FROM questions"
@@ -526,38 +560,42 @@ class ReviewDatabase private constructor(context: Context) :
             sql.append(" WHERE bank_id = ?")
             arrayOf(bankId)
         }
-        sql.append(" GROUP BY chapter ORDER BY chapter")
-        return readableDatabase.rawQuery(sql.toString(), args).use { c ->
+        sql.append(" GROUP BY chapter")
+        val raw = readableDatabase.rawQuery(sql.toString(), args).use { c ->
             val out = ArrayList<Pair<String, Int>>()
             while (c.moveToNext()) out.add(c.getString(0) to c.getInt(1))
             out
         }
+        return sortChaptersWithCount(raw)
     }
 
     /**
      * 按条件抽题。
      *
      * @param mode 练习模式，见 [ReviewMode]。
+     * @param chapters 只抽这些章节的题；**空列表 = 全部章节**（2026-10 起支持多选）。
      * @param limit 抽题上限；0 = 不限（错题本/收藏全量）。
      */
     fun pickQuestions(
         bankId: String? = null,
-        chapter: String? = null,
+        chapters: List<String> = emptyList(),
         mode: ReviewMode = ReviewMode.SEQUENTIAL,
         onlyWrong: Boolean = false,
         onlyFavorite: Boolean = false,
         limit: Int = 0,
-        /** 是否把已斩的题排除在练习之外。默认排除 —— 斩题的意思就是"别再让我练它"。 */
-        excludeSlashed: Boolean = true,
-        /** 只练已斩的题（从斩题本开练时用）；与 [excludeSlashed] 互斥，本参数优先。 */
-        onlySlashed: Boolean = false,
         /** 只练**今日到期**的错题（间隔复习的「今日待复习」入口）。 */
         dueOnly: Boolean = false
     ): List<ReviewQuestion> {
         val where = ArrayList<String>()
         val args = ArrayList<String>()
         if (bankId != null) { where.add("bank_id = ?"); args.add(bankId) }
-        if (chapter != null) { where.add("chapter = ?"); args.add(chapter) }
+        // 多选章节：展开成 `chapter IN (?, ?, …)`。不用 `IN (…)` 拼字面量 —— 章节名里
+        // 有引号（内置题库就有「第七章 “三个代表”重要思想」），拼进 SQL 会语法错误。
+        val picked = chapters.filter { it.isNotBlank() }
+        if (picked.isNotEmpty()) {
+            where.add("chapter IN (" + picked.joinToString(", ") { "?" } + ")")
+            args.addAll(picked)
+        }
         if (dueOnly) {
             // 到期口径与 ReviewScheduling.isDue 一致：due_at=0（未排期）也算到期。
             val now = System.currentTimeMillis().toString()
@@ -569,33 +607,40 @@ class ReviewDatabase private constructor(context: Context) :
             where.add("qid IN (SELECT question_id FROM wrong_book WHERE bank_id = questions.bank_id AND mastered = 0)")
         }
         if (onlyFavorite) where.add("qid IN (SELECT question_id FROM favorites WHERE bank_id = questions.bank_id)")
-        if (onlySlashed) {
-            where.add("qid IN (SELECT question_id FROM slashed WHERE bank_id = questions.bank_id)")
-        } else if (excludeSlashed) {
-            where.add("qid NOT IN (SELECT question_id FROM slashed WHERE bank_id = questions.bank_id)")
-        }
         val sql = buildString {
             append("SELECT bank_id, qid, type, stem, options, answer, chapter, explanation, source, tags FROM questions")
             if (where.isNotEmpty()) append(" WHERE ").append(where.joinToString(" AND "))
-            when (mode) {
-                // 随机：用 id 作伪随机盐，保证同一天同一题序是稳定的一批（便于"继续上次"）。
-                ReviewMode.RANDOM -> append(" ORDER BY (qid || bank_id) * 1103515245 % 2147483647")
-                ReviewMode.WRONG_FIRST -> append(
-                    " ORDER BY CASE WHEN qid IN (SELECT question_id FROM wrong_book WHERE bank_id = questions.bank_id AND mastered = 0) THEN 0 ELSE 1 END, " +
-                        "(qid || bank_id) * 1103515245 % 2147483647"
-                )
-                else -> append(" ORDER BY rowid")
-            }
+            // 排序只保底 rowid —— 乱序/错题优先的真正排序在 Kotlin 层做
+            // （见 QuestionOrder.kt 的历史事故注释：SQL 里任何哈希表达式都依赖
+            // TEXT CAST 成数字，qid 非数字开头就全体退化成 0，「乱序」悄悄失效）。
+            append(" ORDER BY rowid")
+            // LIMIT 只对顺序模式下推：乱序/错题优先必须读全量重排后再截断，
+            // 在 SQL 里截了序就错了。
+            if (mode == ReviewMode.SEQUENTIAL && limit > 0) append(" LIMIT ").append(limit)
         }
         val arr = args.toTypedArray()
-        return readableDatabase.rawQuery(sql, arr).use { c ->
+        val rows = readableDatabase.rawQuery(sql, arr).use { c ->
             val out = ArrayList<ReviewQuestion>()
-            while (c.moveToNext() && (limit <= 0 || out.size < limit)) {
-                out.add(readQuestion(c))
-            }
+            while (c.moveToNext()) out.add(readQuestion(c))
             out
         }
+        return when (mode) {
+            ReviewMode.RANDOM -> rows.sortedWith(randomOrderComparator())
+            ReviewMode.WRONG_FIRST ->
+                rows.sortedWith(wrongFirstOrderComparator(unmasteredWrongKeys()))
+            else -> if (limit > 0) rows.take(limit) else rows
+        }
     }
+
+    /** 错题本里未掌握题目的复合键（`bankId::qid`），给 [wrongFirstOrderComparator] 用。 */
+    private fun unmasteredWrongKeys(): Set<String> =
+        readableDatabase.rawQuery(
+            "SELECT bank_id, question_id FROM wrong_book WHERE mastered = 0", null
+        ).use { c ->
+            val out = HashSet<String>()
+            while (c.moveToNext()) out.add(c.getString(0) + "::" + c.getString(1))
+            out
+        }
 
     fun question(bankId: String, qid: String): ReviewQuestion? =
         readableDatabase.rawQuery(
@@ -662,54 +707,71 @@ class ReviewDatabase private constructor(context: Context) :
      * [MASTER_STREAK] 次标记为已掌握。掌握后答错要重新入册（mastered=0）。
      */
     fun recordAnswer(bankId: String, qid: String, correct: Boolean) {
+        recordAnswers(listOf(AnswerRecord(bankId, qid, correct)))
+    }
+
+    /** 一条待落库的作答。 */
+    data class AnswerRecord(val bankId: String, val qid: String, val correct: Boolean)
+
+    /**
+     * 批量记作答，**整批一个事务**。
+     *
+     * 交卷补判（[com.hnnujw.course.review.PracticeSession.judgePending] 返回的一批）
+     * 曾经是每题一个协程、一个独立事务 —— 一次补判 N 题就是 N 个事务。这里合并成
+     * 一个：整批要么全记上、要么全没记上，失败由调用方提示兜底。
+     */
+    fun recordAnswers(items: List<AnswerRecord>) {
+        if (items.isEmpty()) return
         val db = writableDatabase
         val now = System.currentTimeMillis()
         db.beginTransaction()
         try {
-            val cur = stat(bankId, qid)
-            db.insertWithOnConflict(
-                "records", null,
-                ContentValues().apply {
-                    put("bank_id", bankId)
-                    put("question_id", qid)
-                    put("correct_count", cur.correctCount + if (correct) 1 else 0)
-                    put("wrong_count", cur.wrongCount + if (correct) 0 else 1)
-                    put("last_result", if (correct) 1 else 0)
-                    put("last_time", now)
-                },
-                SQLiteDatabase.CONFLICT_REPLACE
-            )
-            if (correct) {
-                // 只有还在错题本里（未掌握）的题才累加连对；已掌握或从未答错的题不受影响。
-                val entry = wrongEntry(bankId, qid)
-                if (entry != null && !entry.mastered) {
-                    val streak = entry.streak + 1
-                    val level = masteryLevelOf(streak, entry.wrongCount)
-                    // 答对即"复习过一次"：按新等级排下次到期时间（间隔重复的核心）。
+            for (item in items) {
+                val cur = stat(item.bankId, item.qid)
+                db.insertWithOnConflict(
+                    "records", null,
+                    ContentValues().apply {
+                        put("bank_id", item.bankId)
+                        put("question_id", item.qid)
+                        put("correct_count", cur.correctCount + if (item.correct) 1 else 0)
+                        put("wrong_count", cur.wrongCount + if (item.correct) 0 else 1)
+                        put("last_result", if (item.correct) 1 else 0)
+                        put("last_time", now)
+                    },
+                    SQLiteDatabase.CONFLICT_REPLACE
+                )
+                if (item.correct) {
+                    // 只有还在错题本里（未掌握）的题才累加连对；已掌握或从未答错的题不受影响。
+                    val entry = wrongEntry(item.bankId, item.qid)
+                    if (entry != null && !entry.mastered) {
+                        val streak = entry.streak + 1
+                        val level = masteryLevelOf(streak, entry.wrongCount)
+                        // 答对即"复习过一次"：按新等级排下次到期时间（间隔重复的核心）。
+                        val nextDue = dueAt(level, now)
+                        db.execSQL(
+                            "UPDATE wrong_book SET streak = ?, mastered = ?, due_at = ? " +
+                                "WHERE bank_id = ? AND question_id = ?",
+                            arrayOf<Any>(streak, if (streak >= MASTER_STREAK) 1 else 0, nextDue, item.bankId, item.qid)
+                        )
+                    }
+                } else {
+                    // 答错：回炉。错误次数 +1，连对清零，等级回到 Learning，到期时间按新等级重排。
+                    val wrongCount = cur.wrongCount + 1
+                    val level = masteryLevelOf(0, wrongCount)
                     val nextDue = dueAt(level, now)
                     db.execSQL(
-                        "UPDATE wrong_book SET streak = ?, mastered = ?, due_at = ? " +
-                            "WHERE bank_id = ? AND question_id = ?",
-                        arrayOf<Any>(streak, if (streak >= MASTER_STREAK) 1 else 0, nextDue, bankId, qid)
+                        "INSERT OR REPLACE INTO wrong_book " +
+                            "(bank_id, question_id, wrong_count, last_wrong_at, mastered, streak, due_at) " +
+                            "VALUES (?, ?, ?, ?, 0, 0, ?)",
+                        arrayOf<Any>(item.bankId, item.qid, wrongCount, now, nextDue)
                     )
                 }
-            } else {
-                // 答错：回炉。错误次数 +1，连对清零，等级回到 Learning，到期时间按新等级重排。
-                val wrongCount = cur.wrongCount + 1
-                val level = masteryLevelOf(0, wrongCount)
-                val nextDue = dueAt(level, now)
-                db.execSQL(
-                    "INSERT OR REPLACE INTO wrong_book " +
-                        "(bank_id, question_id, wrong_count, last_wrong_at, mastered, streak, due_at) " +
-                        "VALUES (?, ?, ?, ?, 0, 0, ?)",
-                    arrayOf<Any>(bankId, qid, wrongCount, now, nextDue)
-                )
             }
-            db.execSQL(
-                "INSERT OR REPLACE INTO daily_stats (day, answered, correct) " +
-                    "VALUES (?, 1, ?)",
-                arrayOf<Any>(today(), if (correct) 1 else 0)
-            )
+            // 🔴 这里原本还有一条 `INSERT OR REPLACE INTO daily_stats (day, answered, correct)
+            // VALUES (?, 1, ?)`。它随统计页一起删掉了，顺带说明它当时**本来就是坏的**：
+            // OR REPLACE 撞主键是整行替换，所以每天的 answered 永远被写成 1 ——
+            // 「近 7 天每日答题量」显示的从来不是答题量，而是一排 1。
+            // 一个没人能正确解读的指标，比没有指标更糟。
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -756,60 +818,21 @@ class ReviewDatabase private constructor(context: Context) :
             arrayOf(bankId, qid)
         ).use { c -> c.moveToFirst() }
 
-    // —— 斩题本
-
     /**
-     * 斩一道题（移出后续练习）。幂等：已斩过再斩不会重复写、也不报错。
+     * 收藏的题（最近收藏在前）。
      *
-     * 🔴 **只写 `slashed` 表**，绝不碰 `wrong_book` / `records` / `mastered` ——
-     * 「斩题 ≠ 已掌握」，斩是主观跳过，掌握是客观答对，两者不能混（见 [SlashPolicy]）。
-     *
-     * @return true = 本次真的斩了；false = 之前就已斩（幂等命中）。
+     * [bankId] 为 null 时跨题库取 —— 与 [listWrongBook] 同一口径。
+     * 2026-10 用户要求「收藏的题…可以练习」，[pickQuestions] 的 `onlyFavorite` 早已支持
+     * 抽题，缺的只是一个能看清"我收藏了哪些"的入口。
      */
-    fun slashQuestion(bankId: String, qid: String): Boolean {
-        if (isSlashed(bankId, qid)) return false
-        writableDatabase.insertWithOnConflict(
-            "slashed", null,
-            ContentValues().apply {
-                put("bank_id", bankId)
-                put("question_id", qid)
-                put("created_at", System.currentTimeMillis())
-            },
-            SQLiteDatabase.CONFLICT_REPLACE
-        )
-        return true
-    }
-
-    /** 取消斩题（放回后续练习）。返回 true = 本次真的放回了。 */
-    fun unslashQuestion(bankId: String, qid: String): Boolean =
-        writableDatabase.delete("slashed", "bank_id = ? AND question_id = ?", arrayOf(bankId, qid)) > 0
-
-    fun isSlashed(bankId: String, qid: String): Boolean =
-        readableDatabase.rawQuery(
-            "SELECT 1 FROM slashed WHERE bank_id = ? AND question_id = ?",
-            arrayOf(bankId, qid)
-        ).use { c -> c.moveToFirst() }
-
-    /** 斩题数；[bankId] 为 null 时统计全部题库。 */
-    fun slashedCount(bankId: String? = null): Int {
-        val sql = if (bankId == null) {
-            "SELECT COUNT(*) FROM slashed"
-        } else {
-            "SELECT COUNT(*) FROM slashed WHERE bank_id = ?"
-        }
-        val args = if (bankId == null) emptyArray() else arrayOf(bankId)
-        return readableDatabase.rawQuery(sql, args).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
-    }
-
-    /** 斩题本列表；[bankId] 为 null 时跨题库取。 */
-    fun listSlashedQuestions(bankId: String? = null): List<ReviewQuestion> {
+    fun listFavorites(bankId: String? = null): List<ReviewQuestion> {
         val where = if (bankId == null) "" else " WHERE q.bank_id = ?"
         val args = if (bankId == null) emptyArray() else arrayOf(bankId)
         return readableDatabase.rawQuery(
             "SELECT q.bank_id, q.qid, q.type, q.stem, q.options, q.answer, q.chapter, " +
                 "q.explanation, q.source, q.tags FROM questions q " +
-                "JOIN slashed s ON s.bank_id = q.bank_id AND s.question_id = q.qid$where " +
-                "ORDER BY s.created_at DESC",
+                "JOIN favorites f ON f.bank_id = q.bank_id AND f.question_id = q.qid$where " +
+                "ORDER BY f.created_at DESC",
             args
         ).use { c ->
             val out = ArrayList<ReviewQuestion>()
@@ -870,6 +893,67 @@ class ReviewDatabase private constructor(context: Context) :
         ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
     }
 
+    // —— 错题本列表
+
+    /**
+     * 错题本条目：题目本身 + 它在 `wrong_book` 里的掌握数据。
+     *
+     * [status] / [level] 都是**由库里已有的列现算**的展示层派生值（见 [WrongStatus]
+     * 与 [masteryLevelOf]），不落库、不需要迁移 —— 老数据一行都不用动。
+     */
+    data class WrongBookEntry(
+        val question: ReviewQuestion,
+        val wrongCount: Int,
+        val mastered: Boolean,
+        val streak: Int,
+        /** 下次到期时刻（毫秒）。`0` = 从未排期，视为立即到期。 */
+        val dueAt: Long,
+        val lastWrongAt: Long
+    ) {
+        /** 三态：复习中 / 未掌握 / 已掌握。 */
+        val status: WrongStatus get() = wrongStatus(mastered, wrongCount)
+
+        /** 间隔复习等级：新题 / 学习中 / 较熟 / 已掌握。 */
+        val level: MasteryLevel get() = masteryLevelOf(streak, wrongCount)
+    }
+
+    /**
+     * 某题库（[bankId] 为 null 时跨库）的错题本列表，**含已掌握的题**。
+     *
+     * 刻意**不在 SQL 里过滤掌握状态**：筛选是展示层的事（[WrongStatusFilter]），
+     * 在 SQL 里过滤就得为 5 个筛选项各写一条 SQL，三态判据也会被拆到两处；
+     * 而错题本的量级是几百行，全量取回再筛没有性能问题。
+     */
+    fun listWrongBook(bankId: String? = null): List<WrongBookEntry> {
+        val where = if (bankId == null) "" else " WHERE q.bank_id = ?"
+        val args = if (bankId == null) emptyArray() else arrayOf(bankId)
+        return readableDatabase.rawQuery(
+            "SELECT q.bank_id, q.qid, q.type, q.stem, q.options, q.answer, q.chapter, " +
+                "q.explanation, q.source, q.tags, " +
+                "w.wrong_count, w.mastered, w.streak, w.due_at, w.last_wrong_at " +
+                "FROM questions q " +
+                "JOIN wrong_book w ON w.bank_id = q.bank_id AND w.question_id = q.qid$where " +
+                "ORDER BY w.last_wrong_at DESC",
+            args
+        ).use { c ->
+            val out = ArrayList<WrongBookEntry>()
+            while (c.moveToNext()) {
+                out.add(
+                    WrongBookEntry(
+                        // readQuestion 只读 0..9 列，所以必须先于下面的 10..14 列取值调用。
+                        question = readQuestion(c),
+                        wrongCount = c.getInt(10),
+                        mastered = c.getInt(11) == 1,
+                        streak = c.getInt(12),
+                        dueAt = c.getLong(13),
+                        lastWrongAt = c.getLong(14)
+                    )
+                )
+            }
+            out
+        }
+    }
+
     data class Overview(
         val total: Int,
         val answered: Int,
@@ -906,22 +990,16 @@ class ReviewDatabase private constructor(context: Context) :
         )
     }
 
-    fun dailyStats(limitDays: Int = 30): List<Pair<String, Pair<Int, Int>>> =
-        readableDatabase.rawQuery(
-            "SELECT day, answered, correct FROM daily_stats ORDER BY day DESC LIMIT ?",
-            arrayOf(limitDays.toString())
-        ).use { c ->
-            val out = ArrayList<Pair<String, Pair<Int, Int>>>()
-            while (c.moveToNext()) out.add(c.getString(0) to (c.getInt(1) to c.getInt(2)))
-            out.reversed()
-        }
-
-    private fun today(): String = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+    // 🔴 `dailyStats(limitDays)` 已随统计页一起删除（2026-10 用户要求「将查看的统计删除」）。
+    // 它的唯一调用点就是那个页面，留着就成了一段永远不执行的查询。
+    // 每日答题量这个指标目前**没有任何界面消费**，所以连写入也一并去掉了。
 
     companion object {
         private const val TAG = "ReviewDatabase"
         private const val DB_NAME = "review.db"
-        private const val DB_VERSION = 3
+        /** v4：banks 增加 selected / sort_order（题库仓库的「取出」与排序）。
+         *  v5：斩题功能下线，DROP slashed 表（历史被斩的题全部放回练习）。 */
+        private const val DB_VERSION = 5
 
         /** 错题连续答对多少次算「已掌握」。 */
         const val MASTER_STREAK = 3
@@ -952,10 +1030,19 @@ class ReviewDatabase private constructor(context: Context) :
     }
 }
 
-/** 练习模式。 */
+/**
+ * 抽题模式（**不是**界面上的"练习模式"）。
+ *
+ * 2026-10 按用户要求把 [RANDOM] 的显示名从「随机练习」改成「**乱序练习**」——
+ * 用户界面上只出现"乱序练习"这个说法，内部枚举名保持 `RANDOM` 不动
+ * （它同时是落库值，改名会让历史记录里的模式串对不上）。
+ *
+ * 注意与 `ReviewPrefs` 的「选项乱序」区分：本枚举管的是**题目顺序**，
+ * 选项乱序管的是**同一道题里 A/B/C/D 的排列**，两者互不相干。
+ */
 enum class ReviewMode(val label: String) {
     SEQUENTIAL("顺序练习"),
-    RANDOM("随机练习"),
+    RANDOM("乱序练习"),
     WRONG_FIRST("错题优先");
 
     companion object {

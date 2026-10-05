@@ -1,58 +1,61 @@
 package com.hnnujw.course.review
 
 /**
- * 题库详情页的**纯逻辑**：章节选项构造、选中章节解析、练习模式与下标互转、正确率换算。
+ * 题库详情页的**纯逻辑**：章节多选、题数汇总、正确率换算。
  *
- * 为什么全部抽成纯函数（不写进 Composable）：
- *  - 「全部章节」用 `null` 表达，而 UI 上是一个普通选项，index ↔ chapter 的映射
- *    如果在 Composable 里用 `if (index == 0) null else list[index - 1]` 手写，
- *    章节一多就极容易差一位；抽出来后可以被单测直接钉死。
- *  - `LiquidSegmentedControl` 只认下标，`pickQuestions` 只认 [ReviewMode]，
- *    两者互转也必须可测。
+ * 为什么全部抽成纯函数（不写进 Composable）：这几件事都是"算错了不会崩、只会显示假数字"
+ * 的类型 —— 例如选中 3 个章节却报出全库题数，用户在练习页发现题数对不上时，
+ * 根本不会想到是详情页的汇总写错了。抽出来就能被单测直接钉死。
+ *
+ * 2026-10 的两处结构性改动：
+ *  - **章节改成多选**。原先用「下标 → 章节名」的映射（`ChapterOption` +
+ *    `resolveSelectedChapter`），因为 UI 上「全部章节」是一个普通选项、要占一个下标。
+ *    多选后选择状态的载体变成 `Set<String>`（章节名即键），下标映射整个消失 ——
+ *    它当初存在的唯一理由（"`if (index == 0) null else list[index - 1]` 容易差一位"）
+ *    也随之消失，故 `ChapterOption` 与 `resolveSelectedChapter` 一并删除。
+ *  - **`modeIndex` / `modeAt` 删除**：那是给 `LiquidSegmentedControl` 用的下标互转，
+ *    详情页改用四档 `ModeCell` 后已无调用点（只剩单测在用，属于死代码）。
  */
 
-/** 章节选择项。[value] 为 `null` 表示「全部章节」（不按章节过滤）。 */
-data class ChapterOption(
-    val value: String?,
-    val label: String,
-    val count: Int
-)
-
-/** 「全部章节」在选项列表里的固定文案。 */
+/** 「全部章节」在界面上的文案（选中集合为空时的等价说法）。 */
 const val ALL_CHAPTERS_LABEL = "全部章节"
 
 /**
- * 把 [ReviewDatabase.chaptersWithCount] 的结果转成可渲染的选项列表。
+ * 切换一个章节的选中状态。
  *
- * 首项恒为「全部章节」（[ChapterOption.value] = null），其 [ChapterOption.count]
- * 是所有章节题数之和 —— 与题库总题数一致（未分类题也算在某一章里）。
- *
- * @param chapters 章节 → 题数，已按章节名排序（由 SQL 的 `ORDER BY chapter` 保证）。
+ * 返回新集合而不是原地改：Compose 靠**引用变化**触发重组，原地改 `MutableSet`
+ * 会让界面停在旧状态（选项不高亮），这与练习页那个"选项不高亮"的坑同源。
+ * 空集 = 「全部章节」，所以全部取消勾选就是回到不过滤。
  */
-fun chapterOptions(chapters: List<Pair<String, Int>>): List<ChapterOption> {
-    val total = chapters.sumOf { it.second }
-    return buildList {
-        add(ChapterOption(value = null, label = ALL_CHAPTERS_LABEL, count = total))
-        chapters.forEach { (name, count) ->
-            add(ChapterOption(value = name, label = name, count = count))
-        }
+fun toggleChapterSelection(selected: Set<String>, chapter: String): Set<String> =
+    if (chapter in selected) selected - chapter else selected + chapter
+
+/** 当前选择下的题数。空集（全部章节）时是全库题数。 */
+fun selectedChapterQuestionCount(
+    chapters: List<Pair<String, Int>>,
+    selected: Set<String>
+): Int =
+    if (selected.isEmpty()) {
+        chapters.sumOf { it.second }
+    } else {
+        chapters.filter { it.first in selected }.sumOf { it.second }
     }
+
+/** 当前选择的标题：空集 → 「全部章节」；单章 → 章节名；多章 → 「已选 N 章」。 */
+fun chapterSelectionLabel(selected: Set<String>): String = when {
+    selected.isEmpty() -> ALL_CHAPTERS_LABEL
+    selected.size == 1 -> selected.first()
+    else -> "已选 ${selected.size} 章"
 }
 
 /**
- * 由选中下标解析出要传给 [ReviewDatabase.pickQuestions] 的 `chapter`。
+ * 归一化成传给 [ReviewDatabase.pickQuestions] 的章节列表；空集 = 不过滤。
  *
- * 下标越界（选项为空、或选项被重算后下标未同步）一律返回 `null` = 全部章节，
- * 而不是抛异常 —— 详情页可能在章节重算的同一帧里被重组。
+ * 顺带滤掉空白项：题库里 `chapter` 字段有默认值「未分类」，但导入的数据仍可能
+ * 出现空串；空串进 SQL 的 `IN (?)` 只会白跑一趟。
  */
-fun resolveSelectedChapter(options: List<ChapterOption>, index: Int): String? =
-    options.getOrNull(index)?.value
-
-/** [ReviewMode] → [LiquidSegmentedControl] 需要的下标。 */
-fun modeIndex(mode: ReviewMode): Int = ReviewMode.entries.indexOf(mode).coerceAtLeast(0)
-
-/** 下标 → [ReviewMode]；越界回退到 [ReviewMode.SEQUENTIAL]，保证 `pickQuestions` 永远拿到合法模式。 */
-fun modeAt(index: Int): ReviewMode = ReviewMode.entries.getOrNull(index) ?: ReviewMode.SEQUENTIAL
+fun resolveSelectedChapters(selected: Set<String>): List<String> =
+    selected.filter { it.isNotBlank() }
 
 /**
  * 正确率百分比（0..100，四舍五入）。

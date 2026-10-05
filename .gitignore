@@ -171,6 +171,13 @@ promo-video
 /screenshot_domain_error.png
 /ui.xml
 output
+# 独立构建验证目录（init 脚本把 build 挪到 .build-verify/ 绕开被占的锁）：156MB 的中间产物，
+# 与 build-fresh/ 同一性质，别提交。
+.build-verify/
+# 代理/工具的本地状态（finding-ledger、hook-state、reports 等），只在本机有意义。
+.mimosa/
+# 技能市场工作区（vendor 进来的一份外部 CLI 仓库，57MB，本项目不使用）。
+plugins-workspace/
 
 # AI 助手记忆目录（含本地路径、测试凭据、设备序列号，绝不入库）
 .workbuddy/

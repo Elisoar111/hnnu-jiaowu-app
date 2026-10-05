@@ -7,6 +7,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
@@ -442,7 +444,14 @@ class MotionPolishDeviceTest {
                                 }
                             }
                             Box(Modifier.size(128.dp).testTag("optical-fixture"), contentAlignment = Alignment.Center) {
-                                if (shown.value) LiquidTaskButton("开始", "准备就绪", false, false, true, {}, false, 0f, {})
+                                // 夹具原为随抢课下线的 LiquidTaskButton；换成仍在用的玻璃圆钮，
+                                // 折射来源（LocalControlBackdrop/LocalAppBackdrop）与触点位置都不变。
+                                if (shown.value) GlassCircleButton(
+                                    onClick = {},
+                                    icon = Icons.Filled.PlayArrow,
+                                    modifier = Modifier.testTag("grab-primary-action"),
+                                    contentDescription = "开始"
+                                )
                             }
                         }
                     }

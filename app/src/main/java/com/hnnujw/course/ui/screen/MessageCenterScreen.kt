@@ -1,6 +1,7 @@
 package com.hnnujw.course.ui.screen
 
 import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -84,6 +85,10 @@ fun MessageCenterScreen(
     var error by remember { mutableStateOf<MessageError?>(null) }
     var loading by remember { mutableStateOf(true) }
     var detail by remember { mutableStateOf<DetailState?>(null) }
+    // 🔴 详情页打开时拦一下系统返回键（返回键 / 侧滑）：先回消息列表，
+    // 而不是让默认行为 finish 整个 Activity 把用户踢回「我的」页 ——
+    // 与顶栏返回箭头（detail != null 时回列表）同一口径。
+    BackHandler(enabled = detail != null) { detail = null }
     /**
      * 顶部筛选：0 = 未读（默认，在左）、1 = 已读。
      *

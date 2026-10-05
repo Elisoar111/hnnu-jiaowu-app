@@ -184,6 +184,27 @@ enum class SystemTone {
     Neutral
 }
 
+/**
+ * 展开态大标题的字号：**按标题长度降档**。
+ *
+ * 28sp 加粗的汉字一个约占 28dp 宽，20 字的课程全称（内置题库里就有
+ * 「毛泽东思想和中国特色社会主义理论体系概论」）需要约 560dp —— 即便
+ * `maxLines = 2` 也放不下，右侧会被省略号吃掉（真机报「顶栏标题显示不全」）。
+ *
+ * 短标题（≤ 8 字）保持 28sp，观感与改动前**逐字一致**；只有确实长的标题才降档，
+ * 所以不需要按页面逐个传参，也不会把课表 / 成绩这些正常页面一起改小。
+ *
+ * @param titleLength 标题的字符数（用 `String.length`，中文按 1 个字符计）。
+ */
+internal fun expandedTitleSizeSp(titleLength: Int): Float = when {
+    titleLength <= 8 -> 28f
+    titleLength <= 14 -> 24f
+    else -> 20f
+}
+
+/** 折叠态（收成细玻璃条）的字号。与 [expandedTitleSizeSp] 的下限同源。 */
+private const val CollapsedTitleSizeSp = 17f
+
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun SystemTopBar(
@@ -293,7 +314,7 @@ fun SystemTopBar(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = title,
-                        fontSize = lerpSp(28f, 17f, collapse),
+                        fontSize = lerpSp(expandedTitleSizeSp(title.length), CollapsedTitleSizeSp, collapse),
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.sp,
                         color = titleColor,

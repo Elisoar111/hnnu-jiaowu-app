@@ -145,7 +145,7 @@ fun SettingsScreen(
     onEmptyRoom: () -> Unit = {},
     /** 一卡通（校园卡余额 / 宿舍电费，只读）。 */
     onCampusCard: () -> Unit = {},
-    /** 复习（导入 JSON 题库刷题 + AI 答疑）。 */
+    /** 题库练习（从题库仓库取出题库刷题 + AI 答疑）。 */
     onReview: () -> Unit = {},
     onMessageCenter: () -> Unit = {},
     /** 公告中心未读数；> 0 时入口显示红点。 */
@@ -300,8 +300,8 @@ fun SettingsScreen(
                 SettingsRow(
                     icon = Icons.Outlined.MenuBook,
                     iconTint = Color(0xFFAF52DE),
-                    title = "复习",
-                    subtitle = "导入 JSON 题库刷题，可让 AI 讲解",
+                    title = "题库练习",
+                    subtitle = "从题库仓库取出题库刷题，可让 AI 讲解",
                     onClick = onReview,
                     showDivider = false
                 )

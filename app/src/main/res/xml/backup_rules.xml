@@ -2,11 +2,14 @@
 <!--
   Android 11 及以下的云备份规则（full-backup-content）。
 
-  这里放行的是 sharedpref / database 两个域，并显式排除**含会话凭证**的两个文件：
+  这里放行的是 sharedpref / database 两个域，并显式排除**含会话凭证 / 密钥密文**的三个文件：
 
   - secure_credentials.xml：账号密码的 Keystore 密文。密文本身离不开本机的
     AndroidKeyStore 密钥，换设备恢复后必然解不开（代码里只能删掉走"请重新登录"），
     把它传上云既没用又多一份被离线爆破的素材，直接不备份。
+  - review_ai_prefs.xml：DeepSeek API Key 的 Keystore 密文（AES/GCM，密钥同样
+    只在本机 AndroidKeyStore 里）。与上一条**完全同类** —— 此前漏了它，等于
+    同一份判断对两种数据给了两种待遇。
   - course_selector_prefs.xml：saved_cookie（当前会话 Cookie）、saved_accounts
     （每个账号一条记录，内含 Cookie）。会话 Cookie 被恢复到另一台设备 =
     任何人都能拿着它冒充已登录用户。
@@ -22,5 +25,6 @@
     <include domain="database" path="." />
 
     <exclude domain="sharedpref" path="secure_credentials.xml" />
+    <exclude domain="sharedpref" path="review_ai_prefs.xml" />
     <exclude domain="sharedpref" path="course_selector_prefs.xml" />
 </full-backup-content>

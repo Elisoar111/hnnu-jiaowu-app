@@ -23,19 +23,29 @@ data class ExamTiming(val durationSeconds: Int) {
 }
 
 /**
- * 「限时考试」时长档位的纯数据（放这里而不是 Composable，便于复用与单测）。
+ * 「考试」时长的预设档（**分钟**）。放这里而不是 Composable，便于复用与单测。
  *
- * 第一档固定「不限时」(`seconds = 0`)，与 [ExamTiming] 的关闭约定一致。
+ * 🔴 这里**刻意没有「不限时」**。上一版的档位是「不限时 / 20 / 30 / 60」，于是
+ * 必须处理"选了不限时怎么办"—— 那时「考试模拟」与「顺序练习」完全等价，只能在界面上
+ * 把它禁用掉并解释原因。2026-10 用户要求改成滚轮选模式之后，时长只在选中「考试」时
+ * 才出现，而"不限时的考试"本身就不成立，所以这一档直接删掉，那条禁用逻辑也随之消失。
  */
-data class ExamDurationOption(val label: String, val seconds: Int)
+val ExamDurationPresetsMinutes: List<Int> = listOf(10, 20, 30, 45, 60, 90, 120)
 
-/** 界面下拉的时长档位：不限时 / 20 / 30 / 60 分钟。 */
-val ExamDurationOptions: List<ExamDurationOption> = listOf(
-    ExamDurationOption("不限时", 0),
-    ExamDurationOption("20 分钟", 20 * 60),
-    ExamDurationOption("30 分钟", 30 * 60),
-    ExamDurationOption("60 分钟", 60 * 60)
-)
+/**
+ * 自定义时长的可选分钟数：5…300，步进 5。
+ *
+ * 步进 5 而不是 1：滚轮里 60 行比 296 行好扫得多，而考试时长本来也不需要分钟级精度。
+ * 下界 5 是"再短就没法做题了"，上界 300 是"5 小时已经远超任何校内考试"。
+ */
+val CustomDurationMinutes: List<Int> = (5..300 step 5).toList()
+
+/**
+ * 时长文案。统一用「N 分钟」，是 60 的倍数也**不**折算成小时 ——
+ * 考试场景里说"60 分钟"比说"1 小时"常见，且折算会让同一份滚轮里
+ * 混着"30 分钟""1 小时"两种单位，扫读时要换算。
+ */
+fun durationLabel(minutes: Int): String = "$minutes 分钟"
 
 /** 不限时（或时长非法）时 `remainingSeconds` 的返回值，取 Int 上界当"无限"。 */
 private const val UNLIMITED_REMAINING: Int = Int.MAX_VALUE

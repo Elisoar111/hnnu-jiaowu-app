@@ -22,9 +22,12 @@ class MessageCheckReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext
-        // 这些系统事件会把已排的闹钟清掉，收到就重排一次
+        // 系统事件（开机/更新/改时间）会清掉已排的闹钟：按持久化时刻恢复；
+        // 本轮巡检闹钟触发（ACTION_CHECK）：立即续期下一轮 —— 链式闹钟靠这里保持不断。
         if (intent.action != MessageCenterNotifier.ACTION_CHECK) {
             MessageCenterNotifier.schedule(app)
+        } else {
+            MessageCenterNotifier.scheduleNext(app)
         }
         val pending = goAsync()
         UserManager.getInstance().init(app)

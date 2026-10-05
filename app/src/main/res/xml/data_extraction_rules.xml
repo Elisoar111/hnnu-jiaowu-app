@@ -2,8 +2,9 @@
 <!--
   Android 12+ 的备份 / 迁移规则（data-extraction-rules）。
 
-  两条通道都排除含会话凭证的两个文件，理由见 backup_rules.xml：
+  两条通道都排除含会话凭证 / 密钥密文的三个文件，理由见 backup_rules.xml：
   - secure_credentials.xml：Keystore 密文，换设备必然解不开，备份无意义且有风险。
+  - review_ai_prefs.xml：DeepSeek API Key 的 Keystore 密文，与上一条完全同类。
   - course_selector_prefs.xml：saved_cookie / saved_accounts（内嵌 Cookie），
     落到别的设备等于会话可以直接被复用。
 
@@ -15,12 +16,14 @@
         <include domain="sharedpref" path="." />
         <include domain="database" path="." />
         <exclude domain="sharedpref" path="secure_credentials.xml" />
+        <exclude domain="sharedpref" path="review_ai_prefs.xml" />
         <exclude domain="sharedpref" path="course_selector_prefs.xml" />
     </cloud-backup>
     <device-transfer>
         <include domain="sharedpref" path="." />
         <include domain="database" path="." />
         <exclude domain="sharedpref" path="secure_credentials.xml" />
+        <exclude domain="sharedpref" path="review_ai_prefs.xml" />
         <exclude domain="sharedpref" path="course_selector_prefs.xml" />
     </device-transfer>
 </data-extraction-rules>

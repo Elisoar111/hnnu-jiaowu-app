@@ -7,9 +7,18 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -309,4 +318,66 @@ internal fun DrawScope.drawLineGlyph(
             line(12f, 14f, 12f, 17f)
         }
     }
+}
+
+/**
+ * 把 `ImageVector` 映射到本地手绘线稿图标；映射表是**显式白名单**，
+ * 认不出来就返回 null（调用方退回普通 [androidx.compose.material3.Icon]）。
+ *
+ * ⚠️ 刻意不做"按图标名推断"：图标名与视觉语义并不一一对应，推断出来的结果
+ * 会在某次 material-icons 升级后静默变成另一套动画。
+ *
+ * 原在 `AnimatedStateIcon.kt`；抢课功能下线后该文件只剩这两个成员还有真实调用点，
+ * 故并入本文件（图标相关管线集中一处），文件本体删除。
+ */
+fun animatedIconSpec(icon: ImageVector): AnimatedIconSpec? = when (icon) {
+    Icons.Filled.Refresh, Icons.Filled.Sync, Icons.Outlined.Refresh -> AnimatedIconSpec.Refresh
+    Icons.Filled.Settings, Icons.Outlined.Settings -> AnimatedIconSpec.Settings
+    Icons.Filled.FilterList, Icons.Outlined.FilterList, Icons.Filled.FilterAlt -> AnimatedIconSpec.Filter
+    Icons.Filled.Share, Icons.Outlined.Share -> AnimatedIconSpec.Share
+    Icons.Filled.Edit, Icons.Outlined.Edit -> AnimatedIconSpec.Edit
+    Icons.Filled.Delete, Icons.Outlined.Delete, Icons.Filled.DeleteSweep -> AnimatedIconSpec.Delete
+    Icons.Filled.Undo -> AnimatedIconSpec.Undo
+    Icons.Filled.Add, Icons.Filled.AddCircleOutline -> AnimatedIconSpec.Add
+    Icons.Filled.Close, Icons.Outlined.Close -> AnimatedIconSpec.Close
+    Icons.Filled.Search, Icons.Outlined.Search -> AnimatedIconSpec.Search
+    Icons.Filled.KeyboardArrowDown, Icons.Filled.ExpandMore -> AnimatedIconSpec.Chevron
+    Icons.Filled.KeyboardArrowUp, Icons.Filled.ExpandLess -> AnimatedIconSpec.ChevronUp
+    Icons.AutoMirrored.Filled.ArrowBack, Icons.AutoMirrored.Filled.KeyboardArrowLeft -> AnimatedIconSpec.Back
+    Icons.AutoMirrored.Filled.ArrowForward, Icons.AutoMirrored.Filled.KeyboardArrowRight -> AnimatedIconSpec.Forward
+    Icons.Filled.Visibility, Icons.Filled.VisibilityOff -> AnimatedIconSpec.Eye
+    Icons.Filled.Lock, Icons.Outlined.Lock -> AnimatedIconSpec.Lock
+    Icons.Filled.PlayArrow, Icons.Filled.Stop -> AnimatedIconSpec.PlayStop
+    Icons.Filled.Pause -> AnimatedIconSpec.Pause
+    Icons.Filled.Check, Icons.Filled.CheckCircleOutline -> AnimatedIconSpec.Check
+    Icons.Filled.Schedule, Icons.Filled.AccessTime -> AnimatedIconSpec.Clock
+    Icons.Filled.Notifications, Icons.Outlined.Notifications -> AnimatedIconSpec.Bell
+    Icons.Filled.DateRange, Icons.Outlined.DateRange, Icons.Filled.CalendarMonth -> AnimatedIconSpec.Calendar
+    Icons.Filled.LocationOn, Icons.Outlined.LocationOn -> AnimatedIconSpec.Location
+    Icons.Filled.Person, Icons.Outlined.Person -> AnimatedIconSpec.Person
+    Icons.Filled.MoreVert, Icons.Filled.MoreHoriz -> AnimatedIconSpec.More
+    Icons.Filled.Warning, Icons.Outlined.Warning -> AnimatedIconSpec.Warning
+    else -> null
+}
+
+/**
+ * 给一个 material 图标配上入场动画；认不出来（[animatedIconSpec] 返回 null）时
+ * 原样画普通 [Icon]，不硬套一套不相干的动画。
+ */
+@Composable
+fun ActionLineIcon(
+    icon: ImageVector,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    tint: Color = LocalContentColor.current,
+    event: Int = 0,
+    state: IconVisualState? = null
+) {
+    val spec = remember(icon) { animatedIconSpec(icon) }
+    if (spec == null) Icon(icon, contentDescription, modifier, tint)
+    else AnimatedLineIcon(spec, modifier, state = state ?: when (icon) {
+        Icons.Filled.Stop -> IconVisualState.Running
+        Icons.Filled.Visibility -> IconVisualState.Selected
+        else -> IconVisualState.Idle
+    }, description = contentDescription, tint = tint, event = event)
 }

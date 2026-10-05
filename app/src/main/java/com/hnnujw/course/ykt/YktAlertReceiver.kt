@@ -36,9 +36,13 @@ class YktAlertReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
         val app = context.applicationContext
-        // 系统事件（开机/更新/改时间）会清掉已排的闹钟，收到就重排一次
+        // 系统事件（开机/更新/改时间）会清掉已排的闹钟：按持久化时刻恢复；
+        // 本轮巡检闹钟触发（ACTION）：立即续期下一轮 —— 链式闹钟靠这里保持不断。
+        // 两件事都在 onReceive 开头做，巡检成败不影响"下一轮一定有"。
         if (intent?.action != YktAlertScheduler.ACTION) {
             YktAlertScheduler.schedule(app)
+        } else {
+            YktAlertScheduler.scheduleNext(app)
         }
 
         if (!YktAlertSettings.isEnabled(app)) return

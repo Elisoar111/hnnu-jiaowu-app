@@ -20,15 +20,14 @@ import com.hnnujw.course.YktActivity
  * 与 [com.hnnujw.course.network.UpdateNotifier] / [com.hnnujw.course.academic.MessageCenterNotifier]
  * 同构。
  *
- * ## 提醒频率（2026-09-25 用户要求后调整）
+ * ## 提醒频率（2026-09-25 用户要求后调整；2026-10-05 加同余额节流）
  *
- * **只要低于阈值就提醒，不限制次数**（见 [YktAlertPolicy.decide]）。
- * 实际频率受后台巡检周期约束——[YktAlertScheduler] 是**一天一次**，
- * 所以最坏情况是每天一条，不会刷屏。
+ * **只要余额低于阈值就提醒**——但同一余额在 24 小时内不重复发
+ * （见 [YktAlertPolicy.decide]）。巡检是**六小时一轮**（[YktAlertScheduler]），
+ * 所以：余额持续下降时最坏一天 4 条（余额在掉本来就该催），余额不动时一天一条。
  *
  * 通知 id 仍是固定值：同一 id 的新通知会**覆盖**旧的，
- * 所以用户通知栏里始终只有一条最新余额（而不是堆 N 条）——
- * 这正是"每次都提醒"却又不打扰的关键。
+ * 所以用户通知栏里始终只有一条最新余额（而不是堆 N 条）。
  *
  * 渠道用 `IMPORTANCE_HIGH`：电费欠费会导致宿舍断电，属于需要立即知道的事。
  * **渠道 importance 创建后改不动**（本项目已踩过：强提醒必须新建渠道），
@@ -54,7 +53,7 @@ object YktAlertNotifier {
     ): Boolean {
         val app = context.applicationContext
         val previous = YktAlertStateStore.read(app, accountKey)
-        val decision = YktAlertPolicy.decide(balance, threshold, previous)
+        val decision = YktAlertPolicy.decide(balance, threshold, previous, System.currentTimeMillis())
 
         // 状态无条件落盘：即使不发通知，"余额已回升 → 重置"这一步也必须记住，
         // 否则下一次跌破会被当成"仍在同一周期"而漏报。

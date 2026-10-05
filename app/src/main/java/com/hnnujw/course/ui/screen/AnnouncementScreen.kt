@@ -1,5 +1,6 @@
 package com.hnnujw.course.ui.screen
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -52,6 +53,7 @@ import com.hnnujw.course.ui.system.SystemLoadingState
 import com.hnnujw.course.ui.system.SystemSegmentedControl
 import com.hnnujw.course.ui.system.SystemStatusBadge
 import com.hnnujw.course.ui.system.SystemTone
+import com.hnnujw.course.ui.system.sanitizeMarkdown
 import com.hnnujw.course.ui.theme.NeuPrimary
 import com.hnnujw.course.ui.theme.SemanticDanger
 import com.hnnujw.course.ui.theme.SemanticWarning
@@ -74,6 +76,10 @@ fun AnnouncementScreen(onBack: () -> Unit) {
     val context = LocalContext.current
 
     var detail by remember { mutableStateOf<AnnouncementManager.Announcement?>(null) }
+    // 🔴 详情页打开时拦一下系统返回键（返回键 / 侧滑）：先回公告列表，
+    // 而不是让默认行为 finish 整个 Activity 把用户踢回「我的」页 ——
+    // 与顶栏返回箭头（onBack 里 detail != null 时回列表）同一口径。
+    BackHandler(enabled = detail != null) { detail = null }
     /** 顶部筛选：0 = 未读（默认）、1 = 已读 / 历史。理由同消息中心：进来是想看还有什么没看。 */
     var filterTab by remember { mutableIntStateOf(0) }
 
@@ -258,7 +264,8 @@ private fun AnnouncementDetailView(announcement: AnnouncementManager.Announcemen
             Box(Modifier.padding(14.dp)) {
                 if (announcement.contentType == "markdown") {
                     Material3RichText(modifier = Modifier.fillMaxWidth()) {
-                        Markdown(content = announcement.content)
+                        // 与 MarkdownText 走同一道清洗，避免不成对的星号原样露出来。
+                        Markdown(content = sanitizeMarkdown(announcement.content))
                     }
                 } else {
                     // 显式写 lineHeight：MaterialTheme 的 bodyMedium 行高是给紧凑版式用的，

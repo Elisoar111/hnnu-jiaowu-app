@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -68,7 +70,7 @@ fun BankQuestionEditScreen(
 
     suspend fun reload() {
         val result = withContext(Dispatchers.IO) {
-            db.listBanks().firstOrNull { it.id == bankId }?.name.orEmpty() to db.listQuestions(bankId)
+            db.bankName(bankId) to db.listQuestions(bankId)
         }
         bankName = result.first
         questions.clear()
@@ -109,7 +111,14 @@ fun BankQuestionEditScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = padding.calculateTopPadding() + 8.dp, start = 16.dp, end = 16.dp),
+                .padding(
+                    top = padding.calculateTopPadding() + 8.dp,
+                    // 🔴 底部必须吃掉 scaffold 的 bottom inset：漏掉它，末位内容会被系统
+                    // 导航条压住，表现为「底部内容被截断、要上滑才看得全」（2026-10 用户报）。
+                    bottom = padding.calculateBottomPadding() + 24.dp,
+                    start = 16.dp,
+                    end = 16.dp
+                ),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // 批量选择工具行：**常显**（入口不按状态条件隐藏 —— 项目红线），
@@ -162,14 +171,18 @@ fun BankQuestionEditScreen(
                 )
             }
 
-            Column(
+            // 🔴 列表必须**懒加载**：1059 题的库如果用 Column + verticalScroll 全量
+            // forEach，进页面就一次性组合全部题卡，卡顿肉眼可见。头部工具行常驻固定、
+            // LazyColumn 独立滚动 —— 千万别给外层 Column 加 verticalScroll，那会与
+            // LazyColumn 形成**同轴嵌套滚动**（子节点收到 Infinity 高度约束，
+            // ScrollNode 抛异常崩进程，本项目踩过）。
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 480.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                questions.forEach { q ->
+                items(questions, key = { it.id }) { q ->
                     Card {
                         Row(
                             modifier = Modifier.fillMaxWidth(),

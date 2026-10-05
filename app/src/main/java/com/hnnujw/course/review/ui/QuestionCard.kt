@@ -12,14 +12,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -33,6 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hnnujw.course.review.PracticeSession
 import com.hnnujw.course.review.ReviewQuestion
+import com.hnnujw.course.review.displayOptions
+import com.hnnujw.course.review.toDisplayAnswer
 import com.hnnujw.course.ui.system.GlassCircleButton
 
 /**
@@ -52,9 +50,6 @@ fun QuestionCard(
     onToggleFavorite: () -> Unit,
     onAskAi: () -> Unit,
     aiEnabled: Boolean,
-    /** 本题是否已斩（只影响按钮图标与提示，不影响作答）。 */
-    slashed: Boolean = false,
-    onToggleSlash: () -> Unit = {},
     /**
      * 背题模式：进来就直接摊开答案与解析，不要求作答。
      *
@@ -79,10 +74,21 @@ fun QuestionCard(
     // 揭晓 = 已判分 或 背题模式。选项着色、答案/解析展示都看它。
     val revealed = judged || memorize
 
+    // 🔴 这里**绝不能**再挂 Modifier.verticalScroll（曾经的线上事故）。
+    //
+    // 本组件的调用方 PracticeScreen 已经在一个 `Column(Modifier.verticalScroll(...))` 里，
+    // 而 Compose 的 ScrollNode 会把子节点按 `maxHeight = Infinity` 去测量。于是本组件
+    // 自己的 ScrollNode 一收到无限高约束，就会在
+    // `CheckScrollableContainerConstraintsKt.checkScrollableContainerConstraints` 里
+    // 抛 IllegalArgumentException（"Vertically scrollable component was measured with an
+    // infinity maximum height constraints"）—— 抛出点在**测量阶段**，Compose 接不住，
+    // 直接崩进程。用户看到的就是"点开始练习 → 退回到课表页"（进程被杀后重启回主页）。
+    //
+    // 同轴嵌套滚动本身也没有意义：外层能滚时内层滚不动，外层滚不动时内容被裁。
+    // 滚动统一由调用方承担。
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp)
     ) {
         // 题干 + 收藏
@@ -94,16 +100,6 @@ fun QuestionCard(
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            // 斩题：一眼就会的题一刀移出后续练习。**斩 ≠ 已掌握** —— 只影响练习范围，
-            // 不改变掌握度与错题本（见 SlashPolicy）。
-            GlassCircleButton(
-                onClick = onToggleSlash,
-                icon = if (slashed) Icons.Filled.Delete else Icons.Outlined.Delete,
-                contentDescription = if (slashed) "放回练习" else "斩题（移出后续练习）",
-                tint = if (slashed) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.width(8.dp))
             GlassCircleButton(
@@ -126,44 +122,64 @@ fun QuestionCard(
 
         Spacer(Modifier.height(14.dp))
 
-        // 选项
-        question.options.forEachIndexed { index, option ->
-            val letter = ('A' + index).toString()
-            val picked = answer.contains(letter)
+        // 选项。**显示序与数据序分离**（见 OptionShuffle.kt）：
+        //  - 界面上的字母用 option.letter（按显示位置重新编号的 A/B/C…）；
+        //  - 已选判定 / 正确项判定 / 回调全部用 option.originalLetter（题库原始字母）。
+        // 乱序关闭时两者恒等，渲染结果与从前逐字一致。
+        val display = remember(question, session.shuffleOptions, session.shuffleSeed) {
+            displayOptions(question, session.shuffleOptions, session.shuffleSeed)
+        }
+        display.forEach { option ->
+            val picked = answer.contains(option.originalLetter)
+            val isCorrectOption = question.answer.contains(option.originalLetter)
             OptionRow(
-                letter = letter,
-                text = option,
+                letter = option.letter,
+                text = option.text,
                 state = when {
                     !revealed && picked -> OptionState.PICKED
-                    revealed && letter in question.answer -> OptionState.CORRECT
+                    revealed && isCorrectOption -> OptionState.CORRECT
                     revealed && picked -> OptionState.WRONG
                     else -> OptionState.IDLE
                 },
                 enabled = !revealed,
                 multi = question.isMulti,
-                onClick = { onSelect(letter) }
+                onClick = { onSelect(option.originalLetter) }
             )
             Spacer(Modifier.height(8.dp))
         }
 
-        // 确认 / 撤回
+        // 确认
         if (!revealed) {
             Spacer(Modifier.height(4.dp))
             ConfirmButton(
                 enabled = answer.isNotBlank(),
-                text = if (question.isMulti) "提交答案" else "确认答案",
+                // 🔴 一律叫「确认答案」。2026-10 之前这里按题型分了两种字样 ——
+                // 单选「确认答案」、多选「提交答案」。同一个动作在一页里有两个名字，
+                // 用户会以为多选那颗是"交卷"（2026-10 用户要求统一）。
+                text = "确认答案",
                 onClick = onConfirm
             )
         } else {
             Spacer(Modifier.height(8.dp))
             if (judged) {
-                VerdictBanner(correct = correct, answer = question.answer, userAnswer = answer)
+                // ⚠️ 答案条里的字母必须是**显示字母** —— 用户看到的是打乱后的排列，
+                // 报原始字母等于让他去数一个屏幕上不存在的顺序。
+                // 判分本身走的是原始字母（PracticeSession 里），这里只是翻译给眼睛看。
+                VerdictBanner(
+                    correct = correct,
+                    answer = toDisplayAnswer(question.answer, display),
+                    userAnswer = toDisplayAnswer(answer, display)
+                )
             } else {
                 // 背题模式：用户没作答，所以不判对错，直接摊开正确答案。
-                AnswerBanner(answer = question.answer)
+                AnswerBanner(answer = toDisplayAnswer(question.answer, display))
             }
             if (question.explanation.isNotBlank()) {
                 Spacer(Modifier.height(10.dp))
+                // ⚠️ 已知限制：解析正文里若写死了「A 项…」这类字母引用，乱序后会对不上。
+                // 解析是题库作者写的自由文本，没有可靠的办法把其中的字母引用重映射
+                // （正则会把「A 股」「A4 纸」这类词一起改掉，比不改更糟）。
+                // 因此乱序设置下，字母引用的解析可能错位 —— 答案条里的字母始终是对的。
                 Text(
                     text = question.explanation,
                     fontSize = 14.sp,

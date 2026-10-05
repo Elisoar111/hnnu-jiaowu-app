@@ -52,6 +52,12 @@ object MessageCenterNotifier {
     /** 自动巡检的最小间隔：**12 小时一次**。 */
     private const val MIN_INTERVAL_MS = 12 * 60 * 60 * 1000L
 
+    /** 冷启动发现"该巡检了但闹钟没触发"（进程死亡超期 / 闹钟被清）时的补跑延迟。 */
+    private const val CATCH_UP_DELAY_MS = 30_000L
+
+    /** 下一轮巡检触发时刻的持久化键（全局，不按账号——闹钟本身也是全局一颗）。 */
+    private const val KEY_NEXT_TRIGGER = "next_trigger_at"
+
     /** 后台闹钟的动作名。 */
     const val ACTION_CHECK = "com.hnnujw.course.action.MESSAGE_CHECK"
 
@@ -62,29 +68,48 @@ object MessageCenterNotifier {
     private const val NOTIFICATION_ID = 0x4D53
 
     /**
-     * 排/重排 12 小时一次的后台巡检闹钟。
+     * 确保下一轮巡检已排上（冷启动 / 系统事件时调用）。
      *
-     * 用 `setInexactRepeating` 而不是 exact：消息提醒晚十几分钟毫无影响，
-     * 而 exact 在 Android 12+ 需要用户在系统里额外授权"闹钟与提醒"权限，
-     * 为一条教务通知付这个代价不值得。
+     * ## 🔴 为什么不是 `setInexactRepeating(RTC_WAKEUP, now + 12h, 12h)`
      *
-     * 开机、应用更新、时区变化都会重新调用它 —— 这些事件会把已排的闹钟清掉。
-     * 重复调用是安全的：`FLAG_UPDATE_CURRENT` + 同一个 requestCode 会覆盖。
+     * 旧写法在每次进程冷启动（CourseApplication.onCreate）都会把首次触发时刻重置成
+     * `now + 12h` —— 用户每天打开 App 的场景下，巡检闹钟**永远到不了触发点**，
+     * "App 没打开也能发现新消息"对活跃用户形同虚设（2026-10 横向排查发现，
+     * 与电费巡检同型）。
+     *
+     * 现在是「**恢复**而不是重排」：下一轮触发时刻持久化（[KEY_NEXT_TRIGGER]），
+     * 冷启动按存储值排；存储值已过期（进程死亡超过一个周期）→ 尽快补跑一轮。
+     * 巡检触发后由 [MessageCheckReceiver] 调 [scheduleNext] 自我续期。
+     *
+     * 用 `setAndAllowWhileIdle` 而不是 exact：消息提醒晚十几分钟毫无影响，
+     * 而 exact 在 Android 12+ 需要用户额外授权"闹钟与提醒"权限。
      */
     fun schedule(context: Context) {
+        scheduleAt(context, storedNextTrigger(context))
+    }
+
+    /** 巡检触发完成后的自我续期：下一轮 = 现在 + 12 小时。 */
+    fun scheduleNext(context: Context) {
+        scheduleAt(context, System.currentTimeMillis() + MIN_INTERVAL_MS)
+    }
+
+    private fun scheduleAt(context: Context, triggerAt: Long) {
         val app = context.applicationContext
         val alarmManager = app.getSystemService(android.app.AlarmManager::class.java) ?: return
+        val now = System.currentTimeMillis()
+        // 存储时刻仍在未来 → 原样恢复；已过期（错过）→ 尽快补跑一轮。
+        val trigger = if (triggerAt > now) triggerAt else now + CATCH_UP_DELAY_MS
         val pending = checkIntent(app)
-        val first = System.currentTimeMillis() + MIN_INTERVAL_MS
         try {
-            alarmManager.setInexactRepeating(
+            alarmManager.setAndAllowWhileIdle(
                 android.app.AlarmManager.RTC_WAKEUP,
-                first,
-                MIN_INTERVAL_MS,
+                trigger,
                 pending
             )
+            app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                .edit().putLong(KEY_NEXT_TRIGGER, trigger).apply()
         } catch (_: SecurityException) {
-            // 个别 ROM 会拦重复闹钟；退化成"只在打开应用时巡检"，不影响主流程
+            // 个别 ROM 会拦 AlarmManager；退化成"只在打开应用时巡检"，不影响主流程
             runCatching { alarmManager.cancel(pending) }
         }
     }
@@ -98,7 +123,14 @@ object MessageCenterNotifier {
             alarmManager.cancel(pending)
             pending.cancel()
         }
+        app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            .edit().remove(KEY_NEXT_TRIGGER).apply()
     }
+
+    private fun storedNextTrigger(context: Context): Long =
+        context.applicationContext
+            .getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            .getLong(KEY_NEXT_TRIGGER, 0L)
 
     private fun checkIntent(context: Context): android.app.PendingIntent {
         val intent = Intent(context, MessageCheckReceiver::class.java).setAction(ACTION_CHECK)

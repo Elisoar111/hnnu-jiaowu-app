@@ -302,11 +302,20 @@
 
         <!-- 考前 24 小时提醒（一次性闹钟）；开机 / 更新 / 改时间后按本地考试缓存重排。 -->
         <!-- 版本巡检：App 没打开时也能发现新版本并弹系统通知。
-             AlarmManager 每天唤一次，收到后自己排下一次（见 UpdateCheckScheduler）。
-             不依赖登录态，因此不需要任何 intent-filter。 -->
+             链式闹钟每天唤一次，收到后按持久化时刻续期（见 UpdateCheckScheduler）。
+             🔴 开机 / 应用更新 / 改时间会把闹钟清掉，必须靠这些广播恢复 ——
+             此前没有 intent-filter，重启后后台巡检彻底失联（2026-10 横向排查发现）。 -->
         <receiver
             android:name=".network.UpdateCheckReceiver"
-            android:exported="false" />
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.hnnujw.course.action.CHECK_UPDATE" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
         <receiver android:name=".schedule.ExamReminderReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="com.hnnujw.course.action.EXAM_REMINDER" />

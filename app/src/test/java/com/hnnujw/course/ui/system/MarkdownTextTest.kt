@@ -1,5 +1,6 @@
 package com.hnnujw.course.ui.system
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -97,5 +98,74 @@ class MarkdownTextTest {
     fun `正文中间出现加粗也算`() {
         // 更新说明里加粗常常出现在段落中部，不在行首。
         assertTrue(looksLikeMarkdown("第一行没有标记\n第二行有 **加粗** 内容"))
+    }
+
+    // ── 清洗：不成对的星号不能原样露给用户 ──────────────────────────────────
+    //
+    // 2026-10 用户报「软件里 md 的残留 `****`」。根因是 `looksLikeMarkdown` 只认**成对**的
+    // 加粗，于是不成对的星号会被判成"这段不是 Markdown"而走纯文本分支，原样显示。
+    // 三种来源：空加粗、流式输出中途的半截标记、作者/模型打了一半就换行。
+
+    @Test
+    fun `空加粗被清掉`() {
+        assertEquals("", sanitizeMarkdown("****"))
+        // 空加粗夹在正文里：星号没了，正文一个字不动。
+        assertEquals("这一段没有任何标记", sanitizeMarkdown("这一段没有****任何标记"))
+        // `** **` 只删标记，**中间的空白留着** —— 它是两个词之间的分隔，
+        // 顺手删掉会把「前 后」粘成「前后」。
+        assertEquals("前 后", sanitizeMarkdown("前** **后"))
+    }
+
+    @Test
+    fun `流式输出中途的半截标记被清掉`() {
+        // 收尾的 ** 还没到 —— 这是流式上屏时最常出现的形态。
+        assertEquals("一、解析：这道题", sanitizeMarkdown("**一、解析：这道题"))
+        // 反向：开头丢了（模型把收尾标记打成了开头）。
+        assertEquals("这道题的答案是 B", sanitizeMarkdown("这道题的答案是 B**"))
+    }
+
+    @Test
+    fun `成对的加粗一个字符都不改`() {
+        assertEquals("**选课功能本版起下线**，请改用教务网页", sanitizeMarkdown("**选课功能本版起下线**，请改用教务网页"))
+        assertEquals("**a**、**b** 都加粗", sanitizeMarkdown("**a**、**b** 都加粗"))
+        // 三颗星（粗+斜）也是合法标记，不动。
+        assertEquals("***粗斜体***", sanitizeMarkdown("***粗斜体***"))
+    }
+
+    @Test
+    fun `落在中间的孤立星号不动，避免把幂运算改坏`() {
+        // 只删"片段首尾"的孤立标记。`2**3` 里的星号在中间，删掉会把 2**3 变成 23 ——
+        // 那比留着星号更糟。
+        assertEquals("2**3", sanitizeMarkdown("2**3"))
+        assertEquals("**a** 和 2**3", sanitizeMarkdown("**a** 和 2**3"))
+    }
+
+    @Test
+    fun `代码片段里的星号是内容不是标记`() {
+        // 行内代码：**kwargs 这类写法不能被当成"空加粗"删掉。
+        assertEquals("传 `**kwargs` 进去", sanitizeMarkdown("传 `**kwargs` 进去"))
+        // 收尾反引号还没到（同样是流式中途）：剩下的全当代码，原样抄。
+        assertEquals("传 `**kwargs", sanitizeMarkdown("传 `**kwargs"))
+        // 围栏代码块整段跳过。
+        val fenced = "```\na ** b\n****\n```"
+        assertEquals(fenced, sanitizeMarkdown(fenced))
+    }
+
+    @Test
+    fun `不含星号的文本逐字返回`() {
+        val plain = "卡内余额、账户总额、宿舍电费与按月消费汇总，全部只读。"
+        assertEquals(plain, sanitizeMarkdown(plain))
+        assertEquals("", sanitizeMarkdown(""))
+    }
+
+    @Test
+    fun `清洗后的文本不会再被误判成 Markdown`() {
+        // 清洗前 `****` 不构成加粗，looksLikeMarkdown 本来就判 false；关键是清洗后
+        // 文本里**没有星号**，用户不会再看到残留。
+        assertEquals("", sanitizeMarkdown("****"))
+        // 流式的半截标记清掉之后，剩下的是纯中文 ⇒ 继续走普通 Text，版式不变。
+        assertFalse(looksLikeMarkdown(sanitizeMarkdown("**一、解析：这道题")))
+        // 成对的加粗清洗后仍然是 Markdown ⇒ 继续走富文本。
+        assertTrue(looksLikeMarkdown(sanitizeMarkdown("**选课功能本版起下线**")))
     }
 }

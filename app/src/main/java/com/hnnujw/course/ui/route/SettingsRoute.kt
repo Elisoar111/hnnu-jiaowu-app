@@ -149,11 +149,9 @@ fun SettingsRoute(
     var currentAccountKey by remember { mutableStateOf("") }
     var canRefreshCookie by remember { mutableStateOf(false) }
     val session by UserManager.getInstance().sessionState.state.collectAsState()
-    var cookieUpdateFeedback by remember {
-        mutableStateOf<Pair<com.hnnujw.course.manager.SessionToken, com.hnnujw.course.ui.system.SymbolResult>?>(null)
-    }
-    val cookieUpdateResult = cookieUpdateFeedback?.takeIf { it.first == session.token }?.second
-        ?: com.hnnujw.course.ui.system.SymbolResult.None
+    // 「手动更新登录状态」的结果反馈原本走一个 SymbolResult 状态，喂给已随抢课一起
+    // 下线的状态图标组件；组件删掉后这个状态**写进去没人读**，故整体移除 ——
+    // 结果提示仍由下面的 GlassToaster 承担，用户侧行为不变。
     val recovery by com.hnnujw.course.utils.SessionRenewer.state.collectAsState()
     val isRefreshingCookie = recovery.token == session.token &&
         recovery.phase == com.hnnujw.course.utils.RecoveryPhase.Restoring
@@ -459,21 +457,18 @@ fun SettingsRoute(
     
     fun refreshCookieManually() {
         if (isDemoMode || isRefreshingCookie) return
-        cookieUpdateFeedback = null
         val user = UserManager.getInstance()
         val expected = user.sessionState.token
         com.hnnujw.course.utils.SessionRenewer.request(expected, manual = true) { result ->
             when (result) {
                 is com.hnnujw.course.utils.SessionRecoveryResult.Recovered -> {
                     if (user.sessionState.isCurrent(result.token)) {
-                        cookieUpdateFeedback = result.token to com.hnnujw.course.ui.system.SymbolResult.Success
                         refreshAccountUiState()
                         GlassToaster.show("登录状态已更新")
                     }
                 }
                 is com.hnnujw.course.utils.SessionRecoveryResult.NeedsLogin -> {
                     if (user.sessionState.isCurrent(expected)) {
-                        cookieUpdateFeedback = expected to com.hnnujw.course.ui.system.SymbolResult.Failure
                         GlassToaster.show(
                         when (result.reason) {
                             com.hnnujw.course.utils.RecoveryFailure.Network -> "暂时无法连接，请稍后重试"

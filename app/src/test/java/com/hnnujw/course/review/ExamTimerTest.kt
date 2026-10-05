@@ -198,51 +198,74 @@ class ExamTimerTest {
     }
 
     @Test
-    fun `超时交卷把未判分的题计为未作答`() {
+    fun `超时交卷时没碰过的题仍计为未作答`() {
         val session = PracticeSession(
             listOf(question("1"), question("2"), question("3")),
             timing = ExamTiming(60),
             startedAt = 1_000L
         )
-        // 只答对并判分第 1 题，其余动都没动。
+        // 只答对并判分第 1 题，其余**从头到尾没碰过**。
         session.select(session.questions[0], "A")
         session.judge(session.questions[0])
 
-        val result = session.resultForTimeout()
+        // 交卷（到点自动 / 手动是同一条路径）：没碰过的题不该被补判成错。
+        assertEquals(emptyList<ReviewQuestion>(), session.judgePending())
+
+        val result = session.result()
         assertEquals(3, result.total)
         assertEquals(1, result.answered)
         assertEquals(1, result.correct)
         assertEquals(0, result.wrong)
-        // 未判分的两题计为未作答 —— 不算错，正确率分母仍是已判分的 1 题。
+        // 没碰过的两题计为未作答 —— 不算错，正确率分母仍是已判分的 1 题。
         assertEquals(2, result.unjudged)
         assertEquals(1f, result.accuracy, 0.0001f)
     }
 
     @Test
-    fun `超时交卷与正常交卷对已判分题结果一致`() {
+    fun `超时交卷会把选了但没确认的题一并判分`() {
+        // 2026-10 用户要求「若用户只选择选项之后提交要判断对错」。限时考试到点被强制
+        // 收卷时，用户"选了但还没来得及点确认答案"的题必须算数，否则总结页会把它报成
+        // 「未作答」，用户明明选了却看到未作答。
         val session = PracticeSession(
-            listOf(question("1"), question("2")),
+            listOf(question("1"), question("2"), question("3")),
             timing = ExamTiming(60),
             startedAt = 1_000L
         )
-        session.select(session.questions[0], "A")
+        session.select(session.questions[0], "A")   // 答对，已确认
         session.judge(session.questions[0])
-        session.select(session.questions[1], "B")
-        val second = session.judge(session.questions[1])
+        session.select(session.questions[1], "B")   // 答错，只选了没确认
+        // 第 3 题没碰过。
 
-        assertEquals(false, second) // 第 2 题答错
-        assertEquals(session.result(), session.resultForTimeout())
-        assertEquals(1, session.resultForTimeout().correct)
-        assertEquals(1, session.resultForTimeout().wrong)
-        assertEquals(0, session.resultForTimeout().unjudged)
+        val newly = session.judgePending()
+        assertEquals(listOf(session.questions[1]), newly)
+
+        val result = session.result()
+        assertEquals(2, result.answered)
+        assertEquals(1, result.correct)
+        assertEquals(1, result.wrong)   // 补判进来了
+        assertEquals(1, result.unjudged) // 只有真没碰过的第 3 题
     }
 
     @Test
-    fun `ExamDurationOptions 首档为不限时且秒数一致`() {
-        assertEquals("不限时", ExamDurationOptions.first().label)
-        assertEquals(0, ExamDurationOptions.first().seconds)
-        assertEquals(20 * 60, ExamDurationOptions[1].seconds)
-        assertEquals(30 * 60, ExamDurationOptions[2].seconds)
-        assertEquals(60 * 60, ExamDurationOptions[3].seconds)
+    fun `考试时长预设档不含不限时且递增`() {
+        // 「不限时的考试」就是顺序练习，所以这一档被刻意删掉了（2026-10）。
+        assertTrue(ExamDurationPresetsMinutes.none { it <= 0 })
+        assertEquals(ExamDurationPresetsMinutes.sorted(), ExamDurationPresetsMinutes)
+        assertTrue(ExamDurationPresetsMinutes.contains(30))
+    }
+
+    @Test
+    fun `自定义时长档位是 5 到 300 的 5 的倍数`() {
+        assertEquals(5, CustomDurationMinutes.first())
+        assertEquals(300, CustomDurationMinutes.last())
+        assertTrue(CustomDurationMinutes.all { it % 5 == 0 })
+        assertEquals(60, CustomDurationMinutes.size)
+    }
+
+    @Test
+    fun `时长文案统一用分钟且不折算小时`() {
+        assertEquals("30 分钟", durationLabel(30))
+        // 60 不折算成「1 小时」：同一份滚轮里混两种单位会逼用户做换算。
+        assertEquals("60 分钟", durationLabel(60))
     }
 }

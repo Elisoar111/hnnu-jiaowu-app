@@ -16,11 +16,6 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import com.hnnujw.course.ui.theme.CourseSelectorTheme
-import com.hnnujw.course.ui.system.LiquidTaskControls
-import com.hnnujw.course.ui.system.TaskControlsState
-import com.hnnujw.course.ui.system.TaskQuickAction
-import com.hnnujw.course.ui.system.AnimatedIconSpec
-import com.hnnujw.course.ui.system.rememberTaskControlsState
 import androidx.compose.ui.platform.LocalDensity
 import org.junit.Assert.*
 import org.junit.Rule
@@ -87,37 +82,5 @@ class GlassLensSourceCachingDeviceTest {
         }
         assertFalse("The newly sampled background must still reach the glass", final.sameAs(scrolled))
         assertTrue(android.graphics.Color.blue(scrolled.getPixel(scrolled.width / 2, scrolled.height / 2)) > 200)
-    }
-
-    @Test fun primaryControlCapturesOnlyItsReachableAreaAndExpandsForTheFan() {
-        lateinit var anchor: GlassLensAnchor
-        lateinit var controls: TaskControlsState
-        var pixelDensity = 1f
-        compose.setContent {
-            CourseSelectorTheme {
-                pixelDensity = LocalDensity.current.density
-                anchor = requireNotNull(rememberGlassLensAnchor("bounded-controls") { drawRect(Color.White) })
-                controls = rememberTaskControlsState()
-                val actions = List(6) { TaskQuickAction("$it", "操作 $it", AnimatedIconSpec.Add, onClick = {}) }
-                LiquidTaskControls(actions, 24.dp, controls, lensAnchor = anchor) { _, _, _ ->
-                    Box(Modifier.size(64.dp).glassLens(anchor, GlassLensOpticsProvider { w, h ->
-                        GlassLensOptics(minOf(w, h) / 2f, h * 0.15f, h * 0.20f, 0f, 0f, 1f)
-                    }).testTag("bounded-primary"))
-                }
-            }
-        }
-        compose.runOnIdle {
-            assertEquals(112f, anchor.sizePx.width / pixelDensity, 1f)
-            assertEquals(112f, anchor.sizePx.height / pixelDensity, 1f)
-            controls.expanded = true
-        }
-        compose.waitForIdle()
-        compose.runOnIdle {
-            assertTrue("The complete fan must fit its sampling region", anchor.sizePx.width / pixelDensity > 240f)
-            assertTrue("Opening the fan must not capture the whole screen", anchor.sizePx.height / pixelDensity < 340f)
-            controls.close()
-        }
-        compose.waitForIdle()
-        compose.runOnIdle { assertEquals(112f, anchor.sizePx.width / pixelDensity, 1f) }
     }
 }

@@ -4,8 +4,11 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableFloatStateOf
@@ -22,7 +25,6 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.hnnujw.course.ui.system.LiquidTaskSurface
 import com.hnnujw.course.ui.system.LocalAppBackdrop
 import com.hnnujw.course.ui.theme.CourseSelectorTheme
 import com.hnnujw.course.ui.theme.LocalModuleEntrance
@@ -49,8 +51,16 @@ class ModuleShadowDeviceTest {
                     Box(Modifier.fillMaxSize().layerBackdrop(backdrop).background(Color.White))
                     CompositionLocalProvider(LocalAppBackdrop provides backdrop,
                         LocalModuleEntrance provides { timeline.floatValue }) {
-                        LiquidTaskSurface(Modifier.width(240.dp).testTag("shadow-card").moduleEntrance(0)) {
-                            Text("任务队列")
+                        // 夹具原本是随抢课一起下线的 LiquidTaskSurface；本测试要验的是
+                        // moduleEntrance 的 ModulateAlpha 不会把阴影裁掉，与具体卡片组件无关，
+                        // 故改用最直白的 Surface(shadowElevation) 投一份阴影。
+                        Surface(
+                            modifier = Modifier.width(240.dp).testTag("shadow-card").moduleEntrance(0),
+                            shape = RoundedCornerShape(22.dp),
+                            color = Color.White,
+                            shadowElevation = 6.dp
+                        ) {
+                            Text("任务队列", Modifier.padding(16.dp))
                         }
                     }
                 }

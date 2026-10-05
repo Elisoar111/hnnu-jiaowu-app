@@ -32,6 +32,7 @@ import com.hnnujw.course.ui.system.LiquidButton
 import com.hnnujw.course.ui.system.LiquidButtonStyle
 import com.hnnujw.course.ui.system.SystemDialog
 import com.hnnujw.course.ui.system.rememberScreenMetrics
+import com.hnnujw.course.ui.system.sanitizeMarkdown
 import androidx.compose.foundation.shape.RoundedCornerShape
 
 /**
@@ -121,7 +122,10 @@ fun AnnouncementDialog(
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp)
                 ) {
-                    Markdown(content = announcement.content)
+                    // 与 MarkdownText 走同一道清洗：不成对的星号会被 commonmark 原样
+                    // 渲染成字面字符（用户报的「md 残留 `****`」），公告正文同样是长文，
+                    // 一处漏了就会在弹窗里露出来。
+                    Markdown(content = sanitizeMarkdown(announcement.content))
                 }
             } else {
                 Text(

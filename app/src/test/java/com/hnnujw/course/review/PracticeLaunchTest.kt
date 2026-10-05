@@ -22,9 +22,7 @@ class PracticeLaunchTest {
         val launch = PracticeLaunch(bankId = "b1")
         assertFalse(launch.onlyWrong)
         assertFalse(launch.onlyFavorite)
-        assertFalse(launch.onlySlashed)
         assertFalse(launch.memorize)
-        assertTrue("默认应排除已斩题", launch.excludeSlashed)
         assertEquals(0, launch.durationSeconds)
         assertFalse(launch.isTimedExam)
     }
@@ -57,54 +55,66 @@ class PracticeLaunchTest {
     fun `背题优先级最高`() {
         val launch = PracticeLaunch(
             bankId = "b1",
-            chapter = "第一章",
+            chapters = listOf("第一章"),
             onlyWrong = true,
             onlyFavorite = true,
-            onlySlashed = true,
             memorize = true
         )
         assertEquals("背题", launch.title())
     }
 
     @Test
-    fun `错题本优先级高于收藏与斩题与章节`() {
+    fun `错题本优先级高于收藏与章节`() {
         val launch = PracticeLaunch(
             bankId = "b1",
-            chapter = "第一章",
+            chapters = listOf("第一章"),
             onlyWrong = true,
-            onlyFavorite = true,
-            onlySlashed = true
+            onlyFavorite = true
         )
         assertEquals("错题本", launch.title())
     }
 
     @Test
-    fun `收藏优先级高于斩题与章节`() {
+    fun `收藏优先级高于章节`() {
         val launch = PracticeLaunch(
             bankId = "b1",
-            chapter = "第一章",
-            onlyFavorite = true,
-            onlySlashed = true
+            chapters = listOf("第一章"),
+            onlyFavorite = true
         )
         assertEquals("收藏", launch.title())
     }
 
     @Test
-    fun `斩题本优先级高于章节`() {
-        val launch = PracticeLaunch(bankId = "b1", chapter = "第一章", onlySlashed = true)
-        assertEquals("斩题本", launch.title())
-    }
-
-    @Test
     fun `有章节时用章节名`() {
-        assertEquals("第一章", PracticeLaunch(bankId = "b1", chapter = "第一章").title())
+        assertEquals("第一章", PracticeLaunch(bankId = "b1", chapters = listOf("第一章")).title())
     }
 
     @Test
     fun `空章节退回到模式标签`() {
-        // chapter 为空串或 null 都不该把标题弄成空。
-        assertEquals(ReviewMode.SEQUENTIAL.label, PracticeLaunch(bankId = "b1", chapter = "").title())
-        assertEquals(ReviewMode.SEQUENTIAL.label, PracticeLaunch(bankId = "b1", chapter = null).title())
+        // 空集合（没选章节）与"只选了一个空白名"都不该把标题弄成空串。
+        assertEquals(ReviewMode.SEQUENTIAL.label, PracticeLaunch(bankId = "b1").title())
+        assertEquals(
+            ReviewMode.SEQUENTIAL.label,
+            PracticeLaunch(bankId = "b1", chapters = listOf("")).title()
+        )
+        assertEquals(
+            ReviewMode.SEQUENTIAL.label,
+            PracticeLaunch(bankId = "b1", chapters = listOf("   ", "")).title()
+        )
+    }
+
+    @Test
+    fun `多章标题报数量而不是拼接名字`() {
+        // 拼接章节名会把标题撑成两行（内置题库的章节名本身就有十几个字）。
+        assertEquals(
+            "已选 2 章",
+            PracticeLaunch(bankId = "b1", chapters = listOf("第一章", "第二章")).title()
+        )
+        // 空白项不计入数量。
+        assertEquals(
+            "第一章",
+            PracticeLaunch(bankId = "b1", chapters = listOf("第一章", "  ")).title()
+        )
     }
 
     @Test

@@ -43,7 +43,14 @@ class LiquidInteractionDeviceTest {
         val revealed = mutableStateOf(false)
         compose.setContent {
             CourseSelectorTheme { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                VisibilitySymbol(revealed.value, Modifier.testTag("password-symbol"))
+                // 夹具原为 VisibilitySymbol（已随抢课下线的包装层）；直接驱动
+                // AnimatedLineIcon，断言语义不变：中途帧不同、回到原形、描述跟随状态。
+                AnimatedLineIcon(
+                    AnimatedIconSpec.Eye,
+                    Modifier.testTag("password-symbol"),
+                    if (revealed.value) IconVisualState.Selected else IconVisualState.Idle,
+                    description = if (revealed.value) "隐藏密码" else "显示密码"
+                )
             } }
         }
         compose.mainClock.autoAdvance = false
@@ -60,15 +67,21 @@ class LiquidInteractionDeviceTest {
     }
 
     @Test fun queueSuccessDrawsIntermediateFramesThenSettlesToACheck() {
-        val result = mutableStateOf(SymbolResult.None)
+        // 夹具原为 RequestStateSymbol + SymbolResult（均已删除）；直接用图标自身的
+        // 视觉状态驱动，覆盖的行为相同（Idle → Success 会画中间帧再落到对勾）。
+        val state = mutableStateOf(IconVisualState.Idle)
         compose.setContent {
             CourseSelectorTheme { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                RequestStateSymbol(result = result.value, queue = true, modifier = Modifier.testTag("queue-symbol"))
+                AnimatedLineIcon(
+                    AnimatedIconSpec.AddCheck,
+                    Modifier.testTag("queue-symbol"),
+                    state = state.value
+                )
             } }
         }
         compose.mainClock.autoAdvance = false
         val initial = compose.onNodeWithTag("queue-symbol").captureToImage().asAndroidBitmap()
-        compose.runOnIdle { result.value = SymbolResult.Success }
+        compose.runOnIdle { state.value = IconVisualState.Success }
         compose.mainClock.advanceTimeBy(112)
         val middle = compose.onNodeWithTag("queue-symbol").captureToImage().asAndroidBitmap()
         compose.mainClock.advanceTimeBy(600)

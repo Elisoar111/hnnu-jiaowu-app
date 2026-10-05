@@ -12,6 +12,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.clickable
@@ -125,6 +126,8 @@ internal val LocalDialogModuleProgress = compositionLocalOf<State<Float>?> { nul
 fun DialogHost(state: DialogHostState, modifier: Modifier = Modifier) {
     val reducedMotion = rememberGlassAccessibilityMode().reduceMotion
     val density = LocalDensity.current
+    // Page 形态的弹层要自己铺一层不透明底，见下面 page 分支的注释。
+    val appWallpaper = com.hnnujw.course.ui.theme.rememberAppWallpaperStyle()
     state.dialogs.forEach { dialog ->
         key(dialog.handle.key) {
             val visibility = dialog.visibility
@@ -235,6 +238,26 @@ fun DialogHost(state: DialogHostState, modifier: Modifier = Modifier) {
                             // switch's semantics and replace its accessibility action with a no-op.
                             .pointerInput(Unit) { detectTapGestures(onTap = {}) }
                     ) {
+                        // 🔴 Page 形态 = "整页推入"，必须自己铺一层**不透明**底。
+                        //
+                        // 为什么不能靠下面那层 0.22 的黑遮罩：`GlassWindowHost` 在
+                        // `LocalGlassWindowOwner.current === LocalView.current` 时会**提前 return**
+                        // （它认为"这个窗口已经有底图了"），而 Page 弹层正跑在同一个窗口里 ——
+                        // 于是弹层底下根本没有壁纸，只有那层 22% 的灰。结果就是
+                        // **上一页的内容整片透出来**：答题卡叠在题干上，格子里的数字和题干
+                        // 文字糊在一起，用户报「打开答题卡后背景是题目的页面，看不清」。
+                        //
+                        // 这里直接补画壁纸（`drawWallpaperPattern` 是纯 Canvas 绘制，不依赖
+                        // backdrop，所以在不支持折射的设备上同样有效）。刻意**不**挂
+                        // `layerBackdrop` —— 那份 layer 的宿主是窗口根部的 Canvas，同一个
+                        // backdrop 挂两处会互相覆盖。
+                        //
+                        // 遮罩仍然保留：它在壁纸**之下**，负责弹层淡入过程中"背景在退后"的观感。
+                        if (page) {
+                            Canvas(Modifier.fillMaxSize()) {
+                                drawWallpaperPattern(appWallpaper, microTexture = false)
+                            }
+                        }
                         CompositionLocalProvider(LocalDialogProgress provides progress, LocalDialogModuleProgress provides modules) { dialog.content() }
                     }
                     if (!visibility.targetState) {
