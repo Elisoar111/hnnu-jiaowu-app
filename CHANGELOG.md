@@ -4,6 +4,46 @@
 > 自 1.0.68 起，每个版本的更新日志以 `release-notes/vX.Y.Z.md` 为唯一数据源，由 CI 扇出到本文件、GitHub Release 与应用内更新提示。
 > 1.0.67 未发布：该 tag 的流水线在版本号校验步骤失败，未产出任何 Release，内容顺延至 1.0.68。
 
+## [1.2.7] - 2026-10-05
+
+### 新增
+
+- **题库仓库模型**：`banks` 表加 `selected` / `sort_order`（`DB_VERSION = 4`，幂等 `ALTER TABLE`，存量行迁成 `selected = 1`）；`BundledBanks` 删 `importAll`，改为按需 `importOne`。`ui/BankLibraryScreen` 独立成页并接管题库管理，原 `BankManageScreen` 删除。
+- **开练中枢**：章节按自然序排（纯函数 `review/ChapterOrder`，中文数字 + 终止符两关）、可多选（`PracticeLaunch.chapters`）、可折叠；练习模式改滚轮（纯函数 `review/PracticeMode`），四档 顺序 / 乱序 / 考试 / 背题 + 考试时长（10/20/30/45/60/90/120 分钟或自定义 5–300）。
+- **答题卡**：纯函数 `review/AnswerSheet`（四态），独立整页（`GlassSubpage` + `LazyVerticalGrid`），格子 52dp / 17sp、带颜色图例与底部「提交」。
+- **限时考试**：纯函数 `review/ExamTimer`，墙钟差值判超时、5/1 分钟各警告一次、到点自动交卷。
+- **提交与总结页**：纯函数 `review/PracticeSummary`（正确率以已判分为分母、七档鼓励语），最后一题由「完成」改「提交」；到点自动交卷走同一路径。
+- **自动下一题**：`ReviewPrefs` 新增开关，判据 `PracticeSession.canAutoAdvance`（多选题与背题模式不自动跳），落跳前等 220ms 并重校验。
+- **错题本 / 收藏独立页**：`ui/BankWrongBookScreen`（三态 + 三种排序 + 间隔复习）、`ui/BankFavoriteScreen`；纯函数 `review/WrongBookLogic` / `review/ReviewScheduling`。
+- **抗进程死亡**：`PracticeSession.exportState` / `restoreState`（JSON），题号与 `ReviewPage` 走 `rememberSaveable` + 自定义 `Saver`。
+- **选项乱序**：纯函数 `review/OptionShuffle`，显示序与数据序分离，判分与落库照旧走原始字母。
+- **演示题库** `assets/review/demo.json`（两章 8 题），首次进入时幂等播种，用户可删且不再长出。
+- **底部导航栏可重排与显隐**（`manager/NavBarLayout` 纯函数 + `NavBarSettingsDialog`，「我的」固定、至少 2 项）。
+- **课前提醒按学期一键全开 / 全关**（纯函数 `schedule/SemesterReminderPlan`）。
+
+### 变更
+
+- **AI 答疑收缩为只支持 DeepSeek**：`review/AiEndpoint` 重写为一份常量，删除 `AiProfile` / `AiFailover` 与手填端点；`AiConfigStore` 改单配置，Key 走 AndroidKeyStore AES/GCM 加密。思考过程可折叠 + 用量显示。
+- **练习页重构**：1076 行的 `PracticeScreen.kt` 拆成 `PracticeAnswerSheet` / `PracticeSummaryPane` / `PracticeAiController` / `PracticeExamCountdown` 四份；顺带修五处体验——进度条改显作答进度、题间切换加滑动过渡并滚回顶部、倒计时下沉为独立每秒重组的小字、自动下一题开关并入答题卡入口条。
+- **判分按钮统一「确认答案」**（此前多选叫「提交答案」）。
+- **按钮排版统一**：`ReviewButtons` 抽出 `ConfirmButtonHeight`(48dp) / `SecondaryButtonHeight`(42dp)，`SecondaryAction` 加 `height` 形参 —— 修掉主/次按钮并排时底部参差（`Row` 默认 `Alignment.Top`）。
+- **斩题彻底下线**：`onUpgrade` v4→v5 `DROP TABLE slashed`，删 `SlashPolicy.kt` 与相关 DB 方法，`PracticeLaunch` 编码收成 8 字段并严格校验字段数。
+- **题库仓库删除「创建题库」「合并题库」「格式说明」**，只留「内置库取出」与「JSON 导入」两条来源。
+- **删除「查看 → 统计」**入口与整页，连只服务于它的 `daily_stats` 表一并删除（顺带发现那条写入本来就是坏的：`OR REPLACE` 撞主键使 `answered` 恒为 1）。
+- **交卷补判**：`PracticeSession.judgePending()` 把"选了没确认"的题一并判分并落库（三条边界：只补判有作答的、已判过的不动、背题恒空）；删除已无独立行为的 `resultForTimeout()`。
+- **作答落库批量单事务**（`recordAnswers(List<AnswerRecord>)`）+ 失败 `GlassToaster` 提示，此前交卷补判 N 题起 N 个事务、IO 抛错会静默丢记录。
+
+### 修复
+
+- **一卡通缴费提醒只在打开页面时才触发**：根因是电费巡检用 `setInexactRepeating` 而 `CourseApplication` 每次冷启动都 `schedule`，`FLAG_UPDATE_CURRENT` 把触发时刻一并重置 —— 后台巡检从未触发过。电费 / 消息 / 更新检查三条链路改为「链式单次闹钟 + 持久化下一轮触发时刻」，触发后自我续期；电费巡检加密到六小时一次并按余额下降节流（`YktAlertPolicy`）；更新检查补齐 BOOT_COMPLETED。
+- **系统返回键 / 侧滑手势未接进模块内导航**：`ReviewActivity` 挂 `BackHandler`；横向排查 14 个 Activity 后另修公告中心与消息中心的详情页。
+- **乱序抽题在非数字题号下退化成顺序扫描**：SQL 的 `ORDER BY (qid || bank_id) * …` 在非数字 qid 上整个变 0，排序移到 Kotlin 层（`review/QuestionOrder.kt`，`String.hashCode` + 字典序决胜键）。
+- **`PracticeSession.key()` 字符串模板写错**：`"${q.bankId}::$q.id"` 把整道题的 `toString()` 当 map key，作答快照膨胀几十倍；改为 `"${q.bankId}::${q.id}"`。
+- **Markdown 不成对星号原样露出**：新增 `sanitizeMarkdown`，在"是否走富文本"判定**之前**清洗（空加粗整对删、奇数时只删片段首尾、代码块整段保护）。
+- **题库仓库页顶栏不跟手折叠**：`GlassPageScaffold` 的 `collapseFraction` 默认 `0f`，补 `rememberLazyListState` + `derivedStateOf`。
+- **复习模块 23 处提示静默失效**：`ReviewActivity` 根层补 `GlassWindowHost` + `GlassToastHost`。
+- **逐题编辑页改懒加载**（1059 题的库此前进页面一次性组合全部题卡）；`ReviewDatabase` 新增 `bankName(bankId)` 单行查询，不再为取标题跑全表。
+
 ## [Unreleased]
 
 ### 新增
