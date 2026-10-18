@@ -89,3 +89,29 @@ fun answerSheetCell(
     status = answerSheetStatus(answered, judged, correct),
     isCurrent = isCurrent
 )
+
+/** 答题卡按章节分组后的一段。[chapter] 为空串表示"未分章"。 */
+data class AnswerSheetSection(val chapter: String, val cells: List<AnswerSheetCell>)
+
+/**
+ * 把格子按章节分组，**保持原有顺序与下标**。
+ *
+ * 为什么要分组：内置题库动辄 300+ 题，一屏五六个格子要翻几十屏才能找到「第 7 章那道题」。
+ * 分组之后至少知道自己在第几章。
+ *
+ * [chapters] 与 [cells] 必须等长且一一对应（调用方从 `session.questions` 直接映射）。
+ * 分段顺序按**首次出现**排 —— 练习顺序（顺序/乱序/错题优先）才是用户心里那本账，
+ * 这里再按章名重排一次反而会让答题卡和翻题顺序对不上。
+ *
+ * 章节名保持原样（含空白）：空白章在界面上显示为「未分章」，但键值不改写，
+ * 否则同一章会被拆成两段。
+ */
+fun answerSheetSections(chapters: List<String>, cells: List<AnswerSheetCell>): List<AnswerSheetSection> {
+    if (cells.isEmpty()) return emptyList()
+    val order = LinkedHashMap<String, MutableList<AnswerSheetCell>>()
+    cells.forEachIndexed { i, cell ->
+        val key = chapters.getOrNull(i).orEmpty()
+        order.getOrPut(key) { mutableListOf() }.add(cell)
+    }
+    return order.map { (chapter, list) -> AnswerSheetSection(chapter, list) }
+}

@@ -113,8 +113,13 @@ object BundledBanks {
         "马克思主义基本原理（选择题）" to "马克思主义基本原理"
     )
 
-    /** 随包内置题目的总数，用于「已内置 N 题」提示。 */
-    const val TOTAL_QUESTION_COUNT: Int = 1059
+    /**
+     * 随包内置题目的总数（**四个正式库之和，不含演示题库**）。
+     *
+     * 从 [SPECS] 现算而不是写死一个数字：题库 JSON 更新后，硬编码的值不会跟着变，
+     * 界面上「已内置 N 题」就会长期说错话，而且错得很安静。
+     */
+    val TOTAL_QUESTION_COUNT: Int get() = SPECS.sumOf { it.expectedCount }
 
     /**
      * 从已有题库名里挑出**尚未导入**的内置库 —— 即题库仓库里"还能取出来的内置项"。

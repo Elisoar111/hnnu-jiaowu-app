@@ -98,6 +98,104 @@ object CredentialStore {
         }
     }
 
+    // —— 会话 Cookie ——
+    //
+    // 为什么 Cookie 也要加密：它是**等同于登录态**的凭据。拿着 `JSESSIONID` 的人
+    // 可以完整读取学号、成绩、课表、一卡通余额，不需要任何密码。明文放在
+    // `course_selector_prefs` 里，root 设备或本地备份都能直接拿走。
+    //
+    // 复用同一个 Keystore key（不新开别名）：key 的寿命与失效语义一致
+    // （用户改锁屏/恢复出厂会让它失效），多开一个别名只会多一份要处理的失效路径。
+    // 用不同的 prefKey 前缀把两种凭据分开存，互不影响。
+
+    /**
+     * 保存会话 Cookie（加密）。
+     *
+     * @return 是否写入成功。失败时**不会**保留明文副本 —— 宁可让用户重新登录，
+     *   也不要把一张可用的票明文落在磁盘上。
+     */
+    fun saveSessionCookie(context: Context, accountKey: String, cookie: String): Boolean {
+        if (accountKey.isBlank()) return false
+        if (cookie.isEmpty()) {
+            removeSessionCookie(context, accountKey)
+            return true
+        }
+        return try {
+            prefs(context).edit()
+                .putString(cookieKey(accountKey), encrypt(cookie))
+                .commit()   // 用 commit：调用点在退出/切号路径上，要保证写完
+        } catch (e: Exception) {
+            Log.w(TAG, "保存会话 Cookie 失败: ${e.javaClass.simpleName} ${e.message}")
+            removeSessionCookie(context, accountKey)
+            false
+        }
+    }
+
+    /** 读取会话 Cookie；解不开就返回 null（并按"未登录"处理）。 */
+    fun loadSessionCookie(context: Context, accountKey: String): String? {
+        if (accountKey.isBlank()) return null
+        val stored = prefs(context).getString(cookieKey(accountKey), null) ?: return null
+        return decrypt(stored) ?: run {
+            removeSessionCookie(context, accountKey)
+            null
+        }
+    }
+
+    fun removeSessionCookie(context: Context, accountKey: String) {
+        if (accountKey.isBlank()) return
+        try {
+            prefs(context).edit().remove(cookieKey(accountKey)).apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "删除会话 Cookie 失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 老版本明文 Cookie 的迁移：把 `course_selector_prefs` 里的 `saved_cookie`
+     * 加密搬进本文件，并删掉明文。
+     *
+     * 由 [UserManager] 在初始化读到明文时调用。幂等：明文没了就什么也不做。
+     *
+     * @return 迁移后应当使用的 Cookie（明文优先，其次已加密的那份；都没有返回空串）。
+     */
+    fun migrateLegacyPlainCookie(context: Context, accountKey: String, plain: String?): String {
+        if (accountKey.isBlank()) return ""
+        if (!plain.isNullOrEmpty()) {
+            // 明文还在：加密存一份，然后由调用方删掉明文那一行。
+            saveSessionCookie(context, accountKey, plain)
+            return plain
+        }
+        return loadSessionCookie(context, accountKey).orEmpty()
+    }
+
+    /** 加密并 Base64 成可入 prefs 的字符串。 */
+    private fun encrypt(plain: String): String {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, obtainKey())
+        val iv = cipher.iv
+        val cipherText = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+        val payload = ByteArray(iv.size + cipherText.size)
+        System.arraycopy(iv, 0, payload, 0, iv.size)
+        System.arraycopy(cipherText, 0, payload, iv.size, cipherText.size)
+        return Base64.encodeToString(payload, Base64.NO_WRAP)
+    }
+
+    /** 解密；任何异常都返回 null（坏数据由调用方清掉）。 */
+    private fun decrypt(stored: String): String? = try {
+        val payload = Base64.decode(stored, Base64.NO_WRAP)
+        if (payload.size <= IV_LENGTH) null
+        else {
+            val iv = payload.copyOfRange(0, IV_LENGTH)
+            val cipherText = payload.copyOfRange(IV_LENGTH, payload.size)
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, obtainKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
+            String(cipher.doFinal(cipherText), Charsets.UTF_8).takeIf { it.isNotEmpty() }
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "解密失败，按无数据处理: ${e.javaClass.simpleName} ${e.message}")
+        null
+    }
+
     fun clearAll(context: Context) {
         try {
             prefs(context).edit().clear().apply()
@@ -114,6 +212,9 @@ object CredentialStore {
      * 直接当文件内的键名不稳妥（分隔符、大小写、编码），统一哈希成定长十六进制。
      */
     private fun prefKey(accountKey: String): String = "pw_" + sha256Hex(accountKey)
+
+    /** Cookie 用独立前缀，和密码分开存，互不覆盖。 */
+    private fun cookieKey(accountKey: String): String = "ck_" + sha256Hex(accountKey)
 
     private fun sha256Hex(value: String): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")

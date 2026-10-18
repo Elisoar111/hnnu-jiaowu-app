@@ -38,12 +38,15 @@ import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.PrivacyTip
 import androidx.compose.material.icons.outlined.TextFormat
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.HowToReg
@@ -104,6 +107,12 @@ fun SettingsScreen(
     onAddAccount: () -> Unit = {},
     onClearCache: () -> Unit,
     onLogout: () -> Unit,
+    /** 备份本地数据到用户选定的文件。 */
+    onBackup: () -> Unit = {},
+    /** 从用户选定的备份文件恢复。 */
+    onRestore: () -> Unit = {},
+    /** 打开隐私政策。 */
+    onPrivacy: () -> Unit = {},
     onRefreshCookieClick: () -> Unit = {},
     onLogExport: () -> Unit = {},
     onWallpaperSelect: () -> Unit = {},
@@ -471,6 +480,30 @@ fun SettingsScreen(
             }
 
             InsetGroupedSection(Modifier.moduleEntrance(3), header = "数据与安全") {
+                SettingsRow(
+                    icon = Icons.Outlined.FileDownload,
+                    iconTint = Color(0xFF30D158),
+                    title = "备份数据",
+                    subtitle = "题库、答题记录、自定义课程与设置（不含账号与 Key）",
+                    onClick = onBackup,
+                    showDivider = true
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.FileUpload,
+                    iconTint = Color(0xFF0A84FF),
+                    title = "恢复数据",
+                    subtitle = "从备份文件还原；会覆盖当前题库",
+                    onClick = onRestore,
+                    showDivider = true
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.PrivacyTip,
+                    iconTint = Color(0xFF5E5CE6),
+                    title = "隐私政策",
+                    subtitle = "这个应用会碰到哪些数据、它们去哪了",
+                    onClick = onPrivacy,
+                    showDivider = true
+                )
                 SettingsRow(
                     icon = Icons.Outlined.Delete,
                     iconTint = Color(0xFFFF9F0A),

@@ -185,3 +185,10 @@ plugins-workspace/
 .claude/
 .agent/
 .superpowers
+
+# Agent 运行产物（浏览器截图、下载缓存、npm 缓存——只在本机有意义，2026-10-18）
+.edge_shots/
+.bskdl/
+.bskhome/
+.npmcache/
+.npm-cache/

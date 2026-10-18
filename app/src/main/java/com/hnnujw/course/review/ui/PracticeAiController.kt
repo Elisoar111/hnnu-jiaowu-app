@@ -75,12 +75,17 @@ internal class PracticeAiController(
         }
     }
 
-    /** 换题时重置：面板状态、**对话历史清空**、累计用量归零（收藏与面板开合不在这管）。 */
-    fun resetForNewQuestion() {
+    /**
+     * 换题时重置：面板状态、对话历史、累计用量（收藏与面板开合不在这管）。
+     *
+     * @param keepHistory 保留上一题的问答历史（用户可在 AI 设置里开）。
+     *   默认关：把上一题的问答带进下一题，模型容易被无关上下文带偏，还白烧 token。
+     *   打开后上下文延续，"就着刚才那段继续问"就能直接问。
+     */
+    fun resetForNewQuestion(keepHistory: Boolean = false) {
         state = AiUiState.Idle
-        // 历史必须随题清：把上一题的问答带进下一题，模型会被无关上下文带偏。
-        history = emptyList()
-        // 用量是"本题累计"，也必须随题归零，否则下一题会带着上一题的账。
+        // 历史是否随题清空由偏好决定；用量始终是"本题累计"，必须归零。
+        if (!keepHistory) history = emptyList()
         usageTotal = null
     }
 

@@ -67,6 +67,25 @@ fun BankQuestionEditScreen(
     // 当前正在编辑的单题 qid（null = 不在编辑）；用 qid 而不是对象，避免列表刷新后对象失联
     var editingQid by remember { mutableStateOf<String?>(null) }
     var pendingDelete by remember { mutableStateOf<List<String>>(emptyList()) }
+    // 题目搜索：1059 题的库靠翻页找一道题是不现实的。
+    var query by remember { mutableStateOf("") }
+
+    /**
+     * 过滤后的展示列表。
+     *
+     * 匹配题干、章节、答案字母三处 —— 用户手里可能只有一句题干、也可能只想看
+     * "所有答案是 C 的题"。刻意**不匹配解析**：解析里出现的关键词太散，一击就命中一大片，
+     * 反而让搜索失去定位作用。
+     */
+    val visible = remember(query, questions.size) {
+        val keyword = query.trim()
+        if (keyword.isEmpty()) questions.toList()
+        else questions.filter { q ->
+            q.stem.contains(keyword, ignoreCase = true) ||
+                q.chapter.contains(keyword, ignoreCase = true) ||
+                q.answer.equals(keyword.uppercase(), ignoreCase = true)
+        }
+    }
 
     suspend fun reload() {
         val result = withContext(Dispatchers.IO) {
@@ -171,6 +190,26 @@ fun BankQuestionEditScreen(
                 )
             }
 
+            // 题目搜索：大题库（内置最大 320 题、导入的动辄上千）靠翻页找一道题不现实。
+            // 匹配题干 / 章节 / 答案字母三处，见上面 `visible` 的说明。
+            GlassTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = "搜索题干、章节或答案（如 A）",
+                modifier = Modifier.fillMaxWidth(),
+                trailing = if (query.isNotEmpty()) {
+                    { Text("清除", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
+                } else null
+            )
+            if (query.isNotBlank()) {
+                Text(
+                    text = "命中 ${visible.size} / ${questions.size} 题",
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             // 🔴 列表必须**懒加载**：1059 题的库如果用 Column + verticalScroll 全量
             // forEach，进页面就一次性组合全部题卡，卡顿肉眼可见。头部工具行常驻固定、
             // LazyColumn 独立滚动 —— 千万别给外层 Column 加 verticalScroll，那会与
@@ -182,7 +221,17 @@ fun BankQuestionEditScreen(
                     .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(questions, key = { it.id }) { q ->
+                if (visible.isEmpty() && query.isNotBlank()) {
+                    item {
+                        Text(
+                            text = "没有匹配「$query」的题目。",
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                items(visible, key = { it.id }) { q ->
                     Card {
                         Row(
                             modifier = Modifier.fillMaxWidth(),

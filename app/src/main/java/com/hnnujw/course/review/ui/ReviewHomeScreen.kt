@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.hnnujw.course.review.AiConfigStore
 import com.hnnujw.course.review.BundledBanks
+import com.hnnujw.course.review.PracticeResume
 import com.hnnujw.course.review.ReviewDatabase
 import com.hnnujw.course.ui.system.GlassCircleButton
 import com.hnnujw.course.ui.system.GlassToaster
@@ -80,7 +81,12 @@ fun ReviewHomeScreen(
     onOpenBankDetail: (bankId: String) -> Unit,
     onOpenAiSettings: () -> Unit,
     /** 打开题库仓库页（取出 / 导入 / 创建 / 合并 / 改名 / 删除）。 */
-    onOpenLibrary: () -> Unit
+    onOpenLibrary: () -> Unit,
+    /** 上次没做完的那一轮（null = 没有可继续的）。 */
+    resume: PracticeResume.Snapshot? = null,
+    onResumePractice: () -> Unit = {},
+    /** 跨题库的总错题本（不必先想"这道错题在哪个库里"）。 */
+    onOpenAllWrongBook: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val db = remember { ReviewDatabase.get(context) }
@@ -101,6 +107,8 @@ fun ReviewHomeScreen(
     }
 
     val mine = banks.filter { it.selected }
+    // 全库未掌握错题数：入口只在确实有错题时出现（0 错题还摆一行是纯噪音）。
+    val totalWrong = banks.sumOf { it.pendingWrong }
     // 仓库数量 = 还没导入的内置库 + 已导入但被移出的库。首页只报个数，明细在仓库页。
     val pendingSpecs = BundledBanks.pendingSpecs(banks.map { it.name }.toSet())
     val shelvedCount = banks.count { !it.selected }
@@ -125,6 +133,52 @@ fun ReviewHomeScreen(
             // AI 入口放在**第一个 item**，不是列表末尾。原先排在题库列表之后，
             // 题库一多就得滑过好几屏才看得到，形同隐藏（2026-10 用户报「没有 AI 配置界面」）。
             item { AiEntryRow(context = context, onOpenSettings = onOpenAiSettings) }
+
+            // 「全部错题」：跨题库的总入口。原先必须先点进某个题库 → 详情页 → 错题本，
+            // 而"我到底还错着哪些题"本来就是跨库的问题。
+            if (totalWrong > 0) {
+                item {
+                    Card(onClick = onOpenAllWrongBook) {
+                        Text(
+                            text = "全部错题",
+                            fontSize = 15.sp,
+                            lineHeight = 21.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "跨全部题库 · 待掌握 $totalWrong 题",
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
+            // 「继续上次练习」：题库练习是典型的碎片时间场景，退出去就该能接着刷。
+            // 只在确实有未完成进度时出现（没有进度还占一行是纯噪音）。
+            if (resume != null) {
+                item {
+                    Card(onClick = onResumePractice) {
+                        Text(
+                            text = "继续上次练习",
+                            fontSize = 15.sp,
+                            lineHeight = 21.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "${resume.launch.title()} · 上次停在 ${resume.index + 1} 题",
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
 
             item {
                 SectionTitle("我的题库", trailing = {

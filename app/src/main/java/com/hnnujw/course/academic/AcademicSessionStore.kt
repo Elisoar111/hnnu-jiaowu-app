@@ -91,6 +91,15 @@ class AcademicSessionStore {
             }
         }!!
 
+    /**
+     * **只读**取会话：不存在就返回 null，绝不新建。
+     *
+     * 与 [session] 的区别只有副作用：`session(...)` 会 `compute` 出一个新会话，
+     * 用在「只想看看现在 Cookie 是什么」的场景上就是凭空造一个空会话，
+     * 后续请求拿它发出去会全部 401。
+     */
+    fun snapshot(key: AcademicSessionKey): AcademicSession? = sessions[key]
+
     fun invalidate(schoolId: String, accountKey: String) {
         sessions.remove(AcademicSessionKey(schoolId, accountKey))?.retire()
     }

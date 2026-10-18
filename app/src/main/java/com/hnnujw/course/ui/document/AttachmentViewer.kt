@@ -80,5 +80,11 @@ internal fun cacheFileName(url: String, name: String): String {
     val sanitized = name.substringAfterLast('/')
         .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
         .ifBlank { "attachment" }
-    return "${(url.hashCode().toLong() and 0xFFFFFFFFL).toString(16)}-$sanitized"
+    // 用 SHA-256 而不是 hashCode 作 URL 指纹：32 位哈希在附件多了之后会碰撞，
+    // 不同附件互相命中对方的缓存文件（消息中心缓存键名注释里修过的同型问题）。
+    // 指纹格式变化只会让旧缓存失效重下，无迁移成本。
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(url.toByteArray(Charsets.UTF_8))
+        .joinToString("") { String.format("%02x", it) }
+    return "${digest.take(16)}-$sanitized"
 }

@@ -497,6 +497,52 @@ fun SettingsRoute(
         }
     }
 
+    // 数据备份 / 恢复：走 SAF（系统文件选择器），不需要任何存储权限。
+    // 备份用 CreateDocument（用户挑存到哪），恢复用 OpenDocument（用户挑读哪个）。
+    // ⚠️ 这两个启动器必须声明在 SettingsScreen(...) 之前 —— 局部 val 不能前向引用。
+    var backupBusy by remember { mutableStateOf(false) }
+    val backupLauncher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri: android.net.Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        backupBusy = true
+        scope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val out = context.contentResolver.openOutputStream(uri)
+                        ?: return@withContext com.hnnujw.course.backup.BackupManager
+                            .Result(false, "无法写入所选位置")
+                    out.use { com.hnnujw.course.backup.BackupManager.backup(context, it) }
+                }.getOrElse {
+                    com.hnnujw.course.backup.BackupManager.Result(false, "备份失败：${it.message ?: "未知错误"}")
+                }
+            }
+            backupBusy = false
+            GlassToaster.show(result.message)
+        }
+    }
+    val restoreLauncher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri: android.net.Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        backupBusy = true
+        scope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val input = context.contentResolver.openInputStream(uri)
+                        ?: return@withContext com.hnnujw.course.backup.BackupManager
+                            .Result(false, "无法读取所选文件")
+                    input.use { com.hnnujw.course.backup.BackupManager.restore(context, it) }
+                }.getOrElse {
+                    com.hnnujw.course.backup.BackupManager.Result(false, "恢复失败：${it.message ?: "未知错误"}")
+                }
+            }
+            backupBusy = false
+            GlassToaster.show(result.message)
+            // 恢复后各页面手里是旧数据，让它们下次进入时重新读。
+            if (result.ok) com.hnnujw.course.ui.system.PageDataClearSignal.bump()
+        }
+    }
     SettingsScreen(
         studentName = studentName,
         studentId = deviceId,
@@ -513,6 +559,20 @@ fun SettingsRoute(
         onAddAccount = { launchRelogin() },
         savedAccountCount = allAccounts.size,
         onClearCache = { showClearCacheDialog = true },
+        onPrivacy = {
+            // 与手册共用同一个 Activity，只是读的 asset 不同。
+            runCatching { context.startActivity(com.hnnujw.course.ManualActivity.privacyIntent(context)) }
+                .onFailure { GlassToaster.show("无法打开隐私政策") }
+        },
+        onBackup = {
+            if (backupBusy) GlassToaster.show("正在处理上一个操作，请稍候")
+            else backupLauncher.launch(com.hnnujw.course.backup.BackupManager.suggestedFileName())
+        },
+        onRestore = {
+            if (backupBusy) GlassToaster.show("正在处理上一个操作，请稍候")
+            // 只接受 zip：备份扩展名固定，避免用户误选一张图片进来。
+            else restoreLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
+        },
         onLogout = { showLogoutDialog = true },
         onRefreshCookieClick = { refreshCookieManually() },
         onLogExport = { com.hnnujw.course.utils.LogUtils.exportLogs(context) },

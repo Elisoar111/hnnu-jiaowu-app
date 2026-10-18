@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  基线配置文件模块的清单。
+
+  这是一个 com.android.test 模块，没有自己的界面与组件：
+  它只负责在设备上驱动被测应用、记录运行轨迹。
+
+  ⚠️ 不要给它加 <activity> / <application> 内容 —— 它不会被打进用户安装的 APK，
+  加在这里的任何组件都不会生效，只会让人误以为应用多了一个页面。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="Baseline Profile Generator"
+        android:supportsRtl="true">
+        <!-- 这里刻意留空。 -->
+    </application>
+
+</manifest>

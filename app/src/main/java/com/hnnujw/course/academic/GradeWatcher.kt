@@ -85,18 +85,26 @@ object GradeWatcher {
         prefs.edit().putLong(lastCheckKey(accountKey), now).apply()
 
         val grades = report.grades
-        val entries = grades.mapIndexed { index, grade -> gradeIdentity(grade, index) to grade.score }
+        // 🔴 身份不再依赖列表下标：教务列表是插入式的，下标一变后面全部误判为新成绩。
+        // 详见 GradeIdentity 的说明。身份与成绩等长且一一对应。
+        val identities = GradeIdentity.keys(grades)
+        val entries = grades.indices.map { identities[it] to grades[it].score }
         val baseline = prefs.getStringSet(baselineKey(accountKey), emptySet()).orEmpty()
         val hasBaseline = prefs.contains(baselineKey(accountKey))
-        val fresh = grades.mapIndexed { index, grade -> grade to "${
-            gradeIdentity(grade, index)
-        }|${grade.score}" }.filter { it.second !in baseline }.map { it.first }
+        val fresh = grades.indices.map { grades[it] to "${identities[it]}|${grades[it].score}" }
+            .filter { it.second !in baseline }.map { it.first }
 
         // 无论是否播报，都把最新成绩写回缓存——成绩页打开时直接渲染最新数据
         GradesCacheManager.saveReport(context, accountKey, report)
 
         if (hasBaseline && fresh.isNotEmpty()) {
-            postNotification(context, fresh)
+            // ⚠️ 只有**真的送达**才推进基线。
+            //
+            // 原先是「先 postNotification 再无条件写基线」：`postNotification` 在通知被关闭
+            // 时会在 `canNotify` 处静默返回，而基线照样被写成"这些成绩已经播报过"。
+            // 后果是用户重新打开通知后**再也收不到这批成绩**——与考前提倡的
+            // 「先确认送达、再消费计划」是同一条不变量，这里此前漏了。
+            if (!postNotification(context, fresh)) return false
         }
         prefs.edit().putStringSet(baselineKey(accountKey), entries.map { (k, v) -> "$k|$v" }.toSet()).apply()
         return hasBaseline && fresh.isNotEmpty()
@@ -106,7 +114,9 @@ object GradeWatcher {
     fun markSeen(context: Context, accountKey: String) {
         if (accountKey.isBlank()) return
         val cached = GradesCacheManager.load(context, accountKey) ?: return
-        val entries = cached.report.grades.mapIndexed { index, grade -> "${gradeIdentity(grade, index)}|${grade.score}" }.toSet()
+        val grades = cached.report.grades
+        val identities = GradeIdentity.keys(grades)
+        val entries = grades.indices.map { "${identities[it]}|${grades[it].score}" }.toSet()
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putStringSet(baselineKey(accountKey), entries)
@@ -125,15 +135,21 @@ object GradeWatcher {
     }
 
     /**
-     * 成绩行身份。参照 gradeRowKeys：长度前缀拼接避免歧义，
-     * index 兜底区分同一门课的多次出现（重修/补考行）。
+     * 成绩行身份已迁到 [GradeIdentity]（不再依赖列表下标，见那里的说明）。
+     *
+     * 这里保留一个转发，是因为 `GradeWatcher` 内部还有几处按单行取身份的地方，
+     * 而把「批量算 + 组内序号」的口径留在一处才不会再次走向下标的坑。
      */
-    private fun gradeIdentity(grade: AcademicGrade, index: Int): String =
-        listOf(grade.term, grade.code, grade.name, grade.sectionId, grade.type, index.toString())
-            .joinToString("") { it.length.toString() + ":" + it }
+    private fun gradeIdentity(grade: AcademicGrade): String = GradeIdentity.keyOf(grade)
 
-    private fun postNotification(context: Context, fresh: List<AcademicGrade>) {
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+    /**
+     * 发通知，返回**是否真的发出去了**。
+     *
+     * 返回值必须被调用方用来决定要不要推进基线：通知被关闭 / 渠道被禁用时这里会
+     * 提前返回 false，此时若仍把成绩记成"已播报"，用户之后打开通知也补不回来。
+     */
+    private fun postNotification(context: Context, fresh: List<AcademicGrade>): Boolean {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return false
         if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(CHANNEL) == null) {
             manager.createNotificationChannel(
                 NotificationChannel(CHANNEL, "成绩推送", NotificationManager.IMPORTANCE_DEFAULT).apply {
@@ -141,7 +157,7 @@ object GradeWatcher {
                 }
             )
         }
-        if (!canNotify(context)) return
+        if (!canNotify(context)) return false
 
         val open = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or
@@ -164,9 +180,12 @@ object GradeWatcher {
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
             .build()
-        try {
+        return try {
             NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+            true
         } catch (_: SecurityException) {
+            // 通知权限在发的一瞬间被撤销：当作没送达，基线不推进，下一轮会再试。
+            false
         }
     }
 

@@ -375,7 +375,18 @@ fun GlassCircleButton(
     enabled: Boolean = true,
     size: Dp = 40.dp,
     tint: Color = LocalWallpaperAppearanceColors.current.onSurface,
-    backdrop: Backdrop? = LocalControlBackdrop.current
+    backdrop: Backdrop? = LocalControlBackdrop.current,
+    /**
+     * 用**文字**代替图标渲染（传了它就忽略 [icon]）。
+     *
+     * 为什么需要：题库练习的 AI 悬浮球需要显示「AI」两个字母。原先它用的是
+     * 对话气泡图标，用户看不出那是"问 AI"—— 一个气泡在刷题场景里更像"反馈"
+     * 或"聊天室"。换成字母之后含义自明，也不必再造一个图标资源。
+     *
+     * 字号按按钮尺寸等比算（[size] × 0.38），这样同一颗按钮在不同调用点的
+     * 视觉密度一致，不会出现"小按钮里字挤满、大按钮里字太小"。
+     */
+    label: String? = null
 ) {
     val accessibility = rememberGlassAccessibilityMode()
     val optics = rememberInteractiveOptics()
@@ -400,24 +411,39 @@ fun GlassCircleButton(
             ),
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            modifier = Modifier
-                .size(size * 0.48f)
-                .graphicsLayer {
-                    if (accessibility.reduceMotion) return@graphicsLayer
-                    // 与玻璃层同一段行程、同向各向异性，否则拖动时图标会脱出
-                    applyChipContentDeformation(
-                        optics = optics,
-                        travelPx = GlassRecipe.ChipDragTravelDp.dp.toPx(),
-                        stretch = GlassRecipe.ChipDragStretch,
-                        pressDepth = GlassRecipe.ChipIconPressDepth,
-                        damping = GlassRecipe.ChipContentDeformDamping
-                    )
-                },
-            tint = if (enabled) tint else tint.copy(alpha = 0.38f)
-        )
+        val contentModifier = Modifier.graphicsLayer {
+            if (accessibility.reduceMotion) return@graphicsLayer
+            // 与玻璃层同一段行程、同向各向异性，否则拖动时图标会脱出
+            applyChipContentDeformation(
+                optics = optics,
+                travelPx = GlassRecipe.ChipDragTravelDp.dp.toPx(),
+                stretch = GlassRecipe.ChipDragStretch,
+                pressDepth = GlassRecipe.ChipIconPressDepth,
+                damping = GlassRecipe.ChipContentDeformDamping
+            )
+        }
+        if (label != null) {
+            Text(
+                text = label,
+                modifier = contentModifier,
+                // 0.34 而不是图标那档 0.48：两个大写字母并排时视觉宽度远大于一个图标，
+                // 按 0.48 算会顶到圆边（56dp 球 → 26.9sp，明显溢出）。
+                // 0.34 在 56dp 上得到约 19sp，两个字母正好占球心 60% 宽度。
+                fontSize = (size.value * 0.34f).sp,
+                fontWeight = FontWeight.SemiBold,
+                // 字距略微收紧，两个字母才像一个整体标记而不是"两个字"。
+                letterSpacing = (-0.5).sp,
+                color = if (enabled) tint else tint.copy(alpha = 0.38f),
+                maxLines = 1
+            )
+        } else {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                modifier = contentModifier.size(size * 0.48f),
+                tint = if (enabled) tint else tint.copy(alpha = 0.38f)
+            )
+        }
     }
 }
 
@@ -1409,10 +1435,22 @@ fun SystemConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
     confirmText: String = "确定",
-    showCancel: Boolean = true
+    showCancel: Boolean = true,
+    /**
+     * 是否**正在提交**。true 时确认按钮变「提交中…」并禁用，取消按钮同样禁用，
+     * 返回键/点外部也关不掉。
+     *
+     * 为什么要有它：报名、退报、挂失这三个动作都是**一发不可撤销**的网络请求。
+     * 原先是点完立刻关弹窗，用户看不到"到底提交成功没有"，连点两次就是两个请求
+     * 或者一次成功一次失败。报名弹窗此前已经单独加了锁定，退报/挂失走的是这个
+     * 通用弹窗，于是只有前者的体验是对的 —— 统一到这里，三处才一致。
+     */
+    busy: Boolean = false
 ) {
     SystemDialog(
-        onDismissRequest = onDismiss,
+        // 提交中不允许被"点外部 / 返回键"关掉：请求已经发出去了，
+        // 关掉弹窗不会取消它，只会让用户以为没提交而再点一次。
+        onDismissRequest = { if (!busy) onDismiss() },
         title = {
             Text(
                 text = title,
@@ -1423,7 +1461,8 @@ fun SystemConfirmDialog(
         },
         confirmButton = {
             SystemPrimaryButton(
-                text = confirmText,
+                text = if (busy) "提交中…" else confirmText,
+                enabled = !busy,
                 onClick = onConfirm,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1432,6 +1471,7 @@ fun SystemConfirmDialog(
             {
                 SystemSecondaryButton(
                     text = "取消",
+                    enabled = !busy,
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth()
                 )

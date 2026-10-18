@@ -1,0 +1,378 @@
+[
+  {
+    "name": "打开练习页：先读本机题库，装载完成前不给开始",
+    "operation": "ui.init",
+    "args": { "pageId": "main", "params": {} },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": { "page": "main", "screen": "setup", "loaded": false, "pending": "bank.1" },
+        "effects": [{ "capability": "storage.get", "input": { "key": "bank" } }]
+      }
+    },
+    "capture": "init",
+    "http": []
+  },
+  {
+    "name": "本机没有导入过题库时回落到内置演示题库",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "main",
+      "state": { "$ref": "init.state" },
+      "event": {
+        "type": "effect.result",
+        "effectId": "bank.1",
+        "result": { "ok": true, "data": null }
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "bankName": "内置演示题库",
+          "bankIsBuiltin": true,
+          "chapters": ["第一章 计算机基础", "第二章 操作系统", "第三章 网络基础"]
+        },
+        "effects": [{ "capability": "storage.get", "input": { "key": "progress" } }]
+      }
+    },
+    "capture": "bankState",
+    "http": []
+  },
+  {
+    "name": "读到进度后装载完成，才允许开始练习",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "main",
+      "state": { "$ref": "bankState.state" },
+      "event": {
+        "type": "effect.result",
+        "effectId": "progress.2",
+        "result": { "ok": true, "data": null }
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "loaded": true,
+          "pending": "",
+          "status": "已装载 内置演示题库，共 12 题。"
+        },
+        "effects": []
+      }
+    },
+    "capture": "ready",
+    "http": []
+  },
+  {
+    "name": "顺序练习按章节自然序出题",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "main",
+      "state": { "$ref": "ready.state" },
+      "event": { "type": "click", "nodeId": "start", "name": "start" }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "screen": "practice",
+          "index": 0,
+          "order": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        }
+      }
+    },
+    "capture": "run",
+    "http": []
+  },
+  {
+    "name": "选中选项只记录作答，不立刻判分",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "main",
+      "state": { "$ref": "run.state" },
+      "event": { "type": "click", "nodeId": "opt.B", "name": "opt.B" }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": { "answers": { "b1": "B" }, "judged": {} }
+      }
+    },
+    "capture": "picked",
+    "http": []
+  },
+  {
+    "name": "交卷补判：只选了答案没点「确认答案」的题照样算数",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "main",
+      "state": { "$ref": "picked.state" },
+      "event": { "type": "click", "name": "submit" }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "screen": "summary",
+          "summary": "正确率 100%（已判分 1 题）· 答对 1 · 答错 0 · 未作答 11 / 共 12 题\n几乎全对，这个题库你已经吃透了。"
+        },
+        "effects": [{ "capability": "storage.set", "input": { "key": "progress" } }]
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "一道都没碰过算未作答，不算答错（不拉低正确率）",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "main",
+      "state": { "$ref": "run.state" },
+      "event": { "type": "click", "name": "submit" }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "screen": "summary",
+          "summary": "正确率 0%（已判分 0 题）· 答对 0 · 答错 0 · 未作答 12 / 共 12 题\n这一轮还没有作答记录 —— 先做几道题再提交吧。"
+        }
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "乱序练习：模式可切换",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "main",
+      "state": { "$ref": "ready.state" },
+      "event": {
+        "type": "input",
+        "nodeId": "mode",
+        "name": "mode",
+        "value": "shuffle"
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": { "state": { "mode": "shuffle" } }
+    },
+    "capture": "shuffleMode",
+    "http": []
+  },
+  {
+    "name": "乱序出题顺序被真正打散，且顺序确定可重放",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "main",
+      "state": { "$ref": "shuffleMode.state" },
+      "event": { "type": "click", "nodeId": "start", "name": "start" }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "screen": "practice",
+          "order": [1, 6, 11, 9, 2, 10, 4, 5, 7, 8, 3, 0]
+        }
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "题库仓库：打开时先读本机题库",
+    "operation": "ui.init",
+    "args": { "pageId": "library", "params": {} },
+    "expectSubset": {
+      "ok": true,
+      "data": { "state": { "page": "library" } }
+    },
+    "capture": "libInit",
+    "http": []
+  },
+  {
+    "name": "题库仓库：装载内置库",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "library",
+      "state": { "$ref": "libInit.state" },
+      "event": {
+        "type": "effect.result",
+        "effectId": "bank.1",
+        "result": { "ok": true, "data": null }
+      }
+    },
+    "capture": "libBank",
+    "http": []
+  },
+  {
+    "name": "题库仓库：读到进度后允许导入",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "library",
+      "state": { "$ref": "libBank.state" },
+      "event": {
+        "type": "effect.result",
+        "effectId": "progress.2",
+        "result": { "ok": true, "data": null }
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": { "state": { "loaded": true, "pending": "" } }
+    },
+    "capture": "libReady",
+    "http": []
+  },
+  {
+    "name": "点导入先让用户选文件",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "library",
+      "state": { "$ref": "libReady.state" },
+      "event": { "type": "click", "nodeId": "import", "name": "import" }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "effects": [{ "capability": "files.pick" }]
+      }
+    },
+    "capture": "picking",
+    "http": []
+  },
+  {
+    "name": "选完文件接着读内容",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "library",
+      "state": { "$ref": "picking.state" },
+      "event": {
+        "type": "effect.result",
+        "effectId": "pick.3",
+        "result": {
+          "ok": true,
+          "data": { "handle": "h1", "name": "bank.json", "mime": "application/json", "size": 583 }
+        }
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "effects": [{ "capability": "files.read", "input": { "handle": "h1" } }]
+      }
+    },
+    "capture": "reading",
+    "http": []
+  },
+  {
+    "name": "导入的题库被解析并写回本机",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "library",
+      "state": { "$ref": "reading.state" },
+      "event": {
+        "type": "effect.result",
+        "effectId": "file.4",
+        "result": {
+          "ok": true,
+          "data": {
+            "base64": "eyJuYW1lIjogIuWvvOWFpee7g+S5oOW6kyIsICJxdWVzdGlvbnMiOiBbeyJpZCI6ICJ4MSIsICJ0eXBlIjogInNpbmdsZSIsICJzdGVtIjogIuWvvOWFpemimOS4gO+8mjErMT0/IiwgIm9wdGlvbnMiOiBbIjEiLCAiMiIsICIzIiwgIjQiXSwgImFuc3dlciI6ICJCIiwgImNoYXB0ZXIiOiAi56ys5LiA56ugIOWvvOWFpSIsICJleHBsYW5hdGlvbiI6ICIxKzE9MiJ9LCB7ImlkIjogIngyIiwgInR5cGUiOiAibXVsdGkiLCAic3RlbSI6ICLlr7zlhaXpopjkuozvvJrlk6rkupvmmK/lgbbmlbA/IiwgIm9wdGlvbnMiOiBbIjEiLCAiMiIsICIzIiwgIjQiXSwgImFuc3dlciI6ICJCRCIsICJjaGFwdGVyIjogIuesrOS6jOeroCDlr7zlhaUiLCAiZXhwbGFuYXRpb24iOiAiMiDlkowgNCDmmK/lgbbmlbAifSwgeyJpZCI6ICJ4MyIsICJ0eXBlIjogInNpbmdsZSIsICJzdGVtIjogIuWvvOWFpemimOS4ie+8muawtOeahOWMluWtpuW8jz8iLCAib3B0aW9ucyI6IFsiSDJPIiwgIkNPMiIsICJPMiIsICJOYUNsIl0sICJhbnN3ZXIiOiAiQSIsICJjaGFwdGVyIjogIuesrOS6jOeroCDlr7zlhaUiLCAiZXhwbGFuYXRpb24iOiAiSDJPIn1dfQ==",
+            "size": 583,
+            "eof": true
+          }
+        }
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "bankName": "导入练习库",
+          "bankIsBuiltin": false,
+          "chapters": ["第一章 导入", "第二章 导入"],
+          "status": "已导入 导入练习库：3 题，2 个章节。"
+        },
+        "effects": [{ "capability": "storage.set", "input": { "key": "bank" } }]
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "文件不是合法 JSON 时给出可读原因，并留在内置库",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "library",
+      "state": { "$ref": "reading.state" },
+      "event": {
+        "type": "effect.result",
+        "effectId": "file.4",
+        "result": {
+          "ok": true,
+          "data": { "base64": "bm90IGpzb24gYXQgYWxs", "size": 16, "eof": true }
+        }
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": { "status": "不是合法的 JSON 文件。", "bankIsBuiltin": true }
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "错题本：打开时先读本机题库",
+    "operation": "ui.init",
+    "args": { "pageId": "wrong", "params": {} },
+    "expectSubset": {
+      "ok": true,
+      "data": { "state": { "page": "wrong" } }
+    },
+    "capture": "wrongInit",
+    "http": []
+  },
+  {
+    "name": "错题本：装载题库",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "wrong",
+      "state": { "$ref": "wrongInit.state" },
+      "event": {
+        "type": "effect.result",
+        "effectId": "bank.1",
+        "result": { "ok": true, "data": null }
+      }
+    },
+    "capture": "wrongBank",
+    "http": []
+  },
+  {
+    "name": "错题本：按错误次数列出做错过的题，并带出收藏",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "wrong",
+      "state": { "$ref": "wrongBank.state" },
+      "event": {
+        "type": "effect.result",
+        "effectId": "progress.2",
+        "result": {
+          "ok": true,
+          "data": { "records": { "b1": { "wrong": 2, "right": 1 } }, "favorites": ["b3"] }
+        }
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "favorites": ["b3"],
+          "wrongText": "错题 1 道：\n· [第一章 计算机基础] 在计算机中，1 字节（Byte）等于多少位（bit）？（错 2 次，对 1 次）"
+        }
+      }
+    },
+    "http": []
+  }
+]

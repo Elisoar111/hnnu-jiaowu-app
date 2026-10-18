@@ -69,6 +69,26 @@ fun isCurrentReminderOccurrence(plan: PlannedReminder, reminder: CourseReminder,
     plan.reminder == reminder && CourseReminderPlanner.plan(reminder, timeBase, plan.triggerAt - 1,
         permissions, activeAccount, zone).next == plan
 
+/**
+ * 用课表设置里的节次时间补齐缺失项，**已有值优先**（用户自己调过的不能被默认值盖掉）。
+ *
+ * 为什么需要它：提醒日历（`calendar:<account>|<term>`）里的 `periodStarts/periodEnds`
+ * 只有在用户手动改过「课表设置 → 节次时间」之后才会被写进去。只写过第一周日期的账号，
+ * 存下来的是一条「有日期、无节次」的半截记录，而 [CourseReminderPlanner] 拿不到
+ * `periodStarts[startPeriod]` 就解析不出上课时刻、直接返回 `NeedsTime`，
+ * **一条闹钟都不会排** —— 用户看到的就是「课程提醒开了却从不响」。
+ *
+ * 合并口径与 `ScheduleRepository.timeBase` 一致（设置里的值打底、日历里存过的值覆盖）：
+ * 桌面卡片一直是对的，提醒侧原先漏了这一步。
+ */
+internal fun ScheduleTimeBase.fillMissingPeriodTimes(
+    defaultStarts: Map<Int, String>,
+    defaultEnds: Map<Int, String>
+): ScheduleTimeBase = copy(
+    periodStarts = defaultStarts + periodStarts,
+    periodEnds = defaultEnds + periodEnds
+)
+
 /** Repeated reconciliation has no side effects when the desired alarms already exist. */
 fun reconcileCourseReminders(reminders: List<CourseReminder>, activeAccount: String,
     timeBase: (CourseReminderKey) -> ScheduleTimeBase?, permissions: ReminderPermissions, now: Long,

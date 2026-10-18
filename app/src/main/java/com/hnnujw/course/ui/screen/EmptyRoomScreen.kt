@@ -61,11 +61,13 @@ import com.hnnujw.course.emptyroom.periodOptionsFor
 import com.hnnujw.course.emptyroom.validateQuery
 import com.hnnujw.course.manager.ScheduleSettingsManager
 import com.hnnujw.course.model.SchoolConfig
+import com.hnnujw.course.ui.system.ChunkedListFooter
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassToaster
 import com.hnnujw.course.ui.system.LocalWallpaperAppearanceColors
 import com.hnnujw.course.ui.system.PagePadding
 import com.hnnujw.course.ui.system.SystemCard
+import com.hnnujw.course.ui.system.rememberChunkedListState
 import com.hnnujw.course.ui.system.SystemDivider
 import com.hnnujw.course.ui.system.SystemEmptyState
 import com.hnnujw.course.ui.system.SystemLoadingState
@@ -114,6 +116,8 @@ fun EmptyRoomScreen(
     var pageIndex by remember { mutableStateOf(1) }
     var querying by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
+    // 查询代际：每次 runQuery 自增；在途的旧查询/旧翻页返回时序号已落后 → 结果整包丢弃。
+    var queryGeneration by remember { mutableStateOf(0) }
     var queryError by remember { mutableStateOf("") }
     var hasQueried by remember { mutableStateOf(false) }
 
@@ -207,54 +211,69 @@ fun EmptyRoomScreen(
         }
         querying = true
         queryError = ""
+        val generation = ++queryGeneration
         when (val result = EmptyRoomClient.query(
             AcademicGatewayFactory.transportFor(target, accountKey), target, hidden, condition, pageIndex = 1,
         )) {
             is EmptyRoomClient.QueryResult.Success -> {
-                rooms = result.page.rooms
-                total = result.page.total
-                pageIndex = 1
-                hasQueried = true
+                if (generation == queryGeneration) {
+                    rooms = result.page.rooms
+                    total = result.page.total
+                    pageIndex = 1
+                    hasQueried = true
+                }
             }
             is EmptyRoomClient.QueryResult.NeedLogin -> {
-                needLogin = true
-                GlassToaster.show(result.message)
+                if (generation == queryGeneration) {
+                    needLogin = true
+                    GlassToaster.show(result.message)
+                }
             }
             is EmptyRoomClient.QueryResult.Failure -> {
-                queryError = result.message
-                hasQueried = true
+                if (generation == queryGeneration) {
+                    queryError = result.message
+                    hasQueried = true
+                }
             }
         }
-        querying = false
+        if (generation == queryGeneration) querying = false
     }
 
     suspend fun loadMore() {
         val target = school ?: return
+        // 查询进行中不发翻页请求：pageIndex/rooms 正在被新一轮查询替换，
+        // 此时翻页既取错页码，返回后还会与新一轮结果互相覆盖。
+        if (querying) return
         if (pageIndex >= EmptyRoomClient.MAX_PAGES) {
             GlassToaster.show("已加载 ${EmptyRoomClient.MAX_PAGES} 页，请缩小范围后再查")
             return
         }
         loadingMore = true
+        val generation = queryGeneration
         val next = pageIndex + 1
         when (val result = EmptyRoomClient.query(
             AcademicGatewayFactory.transportFor(target, accountKey), target, hidden, condition, pageIndex = next,
         )) {
             is EmptyRoomClient.QueryResult.Success -> {
-                val known = rooms.mapTo(mutableSetOf()) { it.id }
-                val fresh = result.page.rooms.filter { it.id.isNotBlank() && known.add(it.id) }
-                if (fresh.isEmpty() && result.page.rooms.isNotEmpty()) {
-                    // 服务端把第 2 页又发成了第 1 页（分页参数没生效）。这里**不能**
-                    // 静默当成功：界面会停在"共 N 间"却只列出一页，用户以为数据就这么多。
-                    GlassToaster.show("教务系统没有返回更多结果")
-                } else {
-                    rooms = rooms + fresh
+                if (generation == queryGeneration) {
+                    val known = rooms.mapTo(mutableSetOf()) { it.id }
+                    val fresh = result.page.rooms.filter { it.id.isNotBlank() && known.add(it.id) }
+                    if (fresh.isEmpty() && result.page.rooms.isNotEmpty()) {
+                        // 服务端把第 2 页又发成了第 1 页（分页参数没生效）。这里**不能**
+                        // 静默当成功：界面会停在"共 N 间"却只列出一页，用户以为数据就这么多。
+                        GlassToaster.show("教务系统没有返回更多结果")
+                    } else {
+                        rooms = rooms + fresh
+                    }
+                    pageIndex = next
+                    total = maxOf(total, result.page.total)
                 }
-                pageIndex = next
-                total = maxOf(total, result.page.total)
             }
             is EmptyRoomClient.QueryResult.NeedLogin -> {
-                needLogin = true
-                GlassToaster.show(result.message)
+                if (generation == queryGeneration) {
+                    needLogin = true
+                    GlassToaster.show(result.message)
+                }
             }
             is EmptyRoomClient.QueryResult.Failure -> GlassToaster.show(result.message)
         }
@@ -323,6 +342,7 @@ fun EmptyRoomScreen(
                     hasQueried = hasQueried,
                     error = queryError,
                     loadingMore = loadingMore,
+                    querying = querying,
                     canLoadMore = rooms.isNotEmpty() && rooms.size < total,
                     onLoadMore = { scope.launch { loadMore() } },
                 )
@@ -378,7 +398,20 @@ private fun FilterCard(
                 label = "学年学期",
                 options = filters.terms.map { it.label },
                 selectedIndex = filters.terms.indexOfFirst { it.value == condition.term },
-                onSelect = { onChange(condition.copy(term = filters.terms[it].value)) },
+                onSelect = {
+                    // 换学期整组重置：周次/节次表头是服务端按学期进度下发的（selectTH），
+                    // 旧学期勾选的时间条件在新学期可能不可查；正方网页端切学期也是
+                    // 整页刷新、全部重置。
+                    onChange(
+                        condition.copy(
+                            term = filters.terms[it].value,
+                            weeks = emptySet(),
+                            weekdays = emptySet(),
+                            periods = emptySet(),
+                            buildingId = "",
+                        )
+                    )
+                },
             )
         } else {
             ReadOnlyRow(label = "学年学期", value = filters.terms.firstOrNull()?.label.orEmpty())
@@ -736,6 +769,7 @@ private fun ResultCard(
     hasQueried: Boolean,
     error: String,
     loadingMore: Boolean,
+    querying: Boolean,
     canLoadMore: Boolean,
     onLoadMore: () -> Unit,
 ) {
@@ -765,18 +799,29 @@ private fun ResultCard(
 
             rooms.isEmpty() -> HintText("这段时间没有符合条件的空教室。可以换周次、星期或节次再试。")
 
-            else -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                rooms.forEach { room ->
-                    RoomRow(room)
+            else -> {
+                // 分块渲染：外层是 verticalScroll，不能换 LazyColumn（同轴嵌套会崩），
+                // 所以限制一次组合多少行，剩下的点「再显示 N 间」。
+                // 注意「加载更多」是**网络分页**，与这里的**渲染截断**互不替代 ——
+                // 即使 canLoadMore 为假，内存里也可能已经攒了几百条。
+                val chunk = rememberChunkedListState(rooms.size)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    rooms.take(chunk.visibleCount).forEach { room ->
+                        RoomRow(room)
+                    }
+                }
+                if (chunk.hasMore) {
+                    Spacer(Modifier.height(6.dp))
+                    ChunkedListFooter(state = chunk, noun = "间")
                 }
             }
         }
 
         if (canLoadMore) {
             SystemSecondaryButton(
-                text = if (loadingMore) "加载中…" else "加载更多（已显示 ${rooms.size} 间）",
+                text = if (loadingMore || querying) "加载中…" else "加载更多（已显示 ${rooms.size} 间）",
                 onClick = onLoadMore,
-                enabled = !loadingMore,
+                enabled = !loadingMore && !querying,
                 modifier = Modifier.fillMaxWidth(),
             )
         }

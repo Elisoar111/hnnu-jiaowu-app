@@ -17,9 +17,12 @@ object CourseCacheManager {
     private const val KEY_TIMESTAMP = "cache_timestamp"
     private const val CACHE_DURATION_MS = 60 * 60 * 1000L // 1小时
     
-    private var cachedCourses: List<Course>? = null
-    private var cacheTimestamp: Long = 0L
-    private var cachedAccountKey: String = ""
+    // 三个字段必须 @Volatile：网络回调线程写、主线程读，JMM 允许重排 ——
+    // 可能读到「新账号的 key + 旧账号的课程列表」（跨账号串显）。
+    // accountKey 声明在最后，volatile 写顺序保证它最后可见（读方先比 key 再用列表）。
+    @Volatile private var cachedCourses: List<Course>? = null
+    @Volatile private var cacheTimestamp: Long = 0L
+    @Volatile private var cachedAccountKey: String = ""
     
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)

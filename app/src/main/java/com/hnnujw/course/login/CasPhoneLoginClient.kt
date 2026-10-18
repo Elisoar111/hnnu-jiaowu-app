@@ -70,6 +70,25 @@ object CasPhoneLoginClient {
     private var sessionValue = ""
 
     /**
+     * 保护 [execution] / [sessionValue] / [sessionConsumed] / [cookieStore] 这几项
+     * 互相耦合的可变状态。
+     *
+     * 为什么必须加：`sendVerificationCode` 与 `loginWithPhoneCode` 都在
+     * `Dispatchers.IO` 上跑，是两个独立的网络调用。UI 上虽然用按钮禁用来防重入，
+     * 但那只是**时序上的运气** —— 用户切走再切回、或两处入口同时触发时，
+     * 两个协程会真的并发进入 [ensureSession]：
+     *
+     *  - 两个都判定"需要新会话"，于是各 `reset()` 一次、各拉一次登录页；
+     *  - 后完成的那个把 `execution` 覆盖掉，先拿到的验证码就绑在了作废的会话上；
+     *  - 更糟的是 CAS 的 `execution` 一次性，混用会让服务端把两次登录串成同一个。
+     *
+     * 用一把普通锁（而不是协程 Mutex）是有意的：临界区里是**阻塞式** `execute()`
+     * 网络调用，本来就跑在 IO 线程上，用 `synchronized` 语义最直接，
+     * 也避免了"在 suspend 函数里持 Mutex 做阻塞调用"那种容易写出死锁的写法。
+     */
+    private val sessionLock = Any()
+
+    /**
      * 当前 execution 是否已被提交消费过（初值 true = 还没有任何可用会话，需要新开一次）。
      *
      * CAS 的 execution 是一次性的：提交回 /cas/login 之后它已经作废，
@@ -83,22 +102,35 @@ object CasPhoneLoginClient {
 
     /** 丢弃当前 CAS 会话：清空全部 Cookie 与 execution，下一次 [ensureSession] 重新开局。 */
     fun reset() {
-        synchronized(cookieStore) { cookieStore.clear() }
-        execution = ""
-        sessionValue = ""
-        sessionConsumed = true
+        synchronized(sessionLock) {
+            synchronized(cookieStore) { cookieStore.clear() }
+            execution = ""
+            sessionValue = ""
+            sessionConsumed = true
+        }
     }
+
+    /**
+     * 在一次 CAS 操作期间独占会话。
+     *
+     * 把「读/建会话 → 用它发请求 → 按结果标记消费」整段放进同一个临界区，
+     * 才能真正避免两次登录交错。只锁 [ensureSession] 是不够的：
+     * 拿到会话之后到发出请求之间还有窗口，两次操作仍可能拿到同一个 execution 各提交一次。
+     */
+    private fun <T> withSession(block: () -> T): T = synchronized(sessionLock) { block() }
 
     /** 发送短信验证码。 */
     suspend fun sendVerificationCode(phone: String): CasResult = withContext(Dispatchers.IO) {
         try {
-            ensureSession()
             val form = FormBody.Builder()
                 .add("type", "1")
                 .add("receiver", aesEncrypt(phone.trim()))
                 .add("msgType", "login")
                 .build()
-            val json = postJson("user/sendVerificationCode", form)
+            val json = withSession {
+                ensureSession()
+                postJson("user/sendVerificationCode", form)
+            }
             CasResult(json.optBoolean("success", false), json.optString("message", ""))
         } catch (e: CancellationException) {
             throw e
@@ -113,55 +145,69 @@ object CasPhoneLoginClient {
      */
     suspend fun loginWithPhoneCode(phone: String, code: String): CasResult = withContext(Dispatchers.IO) {
         try {
-            ensureSession()
-            val encPhone = aesEncrypt(phone.trim())
-            val loginJson = postJson(
-                "phoneLogin",
-                FormBody.Builder().add("phone", encPhone).add("code", code.trim()).build()
-            )
-            // 失败响应可能没有 success 字段（如「该手机号未绑定」）
-            if (!loginJson.optBoolean("success", false)) {
-                return@withContext CasResult(false, loginJson.optString("message", "验证码校验未通过"))
-            }
-            val message = loginJson.optString("message", "")
-            // 服务端格式是「账号-密码-一次性登录码」，账号/密码本身可能含 '-'，所以只切前两刀
-            val parts = message.split("-", limit = 3)
-            if (parts.size < 3) {
-                return@withContext CasResult(false, "统一身份认证返回格式异常，请改用密码登录")
-            }
-            // 与网页 verLogin 一致：把服务端返回的账号/密码/一次性登录码原样提交回 /cas/login
-            val form = FormBody.Builder()
-                .add("key", "")
-                .add("username", parts[0])
-                .add("password", parts[1])
-                .add("captcha", parts[2])
-                .add("captchaInput", "")
-                .add("execution", execution)
-                .add("_eventId", "submit")
-                .add("geolocation", "")
-                .build()
-            // 提交即消费：这一刀之后 execution 作废，下次登录必须重开一次会话
-            sessionConsumed = true
-            client.newCall(
-                Request.Builder().url(CAS_LOGIN_URL)
-                    .header("User-Agent", UA)
-                    .header("Referer", CAS_LOGIN_URL)
-                    .post(form)
-                    .build()
-            ).execute().use { resp ->
-                val finalUrl = resp.request.url.toString()
-                val body = resp.body?.string().orEmpty()
-                // CAS 拒绝时会回到登录页本身；成功则 302 落在教务 SSO 域
-                if (finalUrl.contains("/cas/login") || body.contains("name=\"execution\"")) {
-                    return@withContext CasResult(false, "统一身份认证登录未完成，请稍后重试或改用密码登录")
-                }
-            }
-            CasResult(true, "登录成功")
+            // 整段（建会话 → 校验验证码 → 提交回 /cas/login）在同一个临界区里跑：
+            // 中途放开锁的话，另一个登录协程会插进来 reset() 掉 execution，
+            // 这边提交回去的就是一个已作废的一次性凭据。
+            withSession { loginWithPhoneCodeLocked(phone, code) }
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
             CasResult(false, "登录失败：${t.message ?: "网络异常"}")
         }
+    }
+
+    /**
+     * [loginWithPhoneCode] 的实际流程，**调用方必须持有 [sessionLock]**。
+     *
+     * 拆成独立函数是因为原流程里有三处 `return@withContext`：把它塞进
+     * `withSession { }` 的 lambda 里，那些非局部返回会直接从 lambda 跳出，
+     * 语义会变（要么编译不过，要么提前放锁），所以改成普通函数 + 普通 return。
+     */
+    private fun loginWithPhoneCodeLocked(phone: String, code: String): CasResult {
+        ensureSession()
+        val encPhone = aesEncrypt(phone.trim())
+        val loginJson = postJson(
+            "phoneLogin",
+            FormBody.Builder().add("phone", encPhone).add("code", code.trim()).build()
+        )
+        // 失败响应可能没有 success 字段（如「该手机号未绑定」）
+        if (!loginJson.optBoolean("success", false)) {
+            return CasResult(false, loginJson.optString("message", "验证码校验未通过"))
+        }
+        val message = loginJson.optString("message", "")
+        // 服务端格式是「账号-密码-一次性登录码」，账号/密码本身可能含 '-'，所以只切前两刀
+        val parts = message.split("-", limit = 3)
+        if (parts.size < 3) {
+            return CasResult(false, "统一身份认证返回格式异常，请改用密码登录")
+        }
+        // 与网页 verLogin 一致：把服务端返回的账号/密码/一次性登录码原样提交回 /cas/login
+        val form = FormBody.Builder()
+            .add("key", "")
+            .add("username", parts[0])
+            .add("password", parts[1])
+            .add("captcha", parts[2])
+            .add("captchaInput", "")
+            .add("execution", execution)
+            .add("_eventId", "submit")
+            .add("geolocation", "")
+            .build()
+        // 提交即消费：这一刀之后 execution 作废，下次登录必须重开一次会话
+        sessionConsumed = true
+        client.newCall(
+            Request.Builder().url(CAS_LOGIN_URL)
+                .header("User-Agent", UA)
+                .header("Referer", CAS_LOGIN_URL)
+                .post(form)
+                .build()
+        ).execute().use { resp ->
+            val finalUrl = resp.request.url.toString()
+            val body = resp.body?.string().orEmpty()
+            // CAS 拒绝时会回到登录页本身；成功则 302 落在教务 SSO 域
+            if (finalUrl.contains("/cas/login") || body.contains("name=\"execution\"")) {
+                return CasResult(false, "统一身份认证登录未完成，请稍后重试或改用密码登录")
+            }
+        }
+        return CasResult(true, "登录成功")
     }
 
     /** 取合并后的 Cookie 头：教务主站优先，SSO 域名（jwglxt）只补缺。 */

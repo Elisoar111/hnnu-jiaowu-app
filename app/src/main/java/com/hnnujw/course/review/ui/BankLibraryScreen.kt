@@ -40,6 +40,8 @@ import com.hnnujw.course.review.BankManageLogic
 import com.hnnujw.course.review.BundledBanks
 import com.hnnujw.course.review.ReviewDatabase
 import com.hnnujw.course.review.parseJsonBank
+import com.hnnujw.course.document.XlsxParser
+import com.hnnujw.course.review.ReviewBankTable
 import com.hnnujw.course.ui.system.GlassLoadingIndicator
 import com.hnnujw.course.ui.system.GlassLoadingState
 import com.hnnujw.course.ui.system.GlassPageScaffold
@@ -160,6 +162,51 @@ fun BankLibraryScreen(
         }
     }
 
+    // 表格导入（Excel / CSV）：与 JSON 导入分开一条通道。
+    // 合并成"一个按钮猜格式"看起来省事，但两种文件失败后的补救动作完全不同
+    // （JSON 让你改键名，表格让你改表头），提示混在一起就没法照着做。
+    val tableLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        importing = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val fileName = uri.lastPathSegment?.substringAfterLast('/').orEmpty()
+                    val fallback = fileName.substringBeforeLast('.').ifBlank { "导入题库" }
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: error("无法读取所选文件")
+                    val lower = fileName.lowercase()
+                    val bank = if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
+                        val doc = runCatching { XlsxParser.parse(bytes) }.getOrElse {
+                            error("这个 Excel 打不开：${it.message ?: "格式不受支持"}")
+                        }
+                        val rows = doc.sheets.firstOrNull()?.rows.orEmpty()
+                        if (rows.isEmpty()) error("表格里没有内容（读到 ${doc.sheets.size} 个工作表）")
+                        ReviewBankTable.parseRows(rows, fallbackName = fallback)
+                    } else {
+                        ReviewBankTable.parseDelimited(bytes.toString(Charsets.UTF_8), fallbackName = fallback)
+                    }
+                    if (bank.questions.isEmpty()) {
+                        // 表格的失败原因通常是"第 N 行哪里不对"，提示条装不下十几条行号，
+                        // 所以只摊第一条，其余条数在成功提示里报。
+                        error(bank.errors.firstOrNull() ?: "表格里没有可用的题目")
+                    }
+                    db.importBank(bank.name, bank.questions) to bank
+                }
+            }
+            importing = false
+            result.onSuccess { (_, bank) ->
+                reload()
+                val dropped = if (bank.errors.isEmpty()) "" else "，${bank.errors.size} 行被跳过"
+                GlassToaster.show("已从表格导入「${bank.name}」${bank.questions.size} 题$dropped")
+            }.onFailure { e ->
+                GlassToaster.show("导入失败：${e.message ?: "文件无法识别"}")
+            }
+        }
+    }
+
     // 仓库内容 = 还没导入的内置库 + 已导入但被移出的库。
     // 内置库用**题库名**去重（见 BundledBanks.pendingSpecs），与库里的名字同一口径。
     val pendingSpecs = BundledBanks.pendingSpecs(banks.map { it.name }.toSet())
@@ -256,8 +303,8 @@ fun BankLibraryScreen(
             item {
                 Card(entranceGroup = 1) {
                     Text(
-                        text = "从手机里选一个 JSON 题库文件导进来。导入后会自动出现在「我的题库」里，" +
-                            "可以直接开始练习。",
+                        text = "从手机里选一个 JSON 题库文件导进来（也支持 Excel / CSV，见下）。" +
+                            "导入后会自动出现在「我的题库」里，可以直接开始练习。",
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -270,6 +317,31 @@ fun BankLibraryScreen(
                             importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
                         },
                         modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    SecondaryAction(
+                        text = "从 Excel / CSV 导入",
+                        enabled = !importing && !busy,
+                        onClick = {
+                            tableLauncher.launch(
+                                arrayOf(
+                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    "text/csv",
+                                    "text/comma-separated-values",
+                                    "text/plain",
+                                    "*/*"
+                                )
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "表格第一行写表头，至少要有「题干」和「答案」两列；" +
+                            "可选「选项」「章节」「解析」「题型」。选项写成一列用 | 分隔，或分成 A/B/C/D 四列都可以。",
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

@@ -77,12 +77,30 @@ object AiConfigStore {
     // ── 读 ───────────────────────────────────────────────────────────────
 
     /**
+     * 进程内缓存。
+     *
+     * `load()` 要碰 AndroidKeyStore 解密，单次几毫秒到几十毫秒。而它被读得很频繁：
+     * 首页 AI 入口每次进页面读一次、练习页每次 `ON_RESUME` 读一次。
+     * 配置是设备级的单份数据，进程存活期间不会在别处被改（改都走本类的 [save]/[clear]），
+     * 所以缓存到进程结束是安全的；[save] 与 [clear] 会同步失效。
+     */
+    @Volatile
+    private var cached: AiConfig? = null
+
+    /**
      * 读回配置（不存在时返回一份空配置，不返回 null）。
      *
-     * ⚠️ 内部要碰 AndroidKeyStore 解密，**必须在 IO 线程调用**；调用方仍应
+     * ⚠️ 首次调用要碰 AndroidKeyStore 解密，**必须在 IO 线程调用**；调用方仍应
      * `runCatching` 包一层 —— 真机上密钥库损坏会抛，在协程里裸抛就是崩进程。
      */
     fun load(context: Context): AiConfig {
+        cached?.let { return it }
+        return synchronized(this) {
+            cached ?: readFromDisk(context).also { cached = it }
+        }
+    }
+
+    private fun readFromDisk(context: Context): AiConfig {
         val prefs = prefs(context)
 
         // ① 现格式（与最早那版单配置同键名，因此老数据直接命中这条）。
@@ -135,12 +153,19 @@ object AiConfigStore {
             .remove(LEGACY_PROFILES)
             .remove(LEGACY_ACTIVE)
             .apply()
+        // 缓存必须跟着更新，否则保存后同进程内仍然读回旧配置。
+        cached = config.copy(
+            model = AiConfigRules.normalizeModel(config.model),
+            timeoutSeconds = AiConfigRules.clampTimeoutSeconds(config.timeoutSeconds),
+            retries = AiConfigRules.clampRetries(config.retries)
+        )
         return true
     }
 
     /** 清空配置（Key、模型、网络参数全部复位）。 */
     fun clear(context: Context) {
         prefs(context).edit().clear().apply()
+        cached = null
     }
 
     // ── 内部 ─────────────────────────────────────────────────────────────

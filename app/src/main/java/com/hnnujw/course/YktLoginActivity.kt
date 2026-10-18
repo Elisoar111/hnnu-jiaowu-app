@@ -51,6 +51,7 @@ import com.hnnujw.course.ui.system.SystemPrimaryButton
 import com.hnnujw.course.ui.theme.CourseSelectorTheme
 import com.hnnujw.course.ykt.YktClient
 import com.hnnujw.course.ykt.YktStore
+import com.hnnujw.course.utils.WebViewDataDir
 
 /**
  * 一卡通的登录页（WebView + 统一身份认证）。
@@ -98,7 +99,6 @@ class YktLoginActivity : ComponentActivity() {
          */
         private val ALLOWED_HOSTS = setOf("yktapp.hnnu.edu.cn")
 
-        private var suffixConfigured = false
 
         /**
          * 白屏修复脚本。
@@ -252,12 +252,9 @@ class YktLoginActivity : ComponentActivity() {
         startUrl = YktStore.loginUrl()
         currentUrl = startUrl
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && !suffixConfigured) {
-            // 与教务登录分开的存储目录：两套系统 Cookie 互不可见，
-            // 也避免教务登录清 Cookie 时把一卡通会话一起清掉。
-            WebView.setDataDirectorySuffix("ykt")
-            suffixConfigured = true
-        }
+        // 与教务网页同进程共用一个后缀（P+ 只允许设一次，见 WebViewDataDir）：
+        // Cookie 隔离由 CookieManager 按域名保证，数据目录层面不再区分。
+        WebViewDataDir.ensureConfigured("ykt")
 
         val browser = createWebView()
         webView = browser
@@ -343,7 +340,9 @@ class YktLoginActivity : ComponentActivity() {
         // 与教务登录一致：不给文件/content 访问权限，减少攻击面
         settings.allowFileAccess = false
         settings.allowContentAccess = false
-        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                // 混合内容策略跟着主文档 scheme 走（见 WebViewMixedContent 的说明）：
+        // 一卡通登录页是凭据输入页，https 时必须禁止 http 子资源。
+        com.hnnujw.course.web.WebViewMixedContent.applyMode(settings, startUrl)
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(instance, true)
@@ -441,7 +440,12 @@ class YktLoginActivity : ComponentActivity() {
         }
         view.evaluateJavascript(CAPTURE_TOKEN_JS) { raw ->
             // 返回值是 JSON 字符串再套一层引号（例："{\"access_token\":\"…\"}"）
-            val json = raw?.trim()?.trim('"')?.replace("\\\"", "\"")?.replace("\\\\", "\\").orEmpty()
+            // evaluateJavascript 的返回值是"JSON 字符串再套一层引号"。手工反斜杠反转义
+            // 只对不含转义字符的令牌碰巧正确 —— 站点哪天换含转义值的存储格式就会静默
+            // 损坏令牌。JSONTokener 是这个语义的标准解法。
+            val json = raw?.trim()?.let {
+                runCatching { org.json.JSONTokener(it).nextValue() }.getOrNull()
+            }?.toString().orEmpty()
             val value = YktClient.extractAuthFromStorageJson(json)
             if (value.isNotBlank() && capturedToken.isBlank()) {
                 capturedToken = value

@@ -2,7 +2,6 @@ package com.hnnujw.course.review
 
 import android.content.ContentValues
 import android.content.Context
-import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
@@ -34,123 +33,12 @@ import java.util.UUID
 class ReviewDatabase private constructor(context: Context) :
     SQLiteOpenHelper(context.applicationContext, DB_NAME, null, DB_VERSION) {
 
-    override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS banks (
-                id          TEXT PRIMARY KEY,
-                name        TEXT NOT NULL,
-                question_count INTEGER NOT NULL DEFAULT 0,
-                created_at  INTEGER NOT NULL,
-                selected    INTEGER NOT NULL DEFAULT 0,
-                sort_order  INTEGER NOT NULL DEFAULT 0
-            )
-            """.trimIndent()
-        )
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS questions (
-                bank_id     TEXT NOT NULL,
-                qid         TEXT NOT NULL,
-                type        TEXT NOT NULL,
-                stem        TEXT NOT NULL,
-                options     TEXT NOT NULL,
-                answer      TEXT NOT NULL,
-                chapter     TEXT NOT NULL DEFAULT '未分类',
-                explanation TEXT NOT NULL DEFAULT '',
-                source      TEXT NOT NULL DEFAULT '',
-                tags        TEXT NOT NULL DEFAULT '[]',
-                PRIMARY KEY (bank_id, qid)
-            )
-            """.trimIndent()
-        )
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_q_bank ON questions(bank_id)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_q_chapter ON questions(chapter)")
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS records (
-                bank_id      TEXT NOT NULL,
-                question_id  TEXT NOT NULL,
-                correct_count INTEGER NOT NULL DEFAULT 0,
-                wrong_count  INTEGER NOT NULL DEFAULT 0,
-                last_result  TEXT,
-                last_time    INTEGER,
-                PRIMARY KEY (bank_id, question_id)
-            )
-            """.trimIndent()
-        )
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS wrong_book (
-                bank_id      TEXT NOT NULL,
-                question_id  TEXT NOT NULL,
-                wrong_count  INTEGER NOT NULL DEFAULT 1,
-                last_wrong_at INTEGER NOT NULL,
-                mastered     INTEGER NOT NULL DEFAULT 0,
-                streak       INTEGER NOT NULL DEFAULT 0,
-                due_at       INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (bank_id, question_id)
-            )
-            """.trimIndent()
-        )
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS favorites (
-                bank_id     TEXT NOT NULL,
-                question_id TEXT NOT NULL,
-                created_at  INTEGER NOT NULL,
-                PRIMARY KEY (bank_id, question_id)
-            )
-            """.trimIndent()
-        )
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS meta (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """.trimIndent()
-        )
-    }
+    // 表结构与迁移已拆到 ReviewSchema.kt（见那里的说明）。这两个 override 只做转发，
+    // 让 SQLiteOpenHelper 的生命周期仍挂在本类上。
+    override fun onCreate(db: SQLiteDatabase) = createSchema(db)
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // 全部建表语句都是 IF NOT EXISTS，幂等重跑即可；将来加列再按版本补 ALTER。
-        onCreate(db)
-        // v2 → v3：wrong_book 增加 due_at（间隔复习的下次到期时刻）。
-        // 🔴 **幂等迁移、绝不删表重建** —— 既有 wrong_book 数据必须原样保住。
-        // 先 `PRAGMA table_info` 判列是否存在，避免了在"新建库直接建到最新版本"的路径上
-        // 重复 ADD COLUMN（那会抛 duplicate column name）。
-        if (!hasColumn(db, "wrong_book", "due_at")) {
-            db.execSQL("ALTER TABLE wrong_book ADD COLUMN due_at INTEGER NOT NULL DEFAULT 0")
-        }
-        // v3 → v4：banks 增加「是否已从题库仓库取出」与「取出后的排序」两列。
-        //
-        // 🔴 存量行必须**迁移成 selected = 1**：升级前所有题库都是直接显示在首页的，
-        // 默认值 0 会让用户升级后打开复习页发现"题库全没了"（数据还在，但一个都不显示）。
-        // sort_order 按 rowid 铺一遍，保持升级前的相对顺序。
-        if (!hasColumn(db, "banks", "selected")) {
-            db.execSQL("ALTER TABLE banks ADD COLUMN selected INTEGER NOT NULL DEFAULT 0")
-            db.execSQL("ALTER TABLE banks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
-            db.execSQL("UPDATE banks SET selected = 1, sort_order = rowid")
-        } else if (!hasColumn(db, "banks", "sort_order")) {
-            db.execSQL("ALTER TABLE banks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
-            db.execSQL("UPDATE banks SET sort_order = rowid")
-        }
-        // v4 → v5：斩题功能彻底下线，DROP slashed 表。斩题的 UI 入口早已移除，
-        // 表留着只会让历史被斩的题永远抽不出来、且无入口找回 —— 直接删表，
-        // 这些题全部放回练习。DROP IF EXISTS 幂等，老库新库跑一遍都安全。
-        db.execSQL("DROP TABLE IF EXISTS slashed")
-    }
-
-    /** 某张表是否已经有这一列（用于幂等迁移）。 */
-    private fun hasColumn(db: SQLiteDatabase, table: String, column: String): Boolean =
-        db.rawQuery("PRAGMA table_info($table)", null).use { c ->
-            val nameIdx = c.getColumnIndex("name")
-            while (c.moveToNext()) {
-                if (nameIdx >= 0 && c.getString(nameIdx) == column) return true
-            }
-            false
-        }
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) =
+        upgradeSchema(db, oldVersion, newVersion)
 
     // —— 题库
 
@@ -483,7 +371,7 @@ class ReviewDatabase private constructor(context: Context) :
             "SELECT bank_id, qid, type, stem, options, answer, chapter, explanation, source, tags " +
                 "FROM questions WHERE bank_id = ? AND qid = ? LIMIT 1",
             arrayOf(bankId, qid)
-        ).use { c -> if (c.moveToFirst()) readQuestion(c) else null }
+        ).use { c -> if (c.moveToFirst()) readQuestionRow(c) else null }
 
     /**
      * 列出某库的全部题目，供逐题编辑页展示。按 qid 稳定排序。
@@ -497,7 +385,7 @@ class ReviewDatabase private constructor(context: Context) :
             arrayOf(bankId)
         ).use { c ->
             val out = ArrayList<ReviewQuestion>()
-            while (c.moveToNext()) out.add(readQuestion(c))
+            while (c.moveToNext()) out.add(readQuestionRow(c))
             out
         }
 
@@ -584,7 +472,12 @@ class ReviewDatabase private constructor(context: Context) :
         onlyFavorite: Boolean = false,
         limit: Int = 0,
         /** 只练**今日到期**的错题（间隔复习的「今日待复习」入口）。 */
-        dueOnly: Boolean = false
+        dueOnly: Boolean = false,
+        /**
+         * 到期判定的「现在」。显式传参而不是每次都读 `System.currentTimeMillis()`，
+         * 否则"恰好到期 / 还差一秒"这类边界没法钉死（测试要能控制时钟）。
+         */
+        now: Long = System.currentTimeMillis()
     ): List<ReviewQuestion> {
         val where = ArrayList<String>()
         val args = ArrayList<String>()
@@ -598,7 +491,7 @@ class ReviewDatabase private constructor(context: Context) :
         }
         if (dueOnly) {
             // 到期口径与 ReviewScheduling.isDue 一致：due_at=0（未排期）也算到期。
-            val now = System.currentTimeMillis().toString()
+            // ⚠️ 这里与 Kotlin 侧的 [isDue] 是同一条规则的两份实现 —— 改一处必须同步改另一处。
             where.add(
                 "qid IN (SELECT question_id FROM wrong_book WHERE bank_id = questions.bank_id " +
                     "AND mastered = 0 AND (due_at = 0 OR due_at <= $now))"
@@ -608,6 +501,8 @@ class ReviewDatabase private constructor(context: Context) :
         }
         if (onlyFavorite) where.add("qid IN (SELECT question_id FROM favorites WHERE bank_id = questions.bank_id)")
         val sql = buildString {
+            // 顺序模式一次取全行（还要把 LIMIT 下推进 SQL）；
+            // 乱序 / 错题优先的排序只需要标识符，见下面的轻量分支。
             append("SELECT bank_id, qid, type, stem, options, answer, chapter, explanation, source, tags FROM questions")
             if (where.isNotEmpty()) append(" WHERE ").append(where.joinToString(" AND "))
             // 排序只保底 rowid —— 乱序/错题优先的真正排序在 Kotlin 层做
@@ -619,17 +514,37 @@ class ReviewDatabase private constructor(context: Context) :
             if (mode == ReviewMode.SEQUENTIAL && limit > 0) append(" LIMIT ").append(limit)
         }
         val arr = args.toTypedArray()
-        val rows = readableDatabase.rawQuery(sql, arr).use { c ->
-            val out = ArrayList<ReviewQuestion>()
-            while (c.moveToNext()) out.add(readQuestion(c))
+        if (mode == ReviewMode.SEQUENTIAL) {
+            return readableDatabase.rawQuery(sql, arr).use { c ->
+                val out = ArrayList<ReviewQuestion>()
+                while (c.moveToNext()) out.add(readQuestionRow(c))
+                out
+            }
+        }
+
+        // 乱序 / 错题优先：**先只取标识符排序，再回读选中的题**。
+        //
+        // 这两条路径原本把整库的题干、选项 JSON、解析全文一起读进内存再排序，
+        // 只为拿一个顺序。内置库 320 题时只是几十 MB 的瞬时峰值，用户导入 3,000 题
+        // 的库就很明显了；而排序键只有 `bankId::qid`。
+        val keySql = buildString {
+            append("SELECT bank_id, qid FROM questions")
+            if (where.isNotEmpty()) append(" WHERE ").append(where.joinToString(" AND "))
+            append(" ORDER BY rowid")
+        }
+        val keys = readableDatabase.rawQuery(keySql, arr).use { c ->
+            val out = ArrayList<Pair<String, String>>()
+            while (c.moveToNext()) out.add(c.getString(0) to c.getString(1))
             out
         }
-        return when (mode) {
-            ReviewMode.RANDOM -> rows.sortedWith(randomOrderComparator())
-            ReviewMode.WRONG_FIRST ->
-                rows.sortedWith(wrongFirstOrderComparator(unmasteredWrongKeys()))
-            else -> if (limit > 0) rows.take(limit) else rows
+        val stubs = keys.map { (bankId, qid) -> sortingStubQuestion(bankId, qid) }
+        val ordered = when (mode) {
+            ReviewMode.RANDOM -> stubs.sortedWith(randomOrderComparator())
+            ReviewMode.WRONG_FIRST -> stubs.sortedWith(wrongFirstOrderComparator(unmasteredWrongKeys()))
+            else -> stubs
         }
+        val chosen = if (limit > 0) ordered.take(limit) else ordered
+        return loadQuestionsInOrder(readableDatabase, chosen.map { it.bankId to it.id })
     }
 
     /** 错题本里未掌握题目的复合键（`bankId::qid`），给 [wrongFirstOrderComparator] 用。 */
@@ -647,34 +562,8 @@ class ReviewDatabase private constructor(context: Context) :
             "SELECT bank_id, qid, type, stem, options, answer, chapter, explanation, source, tags " +
                 "FROM questions WHERE bank_id = ? AND qid = ?",
             arrayOf(bankId, qid)
-        ).use { c -> if (c.moveToFirst()) readQuestion(c) else null }
+        ).use { c -> if (c.moveToFirst()) readQuestionRow(c) else null }
 
-    private fun readQuestion(c: Cursor): ReviewQuestion {
-        val options = try {
-            val arr = JSONArray(c.getString(4))
-            (0 until arr.length()).map { arr.optString(it) }
-        } catch (e: Exception) {
-            emptyList()
-        }
-        val tags = try {
-            val arr = JSONArray(c.getString(9))
-            (0 until arr.length()).map { arr.optString(it) }
-        } catch (e: Exception) {
-            emptyList()
-        }
-        return ReviewQuestion(
-            id = c.getString(1),
-            type = c.getString(2),
-            stem = c.getString(3),
-            options = options,
-            answer = c.getString(5),
-            chapter = c.getString(6),
-            explanation = c.getString(7),
-            source = c.getString(8),
-            tags = tags,
-            bankId = c.getString(0)
-        )
-    }
 
     fun totalCount(bankId: String? = null): Int {
         val sql = if (bankId == null) "SELECT COUNT(*) FROM questions" else "SELECT COUNT(*) FROM questions WHERE bank_id = ?"
@@ -719,6 +608,10 @@ class ReviewDatabase private constructor(context: Context) :
      * 交卷补判（[com.hnnujw.course.review.PracticeSession.judgePending] 返回的一批）
      * 曾经是每题一个协程、一个独立事务 —— 一次补判 N 题就是 N 个事务。这里合并成
      * 一个：整批要么全记上、要么全没记上，失败由调用方提示兜底。
+     *
+     * 🔴 **既有状态一次读回**，不再每题先 `stat()` 再 `wrongEntry()`（那是 2N 次查询）。
+     * 交卷补判几十题时，往返次数从 2N+2N 降到「每个题库 2 条 SELECT + N 条写入」。
+     * 同一批里出现重复的 `(bankId, qid)` 时按顺序累加（下面的 map 会被逐条更新）。
      */
     fun recordAnswers(items: List<AnswerRecord>) {
         if (items.isEmpty()) return
@@ -726,15 +619,22 @@ class ReviewDatabase private constructor(context: Context) :
         val now = System.currentTimeMillis()
         db.beginTransaction()
         try {
+            // 本批涉及的记录/错题本状态，按 (bankId, qid) 索引。
+            val stats = loadStats(db, items)
+            val wrong = loadWrongEntries(db, items)
             for (item in items) {
-                val cur = stat(item.bankId, item.qid)
+                val key = item.bankId to item.qid
+                val cur = stats[key] ?: QuestionStat(0, 0, null)
+                val nextCorrect = cur.correctCount + if (item.correct) 1 else 0
+                val nextWrong = cur.wrongCount + if (item.correct) 0 else 1
+                stats[key] = QuestionStat(nextCorrect, nextWrong, item.correct)
                 db.insertWithOnConflict(
                     "records", null,
                     ContentValues().apply {
                         put("bank_id", item.bankId)
                         put("question_id", item.qid)
-                        put("correct_count", cur.correctCount + if (item.correct) 1 else 0)
-                        put("wrong_count", cur.wrongCount + if (item.correct) 0 else 1)
+                        put("correct_count", nextCorrect)
+                        put("wrong_count", nextWrong)
                         put("last_result", if (item.correct) 1 else 0)
                         put("last_time", now)
                     },
@@ -742,12 +642,13 @@ class ReviewDatabase private constructor(context: Context) :
                 )
                 if (item.correct) {
                     // 只有还在错题本里（未掌握）的题才累加连对；已掌握或从未答错的题不受影响。
-                    val entry = wrongEntry(item.bankId, item.qid)
+                    val entry = wrong[key]
                     if (entry != null && !entry.mastered) {
                         val streak = entry.streak + 1
                         val level = masteryLevelOf(streak, entry.wrongCount)
                         // 答对即"复习过一次"：按新等级排下次到期时间（间隔重复的核心）。
                         val nextDue = dueAt(level, now)
+                        wrong[key] = entry.copy(streak = streak, mastered = streak >= MASTER_STREAK)
                         db.execSQL(
                             "UPDATE wrong_book SET streak = ?, mastered = ?, due_at = ? " +
                                 "WHERE bank_id = ? AND question_id = ?",
@@ -755,15 +656,22 @@ class ReviewDatabase private constructor(context: Context) :
                         )
                     }
                 } else {
-                    // 答错：回炉。错误次数 +1，连对清零，等级回到 Learning，到期时间按新等级重排。
-                    val wrongCount = cur.wrongCount + 1
-                    val level = masteryLevelOf(0, wrongCount)
-                    val nextDue = dueAt(level, now)
+                    // 答错：回炉。错误次数 +1，连对清零，到期时间置 0（立即到期）。
+                    val wrongCount = nextWrong
+                    wrong[key] = WrongEntry(wrongCount, 0, false)
+                    // 🔴 答错即「立即到期」（due_at = 0），**不排到明天**。
+                    //
+                    // 这里原先是 `dueAt(masteryLevelOf(0, wrongCount), now)`；而
+                    // `masteryLevelOf` 对"刚入册"返回的是 Learning（间隔 1 天）——
+                    // 于是刚做完错题的人打开错题本，看到的是「今日待复习 0 题」，
+                    // 要等到第二天才有一道题冒出来。这与 `ReviewScheduling` 里
+                    // "New → 立即进入复习队列"的设计意图正好相反。
+                    // 刚答错的题就是最该马上复习的题，所以直接把到期时间置 0。
                     db.execSQL(
                         "INSERT OR REPLACE INTO wrong_book " +
                             "(bank_id, question_id, wrong_count, last_wrong_at, mastered, streak, due_at) " +
                             "VALUES (?, ?, ?, ?, 0, 0, ?)",
-                        arrayOf<Any>(item.bankId, item.qid, wrongCount, now, nextDue)
+                        arrayOf<Any>(item.bankId, item.qid, wrongCount, now, 0L)
                     )
                 }
             }
@@ -779,6 +687,65 @@ class ReviewDatabase private constructor(context: Context) :
     }
 
     private data class WrongEntry(val wrongCount: Int, val streak: Int, val mastered: Boolean)
+
+    /**
+     * 批量预读 `records` 里本批涉及的既有计数。
+     *
+     * 按 `bank_id` 分组，一个题库一条 `SELECT ... IN (...)`。交卷补判几十题时，
+     * 这是把「每题一次查询」压成「每库一次」的关键。
+     */
+    private fun loadStats(
+        db: SQLiteDatabase,
+        items: List<AnswerRecord>
+    ): MutableMap<Pair<String, String>, QuestionStat> {
+        val out = HashMap<Pair<String, String>, QuestionStat>()
+        items.groupBy { it.bankId }.forEach { (bankId, group) ->
+            val ids = group.map { it.qid }.distinct()
+            if (ids.isEmpty()) return@forEach
+            val placeholders = ids.joinToString(", ") { "?" }
+            db.rawQuery(
+                "SELECT question_id, correct_count, wrong_count, last_result FROM records " +
+                    "WHERE bank_id = ? AND question_id IN ($placeholders)",
+                arrayOf(bankId) + ids.toTypedArray()
+            ).use { c ->
+                while (c.moveToNext()) {
+                    out[bankId to c.getString(0)] = QuestionStat(
+                        correctCount = c.getInt(1),
+                        wrongCount = c.getInt(2),
+                        lastResult = if (c.isNull(3)) null else c.getInt(3) == 1
+                    )
+                }
+            }
+        }
+        return out
+    }
+
+    /** 批量预读 `wrong_book` 里本批涉及的既有掌握状态（与 [loadStats] 同一套路）。 */
+    private fun loadWrongEntries(
+        db: SQLiteDatabase,
+        items: List<AnswerRecord>
+    ): MutableMap<Pair<String, String>, WrongEntry> {
+        val out = HashMap<Pair<String, String>, WrongEntry>()
+        items.groupBy { it.bankId }.forEach { (bankId, group) ->
+            val ids = group.map { it.qid }.distinct()
+            if (ids.isEmpty()) return@forEach
+            val placeholders = ids.joinToString(", ") { "?" }
+            db.rawQuery(
+                "SELECT question_id, wrong_count, streak, mastered FROM wrong_book " +
+                    "WHERE bank_id = ? AND question_id IN ($placeholders)",
+                arrayOf(bankId) + ids.toTypedArray()
+            ).use { c ->
+                while (c.moveToNext()) {
+                    out[bankId to c.getString(0)] = WrongEntry(
+                        wrongCount = c.getInt(1),
+                        streak = c.getInt(2),
+                        mastered = c.getInt(3) == 1
+                    )
+                }
+            }
+        }
+        return out
+    }
 
     private fun wrongEntry(bankId: String, qid: String): WrongEntry? =
         readableDatabase.rawQuery(
@@ -836,7 +803,7 @@ class ReviewDatabase private constructor(context: Context) :
             args
         ).use { c ->
             val out = ArrayList<ReviewQuestion>()
-            while (c.moveToNext()) out.add(readQuestion(c))
+            while (c.moveToNext()) out.add(readQuestionRow(c))
             out
         }
     }
@@ -871,7 +838,7 @@ class ReviewDatabase private constructor(context: Context) :
             args.toTypedArray()
         ).use { c ->
             val out = ArrayList<ReviewQuestion>()
-            while (c.moveToNext()) out.add(readQuestion(c))
+            while (c.moveToNext()) out.add(readQuestionRow(c))
             out
         }
     }
@@ -941,7 +908,7 @@ class ReviewDatabase private constructor(context: Context) :
                 out.add(
                     WrongBookEntry(
                         // readQuestion 只读 0..9 列，所以必须先于下面的 10..14 列取值调用。
-                        question = readQuestion(c),
+                        question = readQuestionRow(c),
                         wrongCount = c.getInt(10),
                         mastered = c.getInt(11) == 1,
                         streak = c.getInt(12),
@@ -974,20 +941,33 @@ class ReviewDatabase private constructor(context: Context) :
      *     IllegalArgumentException: Cannot bind argument at index。
      * 两条都在「一进复习页」时必现，因为首页 LaunchedEffect 首个就读这里。
      */
+    /**
+     * 首页 / 题库详情页的概览统计。
+     *
+     * 六条 SQL 合并成一条（见 [ReviewSql.overviewSingle]）：它们读同一批表、同一个
+     * `bankId` 条件，分开跑只是把一次 cursor 往返变成六次。
+     *
+     * 历史事故（务必保留这条注释）：这里曾经是手写 `"...$where"` 拼接 + 一个 `args`
+     * 复用到所有查询上 —— `bankId == null` 时错题本那条拼出
+     * `SELECT COUNT(*) FROM wrong_book AND mastered = 0`（AND 前没有 WHERE）直接
+     * 抛 `SQLiteException`，而 overview() 是复习首页的首读，异常没人接 → 一进页就闪退。
+     */
     fun overview(bankId: String? = null): Overview {
-        val q = ReviewSql.overview(bankId)
-        fun scalar(query: ReviewSql.BoundQuery): Int =
-            readableDatabase.rawQuery(query.sql, query.argsArray()).use { c ->
-                if (c.moveToFirst()) c.getInt(0) else 0
+        val query = ReviewSql.overviewSingle(bankId)
+        return readableDatabase.rawQuery(query.sql, query.argsArray()).use { c ->
+            if (!c.moveToFirst()) {
+                Overview(0, 0, 0, 0, 0, 0)
+            } else {
+                Overview(
+                    total = c.getInt(0),
+                    answered = c.getInt(1),
+                    correct = c.getInt(2),
+                    wrongPending = c.getInt(3),
+                    favorites = c.getInt(4),
+                    bankCount = c.getInt(5)
+                )
             }
-        return Overview(
-            total = scalar(q.questions),
-            answered = scalar(q.records),
-            correct = scalar(q.correctSum),
-            wrongPending = scalar(q.wrongPending),
-            favorites = scalar(q.favorites),
-            bankCount = scalar(q.banks)
-        )
+        }
     }
 
     // 🔴 `dailyStats(limitDays)` 已随统计页一起删除（2026-10 用户要求「将查看的统计删除」）。
@@ -998,8 +978,9 @@ class ReviewDatabase private constructor(context: Context) :
         private const val TAG = "ReviewDatabase"
         private const val DB_NAME = "review.db"
         /** v4：banks 增加 selected / sort_order（题库仓库的「取出」与排序）。
-         *  v5：斩题功能下线，DROP slashed 表（历史被斩的题全部放回练习）。 */
-        private const val DB_VERSION = 5
+         *  v5：斩题功能下线，DROP slashed 表（历史被斩的题全部放回练习）。
+         *  v6：清掉统计页下线后遗留的 daily_stats 空壳表。 */
+        private const val DB_VERSION = 6
 
         /** 错题连续答对多少次算「已掌握」。 */
         const val MASTER_STREAK = 3
@@ -1026,6 +1007,38 @@ class ReviewDatabase private constructor(context: Context) :
                 }
             }
             return db
+        }
+
+        /**
+         * **仅供测试**：关闭并丢弃单例。
+         *
+         * 生产代码不会调它。Robolectric 用例之间必须拿到一个干净的库，
+         * 否则前一条用例插进去的题会污染后一条的断言。
+         */
+        internal fun resetInstanceForTest() {
+            synchronized(this) {
+                runCatching { instance?.close() }
+                instance = null
+                bundledNamesMigrated = false
+            }
+        }
+
+        /**
+         * 从备份恢复前关闭数据库连接。
+         *
+         * 与 [resetInstanceForTest] 是同一次动作，但**语义不同**：恢复要替换磁盘上的
+         * 库文件，必须先让 SQLite 释放句柄，否则新文件会被旧连接继续占用、
+         * 或者 WAL 里的旧数据被回放到新库上。给它一个正经名字，
+         * 免得有人以为生产代码误调了测试方法。
+         */
+        internal fun closeForRestore() {
+            synchronized(this) {
+                runCatching { instance?.close() }
+                instance = null
+                // 恢复后库里是别的设备的题库，内置改名迁移的"已跑过"标记必须复位，
+                // 否则新库里的内置题库不会被改名。
+                bundledNamesMigrated = false
+            }
         }
     }
 }

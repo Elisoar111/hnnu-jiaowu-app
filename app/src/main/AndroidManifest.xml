@@ -47,6 +47,19 @@
          相机是"可选硬件"：没有摄像头的设备照样能装，只是扫码入口会提示不可用。
          运行时权限由 zxing 的 CaptureActivity 自己申请。 -->
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!--
+      课表写入系统日历（「课表 → 导出 → 导入系统日历」）。
+
+      只在用户点那个入口时才申请，不在启动时打扰。声明的是**读写**两个：
+      READ 用来找到可写日历的 id，WRITE 才是真正写入。
+
+      ⚠️ 不申请 READ_CALENDAR 也能写入（知道 calendarId 即可），但找到 calendarId
+      本身需要读权限，所以两者都留着。没有日历权限时该功能不可用，
+      其余功能不受影响（导出 .ics 那条路不需要任何权限）。
+    -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
@@ -274,6 +287,19 @@
         <!-- 电费余额巡检：每天一次，余额低于阈值就发系统通知。
              开机 / 应用更新 / 改时间后闹钟会被系统清掉，靠这些广播重排。
              只在用户曾打开过一卡通页面（本地有 synjones-auth 令牌）时才真正巡检。 -->
+        <!-- 错题复习提醒：每天固定时刻检查「今日待复习」，有到期题就发通知。
+             走与一卡通/消息巡检同一套链式单次闹钟；开机、更新、改时区都会重排。 -->
+        <receiver
+            android:name=".review.ReviewReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.hnnujw.course.action.REVIEW_REMINDER" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
         <receiver
             android:name=".ykt.YktAlertReceiver"
             android:exported="false">

@@ -131,7 +131,7 @@ object AppDownloader {
 
     /** 本版本已下好**且校验通过**的安装包，用于「已下载，直接安装」。 */
     fun existingApk(context: Context, versionName: String): File? =
-        File(downloadDir(context), apkFileName(versionName)).takeIf { isValidApk(it) }
+        File(downloadDir(context), apkFileName(versionName)).takeIf { isTrustedUpdate(context, it) }
 
     private fun apkFileName(versionName: String) = "hnnu-jiaowu-v$versionName.apk"
 
@@ -225,6 +225,11 @@ object AppDownloader {
                 if (!isValidApk(target)) {
                     return@withContext fail("下载到的安装包已损坏，请重新下载")
                 }
+                // 签名一致性（isTrustedUpdate 的动机见其注释）：假包在这里就被删掉。
+                if (!isTrustedUpdate(app, target)) {
+                    runCatching { if (target.exists()) target.delete() }
+                    return@withContext fail("安装包签名校验失败，已删除，请从官方渠道重新获取")
+                }
                 // 再往公共「下载」目录留一份：换签名的版本必须先卸载旧版才能装，
                 // 而私有目录里的文件会被卸载一并删掉（详见文件头注释）。
                 publishToPublicDownloads(app, target)
@@ -258,6 +263,44 @@ object AppDownloader {
             java.util.zip.ZipFile(file).use { zip -> zip.getEntry("AndroidManifest.xml") != null }
         }.getOrDefault(false)
     }
+
+    /**
+     * 下载包与当前应用的**签名一致性**：[isValidApk] 只保证"是个完整 APK"，不保证
+     * 它出自发布者 —— 发布通道（Gitee）账号被盗时，攻击者可以发一个版本号更高的假包。
+     * 系统安装器虽会拒装异签名包，但那要等用户走完下载与确认；这里提前拦下并删除。
+     * 拿不到当前签名时退回旧口径，不误杀正常更新。
+     */
+    fun isTrustedUpdate(context: Context, file: File): Boolean {
+        if (!isValidApk(file)) return false
+        val pm = context.packageManager
+        val expected = currentSigningBytes(pm, context.packageName) ?: return true
+        val actual = archiveSigningBytes(pm, file) ?: return false
+        return expected.contentEquals(actual)
+    }
+
+    private fun currentSigningBytes(pm: android.content.pm.PackageManager, packageName: String): ByteArray? =
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pm.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+                    .signingInfo?.apkContentsSigners?.firstOrNull()?.toByteArray()
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNATURES)
+                    .signatures?.firstOrNull()?.toByteArray()
+            }
+        }.getOrNull()
+
+    private fun archiveSigningBytes(pm: android.content.pm.PackageManager, file: File): ByteArray? =
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pm.getPackageArchiveInfo(file.absolutePath, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+                    ?.signingInfo?.apkContentsSigners?.firstOrNull()?.toByteArray()
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageArchiveInfo(file.absolutePath, android.content.pm.PackageManager.GET_SIGNATURES)
+                    ?.signatures?.firstOrNull()?.toByteArray()
+            }
+        }.getOrNull()
 
     private fun looksLikeZip(buffer: ByteArray, length: Int): Boolean {
         if (length < ZIP_MAGIC.size) return false
@@ -360,6 +403,9 @@ object AppDownloader {
     fun install(context: Context, file: File): InstallResult {
         if (!isValidApk(file)) {
             return InstallResult.Unavailable("安装包不完整或已损坏，请点「重新下载」")
+        }
+        if (!isTrustedUpdate(context, file)) {
+            return InstallResult.Unavailable("安装包签名校验失败，请点「重新下载」")
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !context.packageManager.canRequestPackageInstalls()

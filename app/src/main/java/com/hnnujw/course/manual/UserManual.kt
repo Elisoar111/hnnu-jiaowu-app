@@ -95,6 +95,15 @@ data class UserManual(
         const val ASSET_NAME = "users_manual.json"
 
         /**
+         * 隐私政策的资源名。
+         *
+         * 复用同一套 [UserManual] 结构与渲染器：隐私政策本质上就是"一份章节化的
+         * 长文档"，与用户手册的展示需求完全一致（分章、可搜索、有目录）。
+         * 另造一套解析与界面只会多一份要维护的东西。
+         */
+        const val PRIVACY_ASSET_NAME = "privacy_policy.json"
+
+        /**
          * 解析手册 JSON 文本。单独抽出来是为了让单测能直接喂文件内容，
          * 不必依赖 Android 的 [Context]（单测里 assets 是取不到的）。
          */
@@ -103,9 +112,9 @@ data class UserManual(
         }.getOrNull()
 
         /** 从 assets 读取并解析；文件缺失或结构异常时返回 null（调用方给兜底空态）。 */
-        fun load(context: Context): UserManual? =
+        fun load(context: Context, assetName: String = ASSET_NAME): UserManual? =
             runCatching {
-                context.assets.open(ASSET_NAME).bufferedReader().use { it.readText() }
+                context.assets.open(assetName).bufferedReader().use { it.readText() }
             }.getOrNull()?.let { parse(it) }
 
         private fun fromJson(root: JSONObject): UserManual = UserManual(

@@ -17,10 +17,10 @@ package com.hnnujw.course.review
  */
 fun randomOrderKey(bankId: String, qid: String): Int = "$bankId::$qid".hashCode()
 
-/** 乱序排序比较器：稳定哈希为主，字典序决胜。 */
+/** 乱序排序比较器：稳定哈希为主，字典序决胜。复合键统一走 [ReviewQuestion.compositeKey]。 */
 fun randomOrderComparator(): Comparator<ReviewQuestion> =
-    compareBy<ReviewQuestion> { randomOrderKey(it.bankId, it.id) }
-        .thenComparator { a, b -> (a.bankId + "::" + a.id).compareTo(b.bankId + "::" + b.id) }
+    compareBy<ReviewQuestion> { it.compositeKey.hashCode() }
+        .thenComparator { a, b -> a.compositeKey.compareTo(b.compositeKey) }
 
 /**
  * 错题优先排序：未掌握的错题排前面，组内按乱序排。
@@ -30,6 +30,6 @@ fun randomOrderComparator(): Comparator<ReviewQuestion> =
  */
 fun wrongFirstOrderComparator(unmasteredWrong: Set<String>): Comparator<ReviewQuestion> {
     val random = randomOrderComparator()
-    return compareBy<ReviewQuestion> { if ("${it.bankId}::${it.id}" in unmasteredWrong) 0 else 1 }
+    return compareBy<ReviewQuestion> { if (it.compositeKey in unmasteredWrong) 0 else 1 }
         .thenComparator { a, b -> random.compare(a, b) }
 }

@@ -178,7 +178,12 @@ object MessageCenterNotifier {
         val fresh = messages.filter { !it.read && it.id !in notified }
 
         if (hasBaseline && fresh.isNotEmpty()) {
-            postNotification(context, fresh)
+            // ⚠️ 只有**真的送达**才推进基线。
+            //
+            // `postNotification` 在通知被关闭时会静默返回，原代码随后照样把
+            // `seenKey` 写成"这些消息已播报过"——用户重新打开通知后永远收不到这批消息。
+            // 与考前提醒「先确认送达、再消费计划」是同一条不变量。
+            if (!postNotification(context, fresh)) return MessageCenterManager.unread
         }
         // 只保留"当前仍未读"的 id：已读的从集合里剔除，避免无限增长
         prefs.edit().putStringSet(seenKey, unreadIds).apply()
@@ -220,8 +225,14 @@ object MessageCenterNotifier {
             .apply()
     }
 
-    private fun postNotification(context: Context, fresh: List<AcademicMessage>) {
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+    /**
+     * 发通知，返回**是否真的发出去了**。
+     *
+     * 调用方据此决定要不要推进已播报基线：通知被关闭 / 渠道被禁用时这里返回 false，
+     * 若仍把消息记成"已播报"，用户之后打开通知也补不回来。
+     */
+    private fun postNotification(context: Context, fresh: List<AcademicMessage>): Boolean {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return false
         if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(CHANNEL) == null) {
             manager.createNotificationChannel(
                 NotificationChannel(CHANNEL, "教务消息", NotificationManager.IMPORTANCE_DEFAULT).apply {
@@ -229,7 +240,7 @@ object MessageCenterNotifier {
                 }
             )
         }
-        if (!canNotify(context, manager)) return
+        if (!canNotify(context, manager)) return false
 
         val open = Intent(context, MessageCenterActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or
@@ -250,10 +261,12 @@ object MessageCenterNotifier {
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
             .build()
-        try {
+        return try {
             NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+            true
         } catch (_: SecurityException) {
             // 通知权限在发的一瞬间被撤销，忽略即可
+            false
         }
     }
 

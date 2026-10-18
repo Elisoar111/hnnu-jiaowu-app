@@ -38,6 +38,7 @@ import com.hnnujw.course.review.AiConfig
 import com.hnnujw.course.review.AiConfigRules
 import com.hnnujw.course.review.AiConfigStore
 import com.hnnujw.course.review.AiEndpoint
+import com.hnnujw.course.review.ReviewPrefs
 import com.hnnujw.course.ui.screen.GlassFilterChip
 import com.hnnujw.course.ui.system.GlassLoadingIndicator
 import com.hnnujw.course.ui.system.GlassPageScaffold
@@ -82,6 +83,8 @@ fun AiSettingsScreen(onBack: () -> Unit) {
     var loaded by remember { mutableStateOf(false) }
     /** 已保存的 Key 明文（仅内存中，用于"留空则沿用"）。**绝不显示在界面上。** */
     var savedKey by remember { mutableStateOf("") }
+    // 「追问上下文」偏好：换题是否保留 AI 问答历史。
+    var keepAiHistory by remember { mutableStateOf(ReviewPrefs.isKeepAiHistory(context)) }
     /** 编辑器草稿里的新 Key；空 = 不改动已保存的那条。 */
     var draftKey by remember { mutableStateOf("") }
     var model by remember { mutableStateOf(AiEndpoint.DEFAULT_MODEL) }
@@ -167,6 +170,38 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 }
             }
 
+            // ── ①·补 追问上下文 ──────────────────────────────────────────
+            // 默认关：换题即清空历史。打开后可以"就着刚才那段讲解继续问"，
+            // 代价是每题都多带一段历史 token，且模型可能被上一题带偏。
+            Card {
+                Text(
+                    text = "追问上下文",
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = if (keepAiHistory) {
+                        "换到下一题时仍保留上一题的问答：可以接着刚才的讲解追问。代价是每题都会多花一段历史 token。"
+                    } else {
+                        "换到下一题时清空问答历史：省 token，也避免上一题把这一题带偏。"
+                    },
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                SecondaryAction(
+                    text = if (keepAiHistory) "已开启 · 点击关闭" else "已关闭 · 点击开启",
+                    onClick = {
+                        keepAiHistory = !keepAiHistory
+                        ReviewPrefs.setKeepAiHistory(context, keepAiHistory)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             // ── ② API Key ────────────────────────────────────────────────
             Card {
                 Text(

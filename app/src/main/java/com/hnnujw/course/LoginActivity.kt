@@ -575,7 +575,11 @@ class LoginActivity : ComponentActivity() {
                             withContext(Dispatchers.IO) {
                                 com.hnnujw.course.activation.ActivationManager.checkActivation(this@LoginActivity)
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                    // 激活状态检查失败不该挡住登录（它只影响一处角标），但必须留痕：
+                    // 静默吞掉会让"激活页一直不出现"变成一个查不到原因的悬案。
+                    android.util.Log.w("LoginActivity", "检查激活状态失败: " + e.message)
+                }
                         performLoginValidation(school, cookie)
                     }
                 }
@@ -657,7 +661,11 @@ class LoginActivity : ComponentActivity() {
                             withContext(Dispatchers.IO) {
                                 com.hnnujw.course.activation.ActivationManager.checkActivation(this@LoginActivity)
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                    // 激活状态检查失败不该挡住登录（它只影响一处角标），但必须留痕：
+                    // 静默吞掉会让"激活页一直不出现"变成一个查不到原因的悬案。
+                    android.util.Log.w("LoginActivity", "检查激活状态失败: " + e.message)
+                }
                         performLoginValidation(school, cookie)
                     }
                 }

@@ -271,11 +271,18 @@ fun ScheduleRoute() {
     // 把兜底算出来的日期**回写到该学期的日历**，让设置页显示的日期与课表一致，
     // 也让后台提醒规划拿到同一条基准（否则提醒会按空基准算不出触发点）。
     // 只回写"用户没设过"的情况，绝不覆盖用户的手动选择。
+    //
+    // 注意这里**只写日期、不写节次时间**是刻意的：节次时间以「课表设置」里的值为准，
+    // 由 `ScheduleReminderScheduler.timeBase` 在读取时合并进来。若把设置里的默认值
+    // 也落进日历记录，用户之后改节次时间就会被这条旧记录盖住（存储值优先），
+    // 反而制造新的"改了设置不生效"。
     LaunchedEffect(resolvedTermId, displayedTimeBase?.firstWeekDate) {
         val term = resolvedTermId
         val date = displayedTimeBase?.firstWeekDate.orEmpty()
         if (term.isBlank() || date.isBlank()) return@LaunchedEffect
-        val base = reminderScheduler.timeBase(routeAccountKey, term)
+        // 用**原始记录**判断是否已存过日期：timeBase() 现在会合并设置里的默认节次时间，
+        // 拿它判断会把默认值一起回写成"用户已设置"。
+        val base = reminderScheduler.storedTimeBase(routeAccountKey, term)
         if (base == null) {
             reminderScheduler.updateTimeBase(routeAccountKey, term, ScheduleTimeBase(firstWeekDate = date))
         } else if (base.firstWeekDate.isBlank()) {
@@ -667,6 +674,31 @@ fun ScheduleRoute() {
         }
     }
 
+    // ── 写入系统日历 ─────────────────────────────────────────────────────
+    // 权限申请与"拿到权限后要写什么"分开存：权限回调是异步的，
+    // 而事件列表在申请前就已经算好了，存在这里等回调取用。
+    var pendingCalendarEvents by remember {
+        mutableStateOf<List<com.hnnujw.course.utils.CourseEvent>>(emptyList())
+    }
+    val calendarPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        val granted = result[android.Manifest.permission.WRITE_CALENDAR] == true
+        val events = pendingCalendarEvents
+        pendingCalendarEvents = emptyList()
+        if (!granted) {
+            GlassToaster.show("没有日历权限，无法导入")
+            return@rememberLauncherForActivityResult
+        }
+        if (events.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            val written = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.hnnujw.course.utils.ScheduleCalendarWriter.write(context, events)
+            }
+            GlassToaster.show(written.message)
+        }
+    }
+
     // ── 导出 ─────────────────────────────────────────────────────────────
     fun exportScheduleIcal() {
         try {
@@ -687,6 +719,55 @@ fun ScheduleRoute() {
             }
         } catch (e: Exception) {
             GlassToaster.show("导出失败：${e.message}")
+        }
+    }
+
+    /**
+     * 直接把课表写进系统日历（不走 .ics 分享）。
+     *
+     * 与「导出 .ics」并存：导出适合存档与跨设备，直写适合"我现在就想在系统日历里看到"。
+     * 写入前会先删掉上一次导入的（按 [ScheduleCalendarWriter] 的标记），所以重复点不会堆叠。
+     *
+     * 需要日历读写权限：没有就先申请，拿到后再写。
+     */
+    fun importScheduleToSystemCalendar() {
+        val semesterStart = ScheduleDates.firstMonday(displayedTimeBase?.firstWeekDate)
+        if (semesterStart == null) {
+            GlassToaster.show("请先设置这个学期的第一周周一日期")
+            settingsTermOverride = null
+            showSettingsDialog = true
+            return
+        }
+        if (courses.isEmpty()) {
+            GlassToaster.show("当前没有课程可导入")
+            return
+        }
+        val events = com.hnnujw.course.utils.expandCourseEvents(
+            courses = courses,
+            semesterStartDate = semesterStart,
+            totalWeeks = ScheduleMaxWeeks,
+            periodTimes = periodTimes.associate { it.period to (it.startTime to it.endTime) },
+        )
+        // 权限在 Android 6+ 是运行时申请；用 ActivityResult 拿不到 Activity 时
+        // 退化为"直接尝试写入"，失败会由 writer 返回可读原因。
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.WRITE_CALENDAR
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            calendarPermissionLauncher.launch(
+                arrayOf(
+                    android.Manifest.permission.READ_CALENDAR,
+                    android.Manifest.permission.WRITE_CALENDAR,
+                )
+            )
+            pendingCalendarEvents = events
+            return
+        }
+        scope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.hnnujw.course.utils.ScheduleCalendarWriter.write(context, events)
+            }
+            GlassToaster.show(result.message)
         }
     }
 
@@ -717,6 +798,13 @@ fun ScheduleRoute() {
                     SystemSecondaryButton(
                         text = "Excel 表格（.xlsx）",
                         onClick = { showExportChooser = false; exportScheduleExcel() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    // 与上面两条的区别：那两条是"导出文件给你"，这条是"直接写进你的日历"。
+                    // 用户点完就能在系统日历里看到课程，不必再找应用打开 .ics。
+                    SystemSecondaryButton(
+                        text = "直接写入系统日历",
+                        onClick = { showExportChooser = false; importScheduleToSystemCalendar() },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }

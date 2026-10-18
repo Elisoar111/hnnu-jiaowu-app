@@ -41,8 +41,10 @@ object YktAlertNotifier {
     /**
      * 判定并（必要时）发出提醒。
      *
-     * @param balance 当前电费余额（元）；null = 未能获取
-     * @param threshold 阈值（元）
+     * @param balance 当前读数；null = 未能获取
+     * @param threshold 阈值（与 [unit] 同量纲）
+     * @param unit 读数的量纲。默认 `YUAN` 让既有调用点不用改；
+     *   度数型费项**必须**显式传 `KWH`，否则通知文案会把"度"说成"元"。
      * @return 是否真的发了通知
      */
     fun evaluateAndNotify(
@@ -50,20 +52,37 @@ object YktAlertNotifier {
         accountKey: String,
         balance: Double?,
         threshold: Double,
+        unit: ElectricityUnit = ElectricityUnit.YUAN,
     ): Boolean {
         val app = context.applicationContext
         val previous = YktAlertStateStore.read(app, accountKey)
         val decision = YktAlertPolicy.decide(balance, threshold, previous, System.currentTimeMillis())
 
-        // 状态无条件落盘：即使不发通知，"余额已回升 → 重置"这一步也必须记住，
-        // 否则下一次跌破会被当成"仍在同一周期"而漏报。
-        YktAlertStateStore.write(app, accountKey, decision.nextState)
+        // 不提醒的分支（余额回升 → 重置、余额未知 → 原样、节流命中 → 沿用）照常落盘：
+        // 「余额已回升」这一步必须被记住，否则下一次跌破会被当成"仍在同一周期"而漏报。
+        if (!decision.shouldNotify) {
+            YktAlertStateStore.write(app, accountKey, decision.nextState)
+            return false
+        }
 
-        if (!decision.shouldNotify) return false
-        return post(app, balance ?: return false, threshold)
+        // 要提醒时：**先确认真的送达，再记「已提醒」**。
+        //
+        // 原先是「先落盘 nextState 再 post」：`post` 在通知被关闭时返回 false，
+        // 但状态里 `lastNotifiedAtMillis` 已经被写成当前时刻 —— 同一余额 24h 节流
+        // 于是把这次提醒直接吞掉，用户打开通知也要等到明天才可能再响。
+        // 与考前提醒「先确认送达、再消费计划」是同一条不变量。
+        val amount = balance ?: return false
+        if (!post(app, amount, threshold, unit)) return false
+        YktAlertStateStore.write(app, accountKey, decision.nextState)
+        return true
     }
 
-    private fun post(context: Context, balance: Double, threshold: Double): Boolean {
+    private fun post(
+        context: Context,
+        balance: Double,
+        threshold: Double,
+        unit: ElectricityUnit,
+    ): Boolean {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return false
         if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(CHANNEL) == null) {
             manager.createNotificationChannel(
@@ -89,10 +108,10 @@ object YktAlertNotifier {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val text = YktAlertPolicy.notificationText(balance, threshold)
+        val text = YktAlertPolicy.notificationText(balance, threshold, unit)
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_course_reminder)
-            .setContentTitle(YktAlertPolicy.notificationTitle())
+            .setContentTitle(YktAlertPolicy.notificationTitle(unit))
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(content)

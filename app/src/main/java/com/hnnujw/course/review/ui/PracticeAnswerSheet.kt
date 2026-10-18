@@ -33,9 +33,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hnnujw.course.review.AnswerSheetCell
+import com.hnnujw.course.review.answerSheetSections
+import com.hnnujw.course.review.AnswerSheetSection
 import com.hnnujw.course.review.AnswerSheetStatus
-import com.hnnujw.course.review.PracticeSession
 import com.hnnujw.course.review.answerSheetCell
+import com.hnnujw.course.review.PracticeSession
 import com.hnnujw.course.review.summarizeAnswerSheet
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.LiquidSwitch
@@ -160,6 +162,10 @@ internal fun AnswerSheetPage(
 ) {
     val cells = remember(session, version, currentIndex) { answerSheetCells(session, currentIndex) }
     val summary = remember(cells) { summarizeAnswerSheet(cells) }
+    // 只有真的跨多个章节时才分组：整库单章时加一排标题是纯噪音。
+    val sections = remember(session, cells) {
+        answerSheetSections(cells = cells, chapters = session.questions.map { it.chapter })
+    }
 
     GlassPageScaffold(
         title = "答题卡",
@@ -227,8 +233,19 @@ internal fun AnswerSheetPage(
                     AnswerSheetLegend()
                 }
             }
-            items(cells, key = { it.index }) { cell ->
-                AnswerSheetCellView(cell = cell, onClick = { onJump(cell.index) })
+            if (sections.size <= 1) {
+                items(cells, key = { it.index }) { cell ->
+                    AnswerSheetCellView(cell = cell, onClick = { onJump(cell.index) })
+                }
+            } else {
+                sections.forEach { section ->
+                    item(span = { GridItemSpan(maxLineSpan) }, key = "chapter:${section.chapter}") {
+                        AnswerSheetSectionHeader(section)
+                    }
+                    items(section.cells, key = { it.index }) { cell ->
+                        AnswerSheetCellView(cell = cell, onClick = { onJump(cell.index) })
+                    }
+                }
             }
         }
     }
@@ -309,5 +326,37 @@ private fun LegendDot(color: Color, label: String, textColor: Color) {
         )
         Spacer(Modifier.width(4.dp))
         Text(text = label, fontSize = 11.sp, lineHeight = 15.sp, color = textColor)
+    }
+}
+
+/**
+ * 答题卡的章节分隔行。
+ *
+ * 只画一条淡分隔线 + 章名 + 该章题数：答题卡的主色是那些大号题号格子，
+ * 分隔行必须弱到不抢视线，否则一屏里全是"条"。
+ */
+@Composable
+private fun AnswerSheetSectionHeader(section: AnswerSheetSection) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = section.chapter.ifBlank { "未分章" },
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = "${section.cells.size} 题",
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+            color = scheme.onSurfaceVariant
+        )
     }
 }

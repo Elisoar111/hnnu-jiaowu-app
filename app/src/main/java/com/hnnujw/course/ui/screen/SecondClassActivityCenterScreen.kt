@@ -675,9 +675,12 @@ private fun ActivityTab(
     onBindSecondClass: () -> Unit,
 ) {
     // 报名已截止的活动直接剔除：窗口关了还摆在列表上只会误导，点进去也报不了名。
-    // 时间基准取当下即可 —— 截止是分钟级的事，组合期间重算不会让列表抖动。
-    val now = System.currentTimeMillis()
-    val (endedActivities, openActivities) = ui.activities.partition { it.enrollmentEndedOf(now) }
+    // 时间基准与分区都 remember：此前每次重组都读时钟 + O(n) partition，而截止是
+    // 分钟级的事，列表内容没变时结果不可能不同。
+    val now = remember(ui.activities) { System.currentTimeMillis() }
+    val (endedActivities, openActivities) = remember(ui.activities, now) {
+        ui.activities.partition { it.enrollmentEndedOf(now) }
+    }
     // 本地筛选：只看未报满 / 只看本院系可报。
     //
     // 「本院系可报」**只认活动的 `collegeLimit` 原始院系配置**（不限院系 或 含本人院系）。
@@ -1324,6 +1327,7 @@ private fun ApplicationTab(
                         item {
                             SystemSecondaryButton(
                                 text = "加载更多",
+                                enabled = !ui.loadingMore && !ui.loading,
                                 onClick = onLoadMore,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -2534,7 +2538,11 @@ private fun EnrollFieldsDialog(
     onDismiss: () -> Unit,
     onConfirm: (List<SecondClassEnrollAnswer>) -> Unit,
 ) {
-    val values = remember(fields) { Array(fields.size) { "" } }
+    // 🔴 必须是 SnapshotStateList：普通 Array 的元素写不触发重组，必填校验的提示与
+    // 按钮禁用态会停在旧值（此前"能用"只是 TextField 内部缓冲在兜底）。
+    val values = remember(fields) {
+        androidx.compose.runtime.mutableStateListOf(*Array(fields.size) { "" })
+    }
     SystemDialog(onDismissRequest = onDismiss, title = {
         Text(
             text = "填写报名信息",
@@ -2552,8 +2560,20 @@ private fun EnrollFieldsDialog(
                     singleLine = !field.multiline,
                 )
             }
+            // 必填本地拦截：此前 required 只用于 placeholder 文案，空字段会原样上报。
+            val missingRequired = fields.withIndex().count { (index, field) ->
+                field.required && values[index].isBlank()
+            }
+            if (missingRequired > 0) {
+                Text(
+                    text = "还有 $missingRequired 个必填项未填写",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             SystemPrimaryButton(
                 text = "提交报名",
+                enabled = missingRequired == 0,
                 onClick = {
                     onConfirm(fields.mapIndexed { index, field ->
                         SecondClassEnrollAnswer(
@@ -2621,14 +2641,18 @@ private val shortFormat = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
 private fun formatFull(millis: Long): String =
     if (millis <= 0L) "" else rangeFormat.format(Date(millis))
 
+// 缓存的 formatter：ActivityCard 每行每次重组都会调 formatRange —— 每次新建
+// 三个 SimpleDateFormat 是列表滚动的热点（对象分配 + 日历初始化）。仅主线程使用，无并发问题。
+private val dayKeyFormat = SimpleDateFormat("yyyyMMdd", Locale.CHINA)
+private val timeOnlyFormat = SimpleDateFormat("HH:mm", Locale.CHINA)
+
 private fun formatRange(start: Long, end: Long): String = when {
     start <= 0 && end <= 0 -> ""
     start <= 0 -> "至 ${formatFull(end)}"
     end <= 0 -> formatFull(start)
     // 同一天只显示一次日期
-    SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date(start)) ==
-        SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date(end)) ->
-        "${shortFormat.format(Date(start))} ~ ${SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(end))}"
+    dayKeyFormat.format(Date(start)) == dayKeyFormat.format(Date(end)) ->
+        "${shortFormat.format(Date(start))} ~ ${timeOnlyFormat.format(Date(end))}"
     else -> "${formatFull(start)} ~ ${formatFull(end)}"
 }
 

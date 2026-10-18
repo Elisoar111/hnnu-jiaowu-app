@@ -59,4 +59,115 @@ data class PracticeLaunch(
             else -> mode.label
         }
     }
+
+    /**
+     * 编码成一个字符串（进 `rememberSaveable` / SharedPreferences）。
+     *
+     * 字段分隔用 `\u001E`、列表元素用 `\u001F`：都是 ASCII 控制字符，中文章节名里
+     * 不可能出现（题库数据里的引号、顿号、全角括号都不冲突）。
+     */
+    fun encode(): String = listOf(
+        bankId.orEmpty(),
+        chapters.joinToString(ITEM_SEP.toString()),
+        mode.name,
+        onlyWrong.toString(),
+        onlyFavorite.toString(),
+        dueOnly.toString(),
+        durationSeconds.toString(),
+        memorize.toString()
+    ).joinToString(FIELD_SEP.toString())
+
+    companion object {
+        private const val FIELD_SEP = '\u001E'
+        private const val ITEM_SEP = '\u001F'
+
+        /**
+         * 解析 [encode] 的产物；解析失败返回 null。
+         *
+         * 字段数必须**严格相等**：格式换代后（如还带着已删除的斩题字段的旧串）直接拒收，
+         * 宁可让用户重新开练，也不能错位读出一个错误的练习模式。
+         */
+        fun decode(raw: String): PracticeLaunch? {
+            if (raw.isBlank()) return null
+            val f = raw.split(FIELD_SEP)
+            if (f.size != 8) return null
+            return PracticeLaunch(
+                bankId = f[0].ifBlank { null },
+                chapters = if (f[1].isEmpty()) emptyList() else f[1].split(ITEM_SEP),
+                mode = runCatching { ReviewMode.valueOf(f[2]) }.getOrDefault(ReviewMode.SEQUENTIAL),
+                onlyWrong = f[3].toBooleanStrictOrNull() ?: false,
+                onlyFavorite = f[4].toBooleanStrictOrNull() ?: false,
+                dueOnly = f[5].toBooleanStrictOrNull() ?: false,
+                durationSeconds = f[6].toIntOrNull() ?: 0,
+                memorize = f[7].toBooleanStrictOrNull() ?: false
+            )
+        }
+    }
+}
+
+/**
+ * 「继续上次练习」的本地存档。
+ *
+ * 进程**被杀**时进度由 `rememberSaveable` 兜住（系统会恢复 saved state）；
+ * 但**主动退出**练习页时那条链路会被清掉（退出意味着作废这一轮）。
+ * 这里补的是第三种情况：用户退回首页、App 还活着，回来时能接着刷 ——
+ * 题库练习是典型的"碎片时间做几题"，每次退出去都从第一题重来非常劝退。
+ *
+ * 只存"重建会话所需的最小信息 + 作答快照"，题目本身仍由
+ * `ReviewDatabase.pickQuestions` 用同一组参数确定性重抽（见 PracticeSession 的说明）。
+ */
+object PracticeResume {
+
+    private const val PREFS = "review_practice_resume"
+    private const val KEY_LAUNCH = "launch"
+    private const val KEY_STARTED_AT = "started_at"
+    private const val KEY_SEED = "seed"
+    private const val KEY_TITLE = "title"
+    private const val KEY_INDEX = "index"
+    private const val KEY_SNAPSHOT = "snapshot"
+
+    /** 一份可恢复的练习进度。 */
+    data class Snapshot(
+        val launch: PracticeLaunch,
+        val startedAt: Long,
+        val seed: Long,
+        val title: String,
+        val index: Int,
+        val answers: String
+    )
+
+    fun save(context: android.content.Context, snapshot: Snapshot) {
+        // 空快照没有恢复价值（刚进来还没答题就走了）。
+        if (snapshot.answers.isBlank()) return
+        context.applicationContext.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_LAUNCH, snapshot.launch.encode())
+            .putLong(KEY_STARTED_AT, snapshot.startedAt)
+            .putLong(KEY_SEED, snapshot.seed)
+            .putString(KEY_TITLE, snapshot.title)
+            .putInt(KEY_INDEX, snapshot.index)
+            .putString(KEY_SNAPSHOT, snapshot.answers)
+            .apply()
+    }
+
+    fun load(context: android.content.Context): Snapshot? {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_LAUNCH, null) ?: return null
+        val launch = PracticeLaunch.decode(raw) ?: return null
+        val answers = prefs.getString(KEY_SNAPSHOT, null).orEmpty()
+        if (answers.isBlank()) return null
+        return Snapshot(
+            launch = launch,
+            startedAt = prefs.getLong(KEY_STARTED_AT, 0L),
+            seed = prefs.getLong(KEY_SEED, 0L),
+            title = prefs.getString(KEY_TITLE, null).orEmpty().ifBlank { launch.title() },
+            index = prefs.getInt(KEY_INDEX, 0),
+            answers = answers
+        )
+    }
+
+    fun clear(context: android.content.Context) {
+        context.applicationContext.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            .edit().clear().apply()
+    }
 }

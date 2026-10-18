@@ -40,12 +40,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.hnnujw.course.academic.AcademicCookieSync
 import com.hnnujw.course.academic.AcademicMessage
 import com.hnnujw.course.academic.AcademicMessageDetail
 import com.hnnujw.course.academic.MessageCenterManager
 import com.hnnujw.course.academic.MessageCenterNotifier
 import com.hnnujw.course.academic.MessageCenterResult
 import com.hnnujw.course.model.SchoolConfig
+import com.hnnujw.course.manager.UserManager
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassToaster
 import com.hnnujw.course.ui.system.PagePadding
@@ -103,7 +105,12 @@ fun MessageCenterScreen(
     suspend fun reload() {
         loading = true
         error = null
+        // 本轮刷新会让服务端**续期 Cookie**（正方每访问一次可能下发新值，旧的作废）。
+        // 拿住 token：请求结束后要把新 Cookie 落盘，否则下次冷启动会从持久化
+        // 恢复出一张已作废的旧票 —— 表现为「刚在消息中心刷新成功，重进却提示登录失效」。
+        val token = UserManager.getInstance().sessionState.token
         val result = MessageCenterManager.load(context, school, accountKey)
+        withContext(Dispatchers.IO) { AcademicCookieSync.persistAfter(school, token) }
         withContext(Dispatchers.Main) {
             when (result) {
                 is MessageCenterResult.Success -> {
@@ -127,7 +134,10 @@ fun MessageCenterScreen(
     fun openMessage(message: AcademicMessage) {
         // 乐观标记已读：写回缓存 + 刷新未读计数
         messages = messages.map { if (it.id == message.id) it.copy(read = true) else it }
-        MessageCenterManager.writeCache(context, accountKey, messages)
+        // 写盘走 IO：别让一条 JSON 落盘卡在点击回调的主线程里。
+        scope.launch(Dispatchers.IO) {
+            MessageCenterManager.writeCache(context, accountKey, messages)
+        }
         MessageCenterManager.publishUnread(messages)
         // 列表接口里已经带了正文（正方 `xxnr`）：这种消息没有独立详情页，
         // 就地展示即可，不必再打一次网络，也不会撞上"无法加载消息详情"。
@@ -165,10 +175,14 @@ fun MessageCenterScreen(
     }
 
     LaunchedEffect(Unit) {
-        // 离线优先：先展示缓存，再刷新
-        MessageCenterManager.readCache(context, accountKey)?.let { cached ->
-            MessageCenterManager.publishUnread(cached)
-            withContext(Dispatchers.Main) { messages = cached; loading = false }
+        // 离线优先：先展示缓存，再刷新。读盘走 IO —— 缓存是几十条带正文的 JSON。
+        val cached = withContext(Dispatchers.IO) {
+            MessageCenterManager.readCache(context, accountKey)
+        }
+        cached?.let {
+            MessageCenterManager.publishUnread(it)
+            messages = it
+            loading = false
         }
         reload()
     }
@@ -185,7 +199,9 @@ fun MessageCenterScreen(
                 // 常显（同二课消息页的 DoneAll 图标，仅点击无长按），无未读时点了只提示。
                 SystemIconButton(Icons.Default.DoneAll, "一键已读", {
                     if (unread > 0) {
-                        MessageCenterManager.markAllRead(context, accountKey, messages)
+                        scope.launch(Dispatchers.IO) {
+                            MessageCenterManager.markAllRead(context, accountKey, messages)
+                        }
                         messages = messages.map { if (it.read) it else it.copy(read = true) }
                         // 与二课消息页同一句反馈：标完已读必须有回音，否则用户会怀疑没生效
                         GlassToaster.show("已全部标为已读")

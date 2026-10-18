@@ -558,7 +558,10 @@ fun MainScreen(
     val messageUnread = com.hnnujw.course.academic.MessageCenterManager.unread
     LaunchedEffect(currentAccountStorageKey, foreground, isDemoMode) {
         if (isDemoMode || !foreground || currentAccountStorageKey.isBlank()) return@LaunchedEffect
-        com.hnnujw.course.academic.MessageCenterManager.refreshUnreadFromCache(context, currentAccountStorageKey)
+        // 缓存读盘走 IO：几十条带正文的 JSON 在主线程读会卡切页那一帧。
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.hnnujw.course.academic.MessageCenterManager.refreshUnreadFromCache(context, currentAccountStorageKey)
+        }
         // 权限没开时，下面的巡检只会更新红点：系统通知一条都发不出去。
         // 明确说一次，免得用户以为「没消息」。
         if (!permissionHintShown && !MainActivity.notificationsAllowed(context) &&

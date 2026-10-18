@@ -1,0 +1,162 @@
+[
+  {
+    "name": "未配置 API Key 时点「问 AI」只提示，不会发起任何请求",
+    "mocks": [],
+    "steps": [
+      {
+        "event": {
+          "type": "click",
+          "nodeId": "ask",
+          "name": "ask"
+        },
+        "expect": {
+          "state": {
+            "pending": "",
+            "status": "还没有配置 DeepSeek API Key：请到本插件的设置里填写后再问。",
+            "reply": ""
+          },
+          "absent": ["reply"]
+        }
+      }
+    ]
+  },
+  {
+    "name": "配置好 Key 后：讲解、用量、追问与思考过程折叠",
+    "context": {
+      "settings": {
+        "apiKey": "sk-fixture-not-a-real-key",
+        "model": "deepseek-flash"
+      }
+    },
+    "mocks": [
+      {
+        "capability": "network.request",
+        "result": {
+          "ok": true,
+          "data": {
+            "status": 200,
+            "url": "https://api.deepseek.com/chat/completions",
+            "headers": {},
+            "body": "{\"choices\":[{\"message\":{\"content\":\"答案是 B：1 字节等于 8 位。\",\"reasoning_content\":\"先回忆 1 Byte = 8 bit。\"}}],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":80,\"total_tokens\":200}}"
+          }
+        }
+      },
+      {
+        "capability": "network.request",
+        "result": {
+          "ok": true,
+          "data": {
+            "status": 200,
+            "url": "https://api.deepseek.com/chat/completions",
+            "headers": {},
+            "body": "{\"choices\":[{\"message\":{\"content\":\"因为 A 是 4 位，那是半字节（nibble）。\",\"reasoning_content\":\"A 选项只有 4 位，不对。\"}}],\"usage\":{\"prompt_tokens\":150,\"completion_tokens\":60,\"total_tokens\":210}}"
+          }
+        }
+      }
+    ],
+    "steps": [
+      {
+        "event": {
+          "type": "click",
+          "nodeId": "ask",
+          "name": "ask"
+        },
+        "expect": {
+          "state": {
+            "pending": "",
+            "reply": "答案是 B：1 字节等于 8 位。",
+            "usage": "本次用量：提示 120 / 完成 80 / 合计 200 tokens"
+          },
+          "nodes": {
+            "reply": {
+              "textContains": "1 字节等于 8 位"
+            },
+            "usage": {
+              "textContains": "合计 200 tokens"
+            }
+          }
+        }
+      },
+      {
+        "event": {
+          "type": "input",
+          "nodeId": "askText",
+          "name": "askText",
+          "value": "为什么不是 A？"
+        }
+      },
+      {
+        "event": {
+          "type": "click",
+          "nodeId": "follow",
+          "name": "follow"
+        },
+        "expect": {
+          "state": {
+            "askText": "",
+            "reply": "因为 A 是 4 位，那是半字节（nibble）。"
+          },
+          "nodes": {
+            "reply": {
+              "textContains": "半字节"
+            }
+          }
+        }
+      },
+      {
+        "event": {
+          "type": "input",
+          "nodeId": "toggleReasoning",
+          "name": "toggleReasoning",
+          "value": true
+        },
+        "expect": {
+          "state": {
+            "showReasoning": true
+          },
+          "nodes": {
+            "reasoning": {
+              "textContains": "A 选项只有 4 位"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "拉取可用模型需要 Key，返回后按原文列出",
+    "context": {
+      "settings": {
+        "apiKey": "sk-fixture-not-a-real-key"
+      }
+    },
+    "mocks": [
+      {
+        "capability": "network.request",
+        "result": {
+          "ok": true,
+          "data": {
+            "status": 200,
+            "url": "https://api.deepseek.com/models",
+            "headers": {},
+            "body": "{\"data\":[{\"id\":\"deepseek-flash\"},{\"id\":\"deepseek-v4-pro\"}]}"
+          }
+        }
+      }
+    ],
+    "steps": [
+      {
+        "event": {
+          "type": "click",
+          "nodeId": "models",
+          "name": "models"
+        },
+        "expect": {
+          "state": {
+            "modelsList": "可用模型：deepseek-flash、deepseek-v4-pro"
+          }
+        }
+      }
+    ]
+  }
+]

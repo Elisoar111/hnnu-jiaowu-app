@@ -1,0 +1,316 @@
+[
+  {
+    "name": "未配置 Key 时打开页面：明确说明去哪里配置，且不发任何请求",
+    "operation": "ui.init",
+    "args": {
+      "pageId": "ask",
+      "params": {}
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "index": 0,
+          "configured": false,
+          "history": [],
+          "model": "deepseek-flash"
+        },
+        "effects": []
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "未配置 Key 时点「问 AI」：只提示，不产生网络效果",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "ask",
+      "state": {
+        "serial": 0,
+        "pending": "",
+        "status": "",
+        "index": 0,
+        "stem": "在计算机中，1 字节（Byte）等于多少位（bit）？",
+        "options": ["4 位", "8 位", "16 位", "32 位"],
+        "answer": "B",
+        "chapter": "第一章 计算机基础",
+        "my": "",
+        "reply": "",
+        "reasoning": "",
+        "usage": "",
+        "history": [],
+        "showReasoning": false,
+        "askText": "",
+        "model": "deepseek-flash",
+        "modelsList": "",
+        "configured": false
+      },
+      "event": {
+        "type": "click",
+        "nodeId": "ask",
+        "name": "ask"
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "pending": "",
+          "status": "还没有配置 DeepSeek API Key：请到本插件的设置里填写后再问。"
+        },
+        "effects": []
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "讲解返回后解析正文、思考过程与用量，并记入追问历史",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "ask",
+      "state": {
+        "serial": 1,
+        "pending": "ask.1",
+        "status": "已发送请求，等待 DeepSeek 返回…",
+        "index": 0,
+        "stem": "在计算机中，1 字节（Byte）等于多少位（bit）？",
+        "options": ["4 位", "8 位", "16 位", "32 位"],
+        "answer": "B",
+        "chapter": "第一章 计算机基础",
+        "my": "A",
+        "reply": "",
+        "reasoning": "",
+        "usage": "",
+        "history": [],
+        "showReasoning": false,
+        "askText": "",
+        "model": "deepseek-flash",
+        "modelsList": "",
+        "configured": true
+      },
+      "event": {
+        "type": "effect.result",
+        "effectId": "ask.1",
+        "result": {
+          "ok": true,
+          "data": {
+            "status": 200,
+            "url": "https://api.deepseek.com/chat/completions",
+            "headers": {},
+            "body": "{\"choices\":[{\"message\":{\"content\":\"答案是 B。\",\"reasoning_content\":\"先回忆 1 Byte = 8 bit。\"}}],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":80,\"total_tokens\":200}}"
+          }
+        }
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "pending": "",
+          "reply": "答案是 B。",
+          "reasoning": "先回忆 1 Byte = 8 bit。",
+          "usage": "本次用量：提示 120 / 完成 80 / 合计 200 tokens"
+        }
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "服务端返回无法解析的内容时给出可读提示，不当作成功",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "ask",
+      "state": {
+        "serial": 1,
+        "pending": "ask.1",
+        "status": "",
+        "index": 0,
+        "stem": "题干",
+        "options": [],
+        "answer": "",
+        "chapter": "自定义",
+        "my": "",
+        "reply": "",
+        "reasoning": "",
+        "usage": "",
+        "history": [],
+        "showReasoning": false,
+        "askText": "",
+        "model": "deepseek-flash",
+        "modelsList": "",
+        "configured": true
+      },
+      "event": {
+        "type": "effect.result",
+        "effectId": "ask.1",
+        "result": {
+          "ok": true,
+          "data": {
+            "status": 401,
+            "url": "https://api.deepseek.com/chat/completions",
+            "headers": {},
+            "body": "{\"error\":\"invalid api key\"}"
+          }
+        }
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "pending": "",
+          "reply": ""
+        }
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "换题会清空历史与用量：上一题的问答不带到下一题",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "ask",
+      "state": {
+        "serial": 4,
+        "pending": "",
+        "status": "",
+        "index": 0,
+        "stem": "旧题干",
+        "options": ["旧选项"],
+        "answer": "A",
+        "chapter": "第一章 计算机基础",
+        "my": "A",
+        "reply": "上一题的讲解",
+        "reasoning": "上一题的思考",
+        "usage": "本次用量：提示 1 / 完成 1 / 合计 2 tokens",
+        "history": [
+          { "role": "user", "text": "旧提问" },
+          { "role": "assistant", "text": "上一题的讲解" }
+        ],
+        "showReasoning": true,
+        "askText": "还没问完",
+        "model": "deepseek-flash",
+        "modelsList": "可用模型：deepseek-flash",
+        "configured": true
+      },
+      "event": {
+        "type": "input",
+        "nodeId": "pick",
+        "name": "pick",
+        "value": "s3"
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "index": 2,
+          "history": [],
+          "reply": "",
+          "usage": "",
+          "askText": "",
+          "showReasoning": true,
+          "modelsList": "可用模型：deepseek-flash"
+        }
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "清空对话只重置问答，不动已拉取的模型列表",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "ask",
+      "state": {
+        "serial": 6,
+        "pending": "",
+        "status": "",
+        "index": 1,
+        "stem": "下列存储器中，断电后数据会丢失的是（ ）。",
+        "options": ["ROM", "RAM", "硬盘", "U 盘"],
+        "answer": "B",
+        "chapter": "第一章 计算机基础",
+        "my": "",
+        "reply": "一段讲解",
+        "reasoning": "",
+        "usage": "本次用量：提示 2 / 完成 2 / 合计 4 tokens",
+        "history": [
+          { "role": "user", "text": "问" },
+          { "role": "assistant", "text": "一段讲解" }
+        ],
+        "showReasoning": false,
+        "askText": "",
+        "model": "deepseek-flash",
+        "modelsList": "可用模型：deepseek-flash",
+        "configured": true
+      },
+      "event": {
+        "type": "click",
+        "nodeId": "clear",
+        "name": "clear"
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "index": 1,
+          "history": [],
+          "reply": "",
+          "modelsList": "可用模型：deepseek-flash"
+        }
+      }
+    },
+    "http": []
+  },
+  {
+    "name": "模型列表返回后按原文列出",
+    "operation": "ui.reduce",
+    "args": {
+      "pageId": "ask",
+      "state": {
+        "serial": 2,
+        "pending": "models.1",
+        "status": "",
+        "index": 0,
+        "stem": "题干",
+        "options": [],
+        "answer": "",
+        "chapter": "自定义",
+        "my": "",
+        "reply": "",
+        "reasoning": "",
+        "usage": "",
+        "history": [],
+        "showReasoning": false,
+        "askText": "",
+        "model": "deepseek-flash",
+        "modelsList": "",
+        "configured": true
+      },
+      "event": {
+        "type": "effect.result",
+        "effectId": "models.1",
+        "result": {
+          "ok": true,
+          "data": {
+            "status": 200,
+            "url": "https://api.deepseek.com/models",
+            "headers": {},
+            "body": "{\"data\":[{\"id\":\"deepseek-flash\"},{\"id\":\"deepseek-v4-pro\"}]}"
+          }
+        }
+      }
+    },
+    "expectSubset": {
+      "ok": true,
+      "data": {
+        "state": {
+          "pending": "",
+          "modelsList": "可用模型：deepseek-flash、deepseek-v4-pro"
+        }
+      }
+    },
+    "http": []
+  }
+]

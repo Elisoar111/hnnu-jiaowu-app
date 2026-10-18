@@ -2,7 +2,6 @@ package com.hnnujw.course.review.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -48,8 +47,6 @@ fun QuestionCard(
     onUnjudge: () -> Unit,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
-    onAskAi: () -> Unit,
-    aiEnabled: Boolean,
     /**
      * 背题模式：进来就直接摊开答案与解析，不要求作答。
      *
@@ -58,6 +55,16 @@ fun QuestionCard(
      * 决定，本组件不碰数据库。
      */
     memorize: Boolean = false,
+    /**
+     * **限时考试模式：判分后不揭晓对错与解析**。
+     *
+     * 考试中途看到"你答错了 + 正确答案是 C"，就等于把答案提前给了考生 ——
+     * 后面几题的正确率会被这个信息污染，考试也就失去意义。所以这里只标记
+     * "这题已作答"，对错与解析留到交卷后的总结页。
+     *
+     * 背题模式不受影响（它本来就不判分，直接摊开答案）。
+     */
+    hideVerdict: Boolean = false,
     /**
      * 作答版本号（见 PracticeScreen 的 answerVersion）。
      *
@@ -73,6 +80,8 @@ fun QuestionCard(
     val correct = remember(question, version) { session.isCorrect(question) }
     // 揭晓 = 已判分 或 背题模式。选项着色、答案/解析展示都看它。
     val revealed = judged || memorize
+    // 真正可以显示对错的状态：考试中途即使判过分也不揭晓。
+    val revealTruth = (judged && !hideVerdict) || memorize
 
     // 🔴 这里**绝不能**再挂 Modifier.verticalScroll（曾经的线上事故）。
     //
@@ -136,9 +145,9 @@ fun QuestionCard(
                 letter = option.letter,
                 text = option.text,
                 state = when {
-                    !revealed && picked -> OptionState.PICKED
-                    revealed && isCorrectOption -> OptionState.CORRECT
-                    revealed && picked -> OptionState.WRONG
+                    !revealTruth && picked -> OptionState.PICKED
+                    revealTruth && isCorrectOption -> OptionState.CORRECT
+                    revealTruth && picked -> OptionState.WRONG
                     else -> OptionState.IDLE
                 },
                 enabled = !revealed,
@@ -161,7 +170,15 @@ fun QuestionCard(
             )
         } else {
             Spacer(Modifier.height(8.dp))
-            if (judged) {
+            if (judged && hideVerdict) {
+                // 限时考试中途：只确认"这题已作答"，不给对错、不给解析。
+                Text(
+                    text = "已记录作答，交卷后可查看对错与解析。",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (judged) {
                 // ⚠️ 答案条里的字母必须是**显示字母** —— 用户看到的是打乱后的排列，
                 // 报原始字母等于让他去数一个屏幕上不存在的顺序。
                 // 判分本身走的是原始字母（PracticeSession 里），这里只是翻译给眼睛看。
@@ -174,7 +191,7 @@ fun QuestionCard(
                 // 背题模式：用户没作答，所以不判对错，直接摊开正确答案。
                 AnswerBanner(answer = toDisplayAnswer(question.answer, display))
             }
-            if (question.explanation.isNotBlank()) {
+            if (question.explanation.isNotBlank() && !(judged && hideVerdict)) {
                 Spacer(Modifier.height(10.dp))
                 // ⚠️ 已知限制：解析正文里若写死了「A 项…」这类字母引用，乱序后会对不上。
                 // 解析是题库作者写的自由文本，没有可靠的办法把其中的字母引用重映射
@@ -188,22 +205,15 @@ fun QuestionCard(
                 )
             }
             Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                // 🔴 「问 AI」按钮**常显**，不再按 aiEnabled 隐藏。
-                //
-                // 原逻辑 `if (aiEnabled)` 在没配 Key 时让按钮整个消失，于是形成死循环：
-                // 用户看不到「问 AI」→ 不知道有 AI 功能 → 找不到配置入口 → 永远配不上
-                // （2026-10 用户报「没有 AI 配置界面」）。改成常显、点击时再分流：
-                // 没配 Key 就直接去设置页，配了才打开讲解面板。
-                SecondaryAction(
-                    text = if (aiEnabled) "问 AI" else "配置 AI",
-                    onClick = onAskAi,
-                    modifier = Modifier.weight(1f)
-                )
+            // 「问 AI」入口已改为练习页的悬浮球（2026-10 用户要求）：悬浮球常驻屏幕、
+            // 可拖拽，点击弹出 AI 讲解弹窗 —— 本卡片不再放入口，两处入口会互相抢注意力。
+            if (judged) {
                 // 背题模式没有"判定"可撤回，就不显示「再想一下」。
-                if (judged) {
-                    SecondaryAction("再想一下", onClick = onUnjudge, modifier = Modifier.weight(1f))
-                }
+                SecondaryAction(
+                    text = "再想一下",
+                    onClick = onUnjudge,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
 

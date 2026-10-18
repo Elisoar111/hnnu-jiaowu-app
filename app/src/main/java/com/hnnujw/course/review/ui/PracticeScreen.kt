@@ -10,17 +10,15 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -65,6 +63,14 @@ private const val AUTO_NEXT_DELAY_MS = 220L
 private const val QUESTION_TRANSITION_MS = 240
 
 /**
+ * 作答快照的写入去抖窗口（毫秒）。
+ *
+ * 连点选项时只有最后一次会真正编码并写回 saved state。见 PracticeScreen 里
+ * 保存效果的注释：丢的只是最近窗口内还没判分的选择，已判分的答案早已落库。
+ */
+private const val SNAPSHOT_DEBOUNCE_MS = 250L
+
+/**
  * 练习屏：逐题作答。
  *
  * 状态分层刻意做得很死：
@@ -82,23 +88,17 @@ fun PracticeScreen(
     onBack: () -> Unit,
     onFinished: (PracticeResult) -> Unit,
     /**
-     * 「问 AI」在**还没配 Key** 时被点时调用 —— 用来跳去 AI 设置页。
+     * 悬浮球在**还没配 Key** 时被点时调用 —— 用来跳去 AI 设置页。
      *
-     * 以前这个按钮在没配 Key 时整个隐藏，用户看不到任何 AI 入口，也就无从配置
-     * （2026-10 用户报「没有 AI 配置界面」）。现在按钮常显，这里就是它的兜底去向。
+     * 悬浮球常显（项目红线：入口不按状态隐藏），没配 Key 时点击直接去设置页，
+     * 用户才不会对着一个点了没反应的球发呆。
      */
     onOpenAiSettings: () -> Unit = {},
-    /**
-     * AI 是否正在生成（Loading / Streaming）。**必须上抛**：面板内嵌在可滚动的题干
-     * 列里，一旦用户把面板收起或滚下去，界面上就再也看不到"还在生成"，
-     * 只能干等。由外层用这个信号画一个常驻的胶囊。
-     */
-    onAiBusyChange: (Boolean) -> Unit = {},
-    /**
-     * 外层请求"把 AI 面板打开"的信号（点全局胶囊时自增）。
-     * 用自增计数器而不是布尔：连续点两次也要能重新打开。
-     */
-    expandAiSignal: Int = 0
+    /** 「继续上次练习」带回来的题号与作答快照；新开一轮时保持默认。 */
+    initialIndex: Int = 0,
+    initialSnapshot: String = "",
+    /** 作答进度变化时回调（用于把进度写到本地存档，支持"继续上次练习"）。 */
+    onProgress: (index: Int, snapshot: String) -> Unit = { _, _ -> }
 ) {
     val db = remember { ReviewDatabase.get(context) }
     val scope = rememberCoroutineScope()
@@ -109,36 +109,13 @@ fun PracticeScreen(
     // ── 抗进程死亡 ────────────────────────────────────────────────────────
     // 题号走 rememberSaveable：进程被系统回收后重建时，用户回到的是**同一题**，
     // 而不是被踢回第一题。以前全模块没有一个 rememberSaveable，切后台久了就全丢。
-    var index by rememberSaveable { mutableIntStateOf(0) }
+    var index by rememberSaveable { mutableIntStateOf(initialIndex) }
     // 作答与判分状态：PracticeSession 是内存对象，进程死了就没了。这里把它的快照
     // （JSON，见 PracticeSession.exportState）一并存进 saved state，重建会话后灌回去。
-    var answersSnapshot by rememberSaveable { mutableStateOf("") }
-    // 「本会话已灌过快照」标记。**刻意用 remember 而不是 rememberSaveable** ——
-    // 进程重启后它必须重新变成 false，否则恢复逻辑会被上一次运行留下的标记挡掉。
-    var restored by remember { mutableStateOf(false) }
-    var showAi by remember { mutableStateOf(false) }
-    // 收藏状态放这里（界面状态），初始值从库里读一次；点完立刻改本地值，
-    // 不用等数据库回来 —— 星星的反馈必须是即时的。
-    var favorite by remember { mutableStateOf(false) }
-    // 答题卡展开/收起。默认收起 —— 它的作用是"跳到某一题"，不是常驻信息。
-    var showAnswerSheet by remember { mutableStateOf(false) }
-    // 「自动下一题」：偏好级开关（存 ReviewPrefs，改一次一直生效，见 ReviewPrefs 的注释）。
-    //
-    // 🔴 2026-10 用户要求「开启自动下一题的按钮」—— 他要的是**开关**（打开后选完选项
-    // 自动跳到下一题），不是一颗手动的「下一题」按钮（第一版做成了按钮，用户明确纠正）。
-    var autoNext by remember { mutableStateOf(ReviewPrefs.isAutoNext(context)) }
-    /**
-     * 自动跳题的**计时信号**。用自增计数器而不是布尔：连点两个选项时要**重新计时**，
-     * 而不是叠加成"连跳两题" —— 布尔只在 true/false 之间切换，做不到"再来一次"。
-     * 计数器自增会让下面的 LaunchedEffect 重启，天然取消上一次的等待。
-     */
-    var autoAdvanceTick by remember { mutableIntStateOf(0) }
-
-    // 🔴 作答版本号：PracticeSession 内部是普通 LinkedHashMap，select/judge/unjudge
-    // 改它**不会**触发 Compose 重组 —— 选项不高亮、「确认答案」永远不亮（真机报）。
-    // 每次作答相关操作后 version++，QuestionCard 读取答案时引用它即可触发重组。
-    // 判分逻辑本身一行不动。
-    var answerVersion by remember { mutableIntStateOf(0) }
+    var answersSnapshot by rememberSaveable { mutableStateOf(initialSnapshot) }
+    // 临时 UI 状态收进 PracticeUiState（分层说明见 PracticeUiState.kt）：
+    // 这些值切页即丢、进程被杀不救，与上面两个 rememberSaveable 是两类东西。
+    val ui = rememberPracticeUiState(autoNextDefault = ReviewPrefs.isAutoNext(context))
 
     // ── 提交与总结页 ──────────────────────────────────────────────────────
     // 非 null 即表示"已提交"，整屏换成总结页。**刻意留在本 Composable 内**而不是
@@ -146,27 +123,29 @@ fun PracticeScreen(
     // 上抛成新页面就得把整个 session 也传出去，等于把会话的生命周期摊到宿主里。
     var summary by remember { mutableStateOf<PracticeSummary?>(null) }
 
-    // 🔴 落库失败兜底：record 曾经是 fire-and-forget，IO 抛错就静默丢记录 ——
-    // 用户答了题、统计与错题本却没记住，连个提示都没有。失败只提示一次防刷屏
-    // （存储一直坏的话，连答几十题没必要每题弹一条）。
-    var recordFailureShown by remember { mutableStateOf(false) }
-
     /**
      * 批量落库：整批一个事务。交卷补判 N 题不再起 N 个协程开 N 个独立事务。
      * （局部函数不能前向引用，所以它声明在单题便捷入口 [record] 之前。）
      *
      * ⚠️ 背题模式（session.recordsAnswers == false）**不落库** —— 背题不计入统计，
      * 否则背一遍就会把题洗成"已掌握"。
+     *
+     * 🔴 **同一道题在一次会话里只落库一次**：`records` 是累加计数，
+     * 「确认答案 → 再想一下 → 再确认」会把同一题记两遍，`wrong_book.streak` 也会被
+     * 单次会话刷满（点三次就能把一道题刷成「已掌握」）。去重判据在
+     * [PracticeSession.markRecorded]，它随快照一起恢复，进程重建后同样生效。
      */
     fun recordAll(items: List<Pair<ReviewQuestion, Boolean>>) {
         if (!session.recordsAnswers) return
-        val records = items.map { (q, correct) -> ReviewDatabase.AnswerRecord(q.bankId, q.id, correct) }
+        val firstTime = items.filter { (q, _) -> session.markRecorded(q) }
+        if (firstTime.isEmpty()) return
+        val records = firstTime.map { (q, correct) -> ReviewDatabase.AnswerRecord(q.bankId, q.id, correct) }
         scope.launch {
             val ok = runCatching {
                 withContext(Dispatchers.IO) { db.recordAnswers(records) }
             }.isSuccess
-            if (!ok && !recordFailureShown) {
-                recordFailureShown = true
+            if (!ok && !ui.recordFailureShown) {
+                ui.recordFailureShown = true
                 GlassToaster.show("作答记录保存失败，请检查存储空间")
             }
         }
@@ -188,7 +167,7 @@ fun PracticeScreen(
         // "现在揭晓解析"。补判的这批同样要**落库**，否则交卷后数字变了、错题本却没记住。
         val newlyJudged = session.judgePending()
         if (newlyJudged.isNotEmpty()) {
-            answerVersion++
+            ui.answerVersion++
             // 补判的这批一次批量落库（单事务），不再每题一个协程一个事务。
             recordAll(newlyJudged.map { q -> q to session.isCorrect(q) })
         }
@@ -206,12 +185,9 @@ fun PracticeScreen(
     // [ExamCountdownText]（每秒只重组那一行小字）。这里只在真正有动作时才碰界面 ——
     // 以前 remaining 是顶层状态，每秒一次让整个 PracticeScreen 陪着重启。
     // 仍按墙钟差值算（后台回来不会漂），循环对齐到秒边界避免忙等。
-    var warnedFive by remember { mutableStateOf(false) }
-    var warnedOne by remember { mutableStateOf(false) }
     LaunchedEffect(session.timing.durationSeconds, session.startedAt) {
         if (!session.timing.isTimed) return@LaunchedEffect
-        warnedFive = false
-        warnedOne = false
+        ui.resetTimeWarnings()
         val total = session.timing.durationSeconds
         val startedAt = session.startedAt.takeIf { it > 0L }
             // startedAt 未设定（<= 0）时以进入本屏为起点，至少让倒计时能走。
@@ -220,7 +196,7 @@ fun PracticeScreen(
             val now = System.currentTimeMillis()
             val elapsedSec = ((now - startedAt) / 1000L).toInt()
             val left = remainingSeconds(total, elapsedSec)
-            val actions = examTimeouts(left, warnedFive, warnedOne)
+            val actions = examTimeouts(left, ui.warnedFive, ui.warnedOne)
             var submitted = false
             for (action in actions) {
                 when (action) {
@@ -235,11 +211,11 @@ fun PracticeScreen(
                         submitted = true
                     }
                     ExamTimeoutAction.WarnFiveMinutes -> {
-                        warnedFive = true
+                        ui.warnedFive = true
                         GlassToaster.show("还剩 5 分钟")
                     }
                     ExamTimeoutAction.WarnOneMinute -> {
-                        warnedOne = true
+                        ui.warnedOne = true
                         GlassToaster.show("还剩 1 分钟")
                     }
                 }
@@ -260,31 +236,21 @@ fun PracticeScreen(
     // 🔴 落跳前**必须再确认一次**，不能无脑 index++：等待的这段时间里用户可能已经
     // ① 改选了别的选项（信号自增 ⇒ 本效果重启 ⇒ 重新计时，所以不会连跳）
     // ② 把开关关掉了 ③ 手动翻了页 ④ 点了提交。
-    LaunchedEffect(autoAdvanceTick) {
-        if (autoAdvanceTick == 0) return@LaunchedEffect
+    LaunchedEffect(ui.autoAdvanceTick) {
+        if (ui.autoAdvanceTick == 0) return@LaunchedEffect
         delay(AUTO_NEXT_DELAY_MS)
-        if (autoNext && summary == null && index < session.total - 1) index++
+        if (ui.autoNext && summary == null && index < session.total - 1) index++
     }
 
-    // 换题时重置本题的界面状态：收藏读库、AI 面板收起、**对话历史清空**、累计用量归零；
+    // 换题时重置本题的界面状态：收藏读库、AI 弹窗收起、**对话历史清空**、累计用量归零；
     // 同时把内容区滚回顶部 —— 长题滚到中段再翻页，新题不该从屏幕中间开始看。
     val scrollState = rememberScrollState()
     LaunchedEffect(index) {
         val q = session.questions.getOrNull(index) ?: return@LaunchedEffect
-        favorite = withContext(Dispatchers.IO) { db.isFavorite(q.bankId, q.id) }
-        showAi = false
-        ai.resetForNewQuestion()
+        ui.favorite = withContext(Dispatchers.IO) { db.isFavorite(q.bankId, q.id) }
+        ui.showAi = false
+        ai.resetForNewQuestion(keepHistory = ReviewPrefs.isKeepAiHistory(context))
         scrollState.scrollTo(0)
-    }
-
-    // 把"AI 正在生成"上抛给外层画常驻胶囊；离开本屏时显式归位，
-    // 否则切走后胶囊会永远挂在那儿。
-    LaunchedEffect(ai.busy) { onAiBusyChange(ai.busy) }
-    DisposableEffect(Unit) { onDispose { onAiBusyChange(false) } }
-
-    // 点外层胶囊 = 回到本屏并把面板打开。
-    LaunchedEffect(expandAiSignal) {
-        if (expandAiSignal > 0) showAi = true
     }
 
     // ── 抗进程死亡的恢复 / 保存 ───────────────────────────────────────────
@@ -293,24 +259,37 @@ fun PracticeScreen(
     // ⚠️ 这个效果**必须声明在下面的保存效果之前**：两者都在首帧启动，
     // 先恢复后保存才不会把待恢复的快照覆盖成空。
     LaunchedEffect(session) {
-        if (restored) return@LaunchedEffect
-        restored = true
+        if (ui.restored) return@LaunchedEffect
+        ui.restored = true
         if (answersSnapshot.isNotEmpty() &&
             session.answeredCount == 0 && session.judgedCount == 0
         ) {
             session.restoreState(answersSnapshot)
             // 自增版本号，逼 QuestionCard / 答题卡按恢复后的作答重算
             // （PracticeSession 内部是普通 Map，改它不会触发重组）。
-            answerVersion++
+            ui.answerVersion++
         }
     }
 
-    // 保存：每次作答相关操作（answerVersion 自增）后写一次快照。
+    // 保存：作答相关操作（ui.answerVersion 自增）后写一次快照。
+    //
     // ⚠️ 不允许把"新会话的空快照"覆盖掉待恢复的快照 —— 上面那条顺序虽然成立，
     // 但不该依赖它，这里再加一道。
-    LaunchedEffect(answerVersion, session) {
+    //
+    // 🔴 **必须节流**：`answerVersion` 每点一次选项就 +1，而 `exportState()` 是把
+    // 整轮作答与判分重新拼成 JSON（320 题的题库连答 320 次 ≈ 5 万次字符串拼接），
+    // 并且每次都要写回 `rememberSaveable`。这里用「重启即取消」的 delay 做去抖：
+    // 连点期间只有最后一次会真正编码。
+    //
+    // 丢的只有最近 250ms 内的**选择**（还没判分的那一下）；已判分的答案在判分那一刻
+    // 就落了库，不受影响。附带好处：恢复效果一定先于保存效果执行，不再依赖声明顺序。
+    LaunchedEffect(ui.answerVersion, index, session) {
+        if (ui.answerVersion > 0) delay(SNAPSHOT_DEBOUNCE_MS)
         val encoded = session.exportState()
         if (encoded.isNotEmpty() || answersSnapshot.isEmpty()) answersSnapshot = encoded
+        // 同步写一份到本地存档：「继续上次练习」靠它，而不只依赖 saved state
+        // （主动退回首页不销毁 Activity，saved state 并不会被创建）。
+        onProgress(index, encoded)
     }
 
     // 已提交 → 整屏换成总结页。
@@ -336,6 +315,8 @@ fun PracticeScreen(
         return
     }
 
+    // 悬浮球与整页同层：球浮在练习页之上（含底栏区域），拖拽范围即本 Box。
+    Box(Modifier.fillMaxSize()) {
     GlassPageScaffold(
         title = title,
         subtitle = if (session.total == 0) {
@@ -410,20 +391,20 @@ fun PracticeScreen(
                 // 内置题库最大 320 题，页内版本必须一次性测量全部格子。
                 AnswerSheetTrigger(
                     session = session,
-                    version = answerVersion,
-                    autoNext = autoNext,
+                    version = ui.answerVersion,
+                    autoNext = ui.autoNext,
                     onAutoNextChange = { enabled ->
-                        autoNext = enabled
+                        ui.autoNext = enabled
                         ReviewPrefs.setAutoNext(context, enabled)
                     },
-                    onOpen = { showAnswerSheet = true }
+                    onOpen = { ui.showAnswerSheet = true }
                 )
 
-                if (showAnswerSheet) {
-                    GlassSubpage(onDismiss = { showAnswerSheet = false }) { close ->
+                if (ui.showAnswerSheet) {
+                    GlassSubpage(onDismiss = { ui.showAnswerSheet = false }) { close ->
                         AnswerSheetPage(
                             session = session,
-                            version = answerVersion,
+                            version = ui.answerVersion,
                             currentIndex = index,
                             // 背题模式不判分，提交没有意义 —— 页内改成一句说明而不是
                             // 一个点了没反应的灰按钮（本项目红线：入口常显，但禁用必须给原因）。
@@ -468,30 +449,30 @@ fun PracticeScreen(
                     QuestionCard(
                         question = current,
                         session = session,
-                        version = answerVersion,
+                        version = ui.answerVersion,
                         onSelect = { letter ->
                             session.select(current, letter)
-                            answerVersion++
+                            ui.answerVersion++
                             // 自动下一题：只有"能自动跳的题"才起跳 —— 判据在
                             // PracticeSession.canAutoAdvance（背题 / 多选 / 开关关着都不跳），
                             // 最后一题则无处可跳。
-                            if (!isLast && session.canAutoAdvance(current, autoNext)) {
-                                autoAdvanceTick++
+                            if (!isLast && session.canAutoAdvance(current, ui.autoNext)) {
+                                ui.autoAdvanceTick++
                             }
                         },
                         onConfirm = {
                             val correct = session.judge(current)
-                            answerVersion++
+                            ui.answerVersion++
                             record(current, correct)
                         },
                         onUnjudge = {
                             session.unjudge(current)
-                            answerVersion++
+                            ui.answerVersion++
                         },
-                        isFavorite = favorite,
+                        isFavorite = ui.favorite,
                         onToggleFavorite = {
                             // 先翻转本地状态给即时反馈，再落库。
-                            favorite = !favorite
+                            ui.favorite = !ui.favorite
                             scope.launch {
                                 withContext(Dispatchers.IO) {
                                     db.toggleFavorite(current.bankId, current.id)
@@ -499,24 +480,10 @@ fun PracticeScreen(
                             }
                         },
                         memorize = session.memorize,
-                        // 没配好时点「配置 AI」直接去设置页，不打开讲解面板。
-                        onAskAi = { if (ai.configured) showAi = true else onOpenAiSettings() },
-                        aiEnabled = ai.configured
+                        // 限时考试中途不揭晓对错与解析：看到"答错了 + 正确答案"就等于
+                        // 把答案提前给了考生，后面几题的正确率会被污染。
+                        hideVerdict = session.timing.isTimed
                     )
-                }
-
-                if (showAi) {
-                    AiExplainPanel(
-                        question = question,
-                        state = ai.state,
-                        userAnswer = session.answerOf(question),
-                        aiConfigured = ai.configured,
-                        history = ai.history,
-                        totalUsage = ai.usageTotal,
-                        onAsk = { extra -> ai.ask(question, session.answerOf(question), extra) },
-                        onDismiss = { showAi = false }
-                    )
-                    Spacer(Modifier.height(16.dp))
                 }
             }
 
@@ -567,5 +534,28 @@ fun PracticeScreen(
                 }
             }
         }
+    }
+
+        // AI 悬浮球：常驻练习页、可拖拽、贴边吸附；生成中带进度环（取代旧的全局
+        // 「AI 正在生成」胶囊），点击打开 AI 讲解弹窗，未配 Key 时直接去设置页。
+        AiFloatingBall(
+            busy = ai.busy,
+            contentDescription = "AI 讲解",
+            onClick = { if (ai.configured) ui.showAi = true else onOpenAiSettings() }
+        )
+    }
+
+    if (ui.showAi) {
+        AiExplainDialog(
+            question = question,
+            state = ai.state,
+            userAnswer = session.answerOf(question),
+            aiConfigured = ai.configured,
+            history = ai.history,
+            totalUsage = ai.usageTotal,
+            onAsk = { extra -> ai.ask(question, session.answerOf(question), extra) },
+            onOpenSettings = onOpenAiSettings,
+            onDismiss = { ui.showAi = false }
+        )
     }
 }

@@ -246,13 +246,13 @@ object ExamReminderScheduler {
 
         // ⚠️ 顺序有讲究：**必须先确认这次真的能送达，再消费计划。**
         //
-        // `savePlans` 摘掉这条一次性计划，同时系统里的闹钟也已经响过、不会再来第二次 ——
-        // 所以一旦先摘再发现"通知被用户关了"，这条考试提醒就**永久消失**，事后重新打开
-        // 通知也回不来。放在消费之前，权限关闭时计划原样留在这里，等下一次 `reconcile`
-        // （开机 / 应用更新 / 改时间 / 成绩缓存刷新）连同它一起重排，用户开了通知仍能收到。
+        // `savePlans` 摘掉这条一次性计划，同时系统里的闹钟也已经响过、不会再来第二次。
+        // 所以一旦在"送不出去"的状态下先摘，这条考试提醒就永久消失。
+        // 放在消费之前，通知关闭时计划原样留在这里 —— 用户随后打开通知，
+        // 下一次 reconcile 仍会重新评估它（注意：trigger 已过的一次性计划会被
+        // `decideReconcile` 判为过期并撤掉，所以这里的保留只解决"发的一瞬间失败"，
+        // 不是补偿机制）。
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
-
-        savePlans(context, plans(context) - id)
 
         // 计划属于哪个账号，就必须由哪个账号来收。
         //
@@ -260,8 +260,10 @@ object ExamReminderScheduler {
         // （不变量 1 与 3），所以删号 / 登出 / 切号之后，这个闹钟仍留在系统里，开机重排
         // 还会把它排回来。少了守卫，用户会收到一条属于**已删除账号**的考试提醒。
         //
-        // 课前提醒（`ScheduleReminderScheduler.receive`）靠 `isCurrentReminderOccurrence`
-        // 传 `activeAccount()` 天然挡住了这种情况，考前提醒这条链路此前没有对应兜底。
+        // ⚠️ 顺序：必须在 `savePlans` **之前**判断。日志出 / 会话过期时 `isLoggedIn` 为 false，
+        // 若先消费再判断，这条一次性计划就被吃掉了——闹钟已经响过不会再来第二次，
+        // 用户重新登录后也永远收不到这条考试提醒（`decideReconcile` 会跳过 trigger <= now）。
+        // 留在计划表里是安全的：下一次 reconcile 见到 trigger 已过会把它撤掉，自清理。
         val user = UserManager.getInstance().apply { init(context.applicationContext) }
         if (!shouldDeliver(plan, user.isLoggedIn, user.isDemoMode, user.currentAccountStorageKey)) return
 
@@ -296,10 +298,16 @@ object ExamReminderScheduler {
             .setContentIntent(content)
             .setAutoCancel(true)
             .build()
-        try {
+        // 只有真的 notify 成功才摘掉这次的一次性计划。
+        // notify 在权限被撤销的瞬间会抛 SecurityException；此前是"先摘再发"，
+        // 一旦抛异常这条考试提醒就永久消失了。
+        val delivered = try {
             NotificationManagerCompat.from(context).notify(NOTIFICATION_TAG, id.hashCode(), notification)
+            true
         } catch (_: SecurityException) {
+            false
         }
+        if (delivered) savePlans(context, plans(context) - id)
     }
 
     /** 退出登录 / 删除账号时清掉该账号的提醒；其它账号的计划保持不动。 */

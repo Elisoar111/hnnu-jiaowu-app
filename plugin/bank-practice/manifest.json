@@ -1,0 +1,67 @@
+{
+  "id": "org.elisoar.study.bank-practice",
+  "name": "题库练习",
+  "version": "1.0.0",
+  "apiVersion": 3,
+  "kind": "native",
+  "entry": "index.js",
+  "category": "study",
+  "features": [
+    "内置演示题库",
+    "JSON 导入",
+    "章节多选",
+    "顺序 / 乱序 / 考试 / 背题",
+    "确认答案与交卷补判",
+    "答题卡",
+    "提交总结页",
+    "错题本与收藏"
+  ],
+  "description": "题库练习：内置一份通用演示题库，也支持用文件选择器导入自己的 JSON 题库；可多选章节、选择顺序 / 乱序 / 考试 / 背题模式练习，提交后进总结页看正确率与错题明细，错题本与收藏保存在本机。不联网、不需要学校账号。",
+  "license": "GPL-3.0-only",
+  "maintainers": [
+    {
+      "name": "Elisoar"
+    }
+  ],
+  "maintenance": "active",
+  "verifiedScope": [
+    "离线合成样本：题目与导入文件均为本地样例；真实设备验收待进行"
+  ],
+  "requires": [
+    { "name": "storage.get", "version": 1 },
+    { "name": "storage.set", "version": 1 },
+    { "name": "files.pick", "version": 1 },
+    { "name": "files.read", "version": 1 }
+  ],
+  "capabilities": [
+    "ui.init",
+    "ui.reduce"
+  ],
+  "permissions": [
+    "storage",
+    "files"
+  ],
+  "network": [],
+  "contributes": {
+    "pages": [
+      { "id": "main", "title": "题库练习", "renderer": "native" },
+      { "id": "library", "title": "题库仓库", "renderer": "native" },
+      { "id": "wrong", "title": "错题本与收藏", "renderer": "native" }
+    ],
+    "entries": [
+      { "id": "practice-entry", "title": "题库练习", "pageId": "main", "icon": "book", "order": 20 },
+      { "id": "library-entry", "title": "题库仓库", "pageId": "library", "icon": "book", "order": 21 },
+      { "id": "wrong-entry", "title": "错题本与收藏", "pageId": "wrong", "icon": "chart", "order": 22 }
+    ],
+    "settings": [
+      {
+        "id": "autoNext",
+        "title": "自动下一题（选完选项就跳下一题）",
+        "type": "boolean",
+        "default": false,
+        "scope": "plugin"
+      }
+    ]
+  },
+  "files": {}
+}

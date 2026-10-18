@@ -22,6 +22,7 @@ object YktAlertSettings {
     private const val PREFS = "ykt_alert_prefs"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_THRESHOLD = "threshold_yuan"
+    private const val KEY_KWH_THRESHOLD = "threshold_kwh"
 
     /** 默认阈值 20 元（用户指定）。 */
     const val DEFAULT_THRESHOLD_YUAN: Double = 20.0
@@ -29,6 +30,18 @@ object YktAlertSettings {
     /** 阈值可调范围：太小会天天响，太大没意义。 */
     const val MIN_THRESHOLD_YUAN: Double = 1.0
     const val MAX_THRESHOLD_YUAN: Double = 500.0
+
+    /**
+     * 度数型费项的默认阈值：20 度。
+     *
+     * 与金额阈值同数不同量纲。学校宿舍一天大约 3~6 度，20 度约等于"还能撑三四天"，
+     * 与 20 元在金额型费项上的提前量相当。
+     */
+    const val DEFAULT_THRESHOLD_KWH: Double = 20.0
+
+    /** 度数阈值范围：1~200 度。上限比金额宽松（一个学期不清零的宿舍可能存上百元/度）。 */
+    const val MIN_THRESHOLD_KWH: Double = 1.0
+    const val MAX_THRESHOLD_KWH: Double = 200.0
 
     fun isEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_ENABLED, true)
 
@@ -55,6 +68,51 @@ object YktAlertSettings {
         value < MIN_THRESHOLD_YUAN -> MIN_THRESHOLD_YUAN
         value > MAX_THRESHOLD_YUAN -> MAX_THRESHOLD_YUAN
         else -> value
+    }
+
+    // —— 度数型费项（剩余电量/剩余水费）的独立阈值 ——
+    //
+    // 为什么需要独立的一份：金额与度数的量纲、量级、心理预期都不同。
+    // "低于 20 元提醒"对金额型合理，但度数型如果也套 20，含义就变成"低于 20 度"——
+    // 而一个宿舍一天用 3~6 度，20 度还有三四天，两者恰好接近，纯属巧合。
+    // 学校若把某费项从金额改成度数，共用同一个阈值就会突然变得过松或过紧。
+    // 更关键的是**单位不能混**：把 312.2 度当成 312.2 元会直接绕过 20 元阈值
+    // （这正是 YktBalance 注释里记着的那次误判风险）。
+
+    /** 读度数阈值；损坏值回落默认。 */
+    fun thresholdKwh(context: Context): Double {
+        val raw = prefs(context).getString(KEY_KWH_THRESHOLD, null)
+        val parsed = raw?.toDoubleOrNull() ?: DEFAULT_THRESHOLD_KWH
+        return clampKwhThreshold(parsed)
+    }
+
+    fun setThresholdKwh(context: Context, value: Double) {
+        prefs(context).edit()
+            .putString(KEY_KWH_THRESHOLD, clampKwhThreshold(value).toString())
+            .apply()
+    }
+
+    /** 归一化度数阈值。 */
+    fun clampKwhThreshold(value: Double): Double = when {
+        value.isNaN() || value.isInfinite() -> DEFAULT_THRESHOLD_KWH
+        value < MIN_THRESHOLD_KWH -> MIN_THRESHOLD_KWH
+        value > MAX_THRESHOLD_KWH -> MAX_THRESHOLD_KWH
+        else -> value
+    }
+
+    /**
+     * 按费项单位取对应阈值。
+     *
+     * 这是**唯一**应该被调用方使用的取阈值入口 —— 让"用哪个阈值"由单位决定，
+     * 而不是让每个调用点自己判断，避免某处漏判就把度数当金额。
+     *
+     * `UNKNOWN` 单位返回 null：单位都认不出来时**不提醒**，
+     * 与 `YktAlertPolicy` 里"余额解析失败就不报"是同一条原则（宁可漏报不可误报）。
+     */
+    fun thresholdFor(context: Context, unit: ElectricityUnit): Double? = when (unit) {
+        ElectricityUnit.YUAN -> thresholdYuan(context)
+        ElectricityUnit.KWH -> thresholdKwh(context)
+        ElectricityUnit.UNKNOWN -> null
     }
 
     private fun prefs(context: Context) =

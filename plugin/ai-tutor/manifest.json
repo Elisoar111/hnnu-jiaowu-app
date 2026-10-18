@@ -1,0 +1,99 @@
+{
+  "id": "org.elisoar.study.ai-tutor",
+  "name": "AI 答疑",
+  "version": "1.0.0",
+  "apiVersion": 3,
+  "kind": "native",
+  "entry": "index.js",
+  "category": "study",
+  "features": [
+    "题目讲解",
+    "连续追问",
+    "思考过程可折叠",
+    "用量统计"
+  ],
+  "description": "AI 答疑：页面上一键「问 AI」讲解练习题，只使用 DeepSeek 官方接口。API Key 由宿主的设置项保管，插件不落盘凭据；未配置时不会发起任何请求。内置 4 道通用示例题用于演示，也可以改成自己的题目。",
+  "license": "GPL-3.0-only",
+  "maintainers": [
+    {
+      "name": "Elisoar"
+    }
+  ],
+  "maintenance": "active",
+  "verifiedScope": [
+    "离线合成样本：网络请求由本地模拟响应覆盖；真实设备与 DeepSeek 线上验收待进行"
+  ],
+  "serviceScope": [
+    "需要使用者自己的 DeepSeek API Key；Key 只保存在本机宿主设置中，不会写进插件存储"
+  ],
+  "requires": [
+    {
+      "name": "network.request",
+      "version": 3
+    }
+  ],
+  "capabilities": [
+    "ui.init",
+    "ui.reduce"
+  ],
+  "permissions": [
+    "network"
+  ],
+  "network": [
+    {
+      "origin": "https://api.deepseek.com",
+      "pathPrefix": "/chat/completions",
+      "methods": [
+        "POST"
+      ],
+      "purposes": [
+        "query"
+      ]
+    },
+    {
+      "origin": "https://api.deepseek.com",
+      "pathPrefix": "/models",
+      "methods": [
+        "GET"
+      ],
+      "purposes": [
+        "query"
+      ]
+    }
+  ],
+  "contributes": {
+    "pages": [
+      {
+        "id": "ask",
+        "title": "AI 答疑",
+        "renderer": "native"
+      }
+    ],
+    "entries": [
+      {
+        "id": "ask-entry",
+        "title": "AI 答疑",
+        "pageId": "ask",
+        "icon": "activity",
+        "order": 30
+      }
+    ],
+    "settings": [
+      {
+        "id": "apiKey",
+        "title": "DeepSeek API Key",
+        "type": "string",
+        "default": "",
+        "scope": "plugin"
+      },
+      {
+        "id": "model",
+        "title": "模型（deepseek-flash / deepseek-v4-pro）",
+        "type": "string",
+        "default": "deepseek-flash",
+        "scope": "plugin"
+      }
+    ]
+  },
+  "files": {}
+}

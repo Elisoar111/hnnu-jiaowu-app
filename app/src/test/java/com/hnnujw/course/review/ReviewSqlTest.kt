@@ -140,67 +140,57 @@ class ReviewSqlTest {
         }
     }
 
-    // —— overview（overview() 的实际数据源）
+
+    // —— overviewSingle（review 首页 / 题库详情页概览的实际数据源）
 
     @Test
-    fun `overview 六条查询在 bankId 为 null 时全部合法`() {
-        val q = ReviewSql.overview(null)
-        assertEquals(6, q.ordered.size)
-        q.ordered.forEach { assertSqlWellFormed(it.sql, it.args) }
+    fun `概览合并查询在 bankId 为 null 时合法`() {
+        val q = ReviewSql.overviewSingle(null)
+        assertSqlWellFormed(q.sql, q.args)
+        assertEquals("无条件时不应有任何占位符", 0, q.args.size)
+        assertTrue("必须是单条 SELECT", q.sql.startsWith("SELECT "))
     }
 
     @Test
-    fun `overview 六条查询在 bankId 非 null 时全部合法`() {
-        // 回归：原来 banks 那条 0 占位符却收到 1 个参数 → Cannot bind argument at index
-        val q = ReviewSql.overview("b1")
-        assertEquals(6, q.ordered.size)
-        q.ordered.forEach { assertSqlWellFormed(it.sql, it.args) }
-        // banks 是全局表，不该吃 bank_id 条件，也不该带参数
-        assertEquals("SELECT COUNT(*) FROM banks", q.banks.sql)
-        assertEquals(emptyList<String>(), q.banks.args)
+    fun `概览合并查询在 bankId 非 null 时占位符与参数对齐`() {
+        // 回归：原来 banks 那条 0 占位符却收到 1 个参数 → Cannot bind argument at index。
+        // 合并后 banks 子查询仍然不带条件，其余五条各一个占位符。
+        val q = ReviewSql.overviewSingle("b1")
+        assertSqlWellFormed(q.sql, q.args)
+        assertEquals(5, q.args.size)
+        assertTrue("每个参数都应当是同一个 bankId", q.args.all { it == "b1" })
+        assertFalse("banks 是全局表，不该带 bank_id 条件", q.sql.contains("FROM banks WHERE"))
     }
 
     @Test
-    fun `overview 各条查询的语义与字段名一一对应`() {
-        val q = ReviewSql.overview("b1")
-        assertEquals("SELECT COUNT(*) FROM questions WHERE bank_id = ?", q.questions.sql)
-        assertEquals("SELECT COUNT(*) FROM records WHERE bank_id = ?", q.records.sql)
-        assertEquals("SELECT COALESCE(SUM(correct_count), 0) FROM records WHERE bank_id = ?", q.correctSum.sql)
-        assertEquals("SELECT COUNT(*) FROM wrong_book WHERE bank_id = ? AND mastered = 0", q.wrongPending.sql)
-        assertEquals("SELECT COUNT(*) FROM favorites WHERE bank_id = ?", q.favorites.sql)
-        assertEquals("SELECT COUNT(*) FROM banks", q.banks.sql)
-        // 顺序不能错位：ordered 的下标要与 Overview 字段的取值一一对应
-        assertEquals(q.questions, q.ordered[0])
-        assertEquals(q.records, q.ordered[1])
-        assertEquals(q.correctSum, q.ordered[2])
-        assertEquals(q.wrongPending, q.ordered[3])
-        assertEquals(q.favorites, q.ordered[4])
-        assertEquals(q.banks, q.ordered[5])
-    }
-
-    @Test
-    fun `overview 在 bankId 为 null 时错题本那条仍带 mastered 条件`() {
-        // 这一条单独再钉一次：它就是闪退的那条 SQL
-        val q = ReviewSql.overview(null)
-        assertEquals("SELECT COUNT(*) FROM wrong_book WHERE mastered = 0", q.wrongPending.sql)
-        assertSqlWellFormed(q.wrongPending.sql, q.wrongPending.args)
-    }
-
-    @Test
-    fun `argsArray 返回可喂给 rawQuery 的数组`() {
-        val arr = ReviewSql.overview("b1").records.argsArray()
-        assertEquals(1, arr.size)
-        assertEquals("b1", arr[0])
-        assertEquals(0, ReviewSql.overview(null).records.argsArray().size)
-    }
-
-    @Test
-    fun `脏 bankId 只作为绑定参数出现不进 SQL 文本`() {
-        val q = ReviewSql.overview("bank'1")
-        q.ordered.forEach {
-            assertSqlWellFormed(it.sql, it.args)
-            // 单引号只允许出现在 args 里
-            assertFalse("引号泄漏进 SQL 文本: <${it.sql}>", it.sql.contains('\''))
+    fun `概览合并查询在每种 bankId 取值下都合法`() {
+        bankIds.forEach { id ->
+            val q = ReviewSql.overviewSingle(id)
+            assertSqlWellFormed(q.sql, q.args)
         }
+    }
+
+    @Test
+    fun `概览合并查询的错题本子查询始终带 mastered 条件`() {
+        // 这一条单独再钉一次：它就是当年闪退的那条 SQL
+        assertTrue(ReviewSql.overviewSingle(null).sql.contains("FROM wrong_book WHERE mastered = 0"))
+        assertTrue(ReviewSql.overviewSingle("b1").sql.contains("FROM wrong_book WHERE bank_id = ? AND mastered = 0"))
+    }
+
+    @Test
+    fun `脏 bankId 只作为绑定参数出现不进概览 SQL 文本`() {
+        val q = ReviewSql.overviewSingle("bank'1")
+        assertSqlWellFormed(q.sql, q.args)
+        assertFalse("引号泄漏进 SQL 文本: <${q.sql}>", q.sql.contains('\''))
+    }
+
+    @Test
+    fun `概览合并查询里六个标量各出现一次`() {
+        val sql = ReviewSql.overviewSingle("b1").sql
+        assertEquals(1, Regex("FROM questions").findAll(sql).count())
+        assertEquals(2, Regex("FROM records").findAll(sql).count())   // answered + sum(correct_count)
+        assertEquals(1, Regex("FROM wrong_book").findAll(sql).count())
+        assertEquals(1, Regex("FROM favorites").findAll(sql).count())
+        assertEquals(1, Regex("FROM banks").findAll(sql).count())
     }
 }

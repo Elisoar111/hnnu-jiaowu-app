@@ -97,13 +97,37 @@ object YktAlertPolicy {
         }
     }
 
-    /** 通知文案：余额与阈值都要给出，用户才知道是"谁触发的"。 */
-    fun notificationTitle(): String = "宿舍电费余额不足"
+    /**
+     * 通知标题：按量纲区分。
+     *
+     * 度数型不能说"余额不足"——那是钱的措辞。度数型是"剩余电量不多了"，
+     * 用户看到"余额不足"会去找充值入口，而度数型往往要去另一处购电。
+     */
+    fun notificationTitle(unit: ElectricityUnit = ElectricityUnit.YUAN): String = when (unit) {
+        ElectricityUnit.YUAN -> "宿舍电费余额不足"
+        ElectricityUnit.KWH -> "宿舍剩余电量不多了"
+        ElectricityUnit.UNKNOWN -> "宿舍电费余额不足"
+    }
 
-    fun notificationText(balance: Double, threshold: Double): String =
-        "当前余额 ${YktBalance.formatYuan(balance)} 元，" +
-            "已低于设定的 ${YktBalance.formatYuan(threshold)} 元，请及时充值。" +
-            "（充值请前往校园卡官方渠道）"
+    /**
+     * 通知文案：读数与阈值都要给出，用户才知道是"谁触发的"。
+     *
+     * 单位必须跟着 [unit] 走：把 312.2 度写成"312.2 元"是最典型的一类误导，
+     * 用户会以为余额充足。
+     */
+    fun notificationText(
+        balance: Double,
+        threshold: Double,
+        unit: ElectricityUnit = ElectricityUnit.YUAN,
+    ): String {
+        val reading = YktBalance.formatWithUnit(balance, unit)
+        val limit = YktBalance.formatWithUnit(threshold, unit)
+        val hint = when (unit) {
+            ElectricityUnit.KWH -> "请及时购电，避免断电。"
+            else -> "请及时充值。（充值请前往校园卡官方渠道）"
+        }
+        return "当前剩余 $reading，已低于设定的 $limit，$hint"
+    }
 
     /** 去重状态在 prefs 里的键。 */
     fun stateKeyPrefix(): String = "alert_state_"

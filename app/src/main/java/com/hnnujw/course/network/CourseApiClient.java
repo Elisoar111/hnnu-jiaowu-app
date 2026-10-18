@@ -27,6 +27,24 @@ public class CourseApiClient {
         private static final String TAG = "CourseApiClient";
         private static final String DEFAULT_ACCOUNT_STORAGE_KEY = "default";
         private static final String INTERNAL_ACCOUNT_HEADER = "X-Course-Account-Storage-Key";
+
+        /**
+         * 会话失效判别时**第一段** peek 的字节数。
+         *
+         * 登录表单特征（`id="pwd"` / `name="mm"` + `name="yhm"`）一定出现在页面
+         * 靠前的位置，8KB 足够覆盖。绝大多数正常页面只看这一段就能排除，不必
+         * 把整个响应体缓冲成字符串。
+         */
+        private static final long HEAD_PREVIEW_BYTES = 1024L * 8;
+
+        /**
+         * 疑似失效时才用的**大块** peek 上限。
+         *
+         * 需要它的原因：正方某些成绩页会把登录代码混进很靠后的位置，
+         * 而"姓名"标签也可能不在页头 —— 判误报必须能在更大范围内找姓名。
+         * 只有真的命中疑似失效才会走到这里，正常请求付不到这份成本。
+         */
+        private static final long FULL_PREVIEW_BYTES = 1024L * 256;
         private static final ThreadLocal<String> REQUEST_ACCOUNT_STORAGE_KEY = new ThreadLocal<>();
         private static final ThreadLocal<SessionToken> REQUEST_SESSION_TOKEN = new ThreadLocal<>();
         private static final ThreadLocal<String> ACCOUNT_OVERRIDE_STORAGE_KEY = new ThreadLocal<>();
@@ -123,21 +141,34 @@ public class CourseApiClient {
                                                         if (!_isLoginFlow) {
 
                                                         // 🔧 修改判定逻辑：引入“高精度反证法”防止误报
-                                                        // 1. 扩大检查范围：从 50KB 增加到 256KB，确保能搜到复杂成绩页中的姓名标签
-                                                        String bodyPreview = response.peekBody(1024 * 256).string();
+                                                        //
+                                                        // 🔴 两段式 peek（性能优化）：
+                                                        //  原实现无条件 peekBody(256KB)。`peekBody` 会把响应体
+                                                        //  缓冲成字符串 —— 每个课表/成绩页都多一次 256KB 的拷贝，
+                                                        //  而其中 99% 的页面根本不含登录表单。
+                                                        //
+                                                        //  现在先只看 8KB（登录表单特征一定在页头附近），
+                                                        //  只有**真的命中疑似失效**时才 peek 大块去解析姓名。
+                                                        //  正常页面从小块变基本无成本，误报路径才付那 256KB。
+                                                        String headPreview = response.peekBody(HEAD_PREVIEW_BYTES).string();
                                                         String currentUrl = response.request().url().toString();
 
                                                         // 2. 核心判定规则：必须包含真实的登录表单特征（密码框 ID 等）
-                                                        boolean hasLoginForm = bodyPreview.contains("id=\"pwd\"") ||
-                                                                        (bodyPreview.contains("name=\"mm\"")
-                                                                                        && bodyPreview.contains(
+                                                        boolean hasLoginForm = headPreview.contains("id=\"pwd\"") ||
+                                                                        (headPreview.contains("name=\"mm\"")
+                                                                                        && headPreview.contains(
                                                                                                         "name=\"yhm\""));
 
                                                         // 这里的判定逻辑更严格：URL 包含 login_ 且包含“用户登录”文案，或包含真实的表单
                                                         if (hasLoginForm || (currentUrl.contains("login_")
-                                                                        && bodyPreview.contains("用户登录"))) {
+                                                                        && headPreview.contains("用户登录"))) {
                                                                 // 3. 🚨 重点：尝试解析姓名作为“生存证明”
-                                                                // 只要能解析出姓名，说明绝对是误判（正方系统某些成绩页会混入登录代码）
+                                                                // 只有在走到这一步（疑似失效）时才读大块：
+                                                                // 正方某些成绩页会把登录代码混进很靠后的位置，
+                                                                // 姓名标签也可能不在 head 里，8KB 不够用。
+                                                                String bodyPreview = headPreview.length() < HEAD_PREVIEW_BYTES
+                                                                                ? headPreview
+                                                                                : response.peekBody(FULL_PREVIEW_BYTES).string();
                                                                 String possibleName = com.hnnujw.course.utils.CourseParser
                                                                                 .parseStudentName(bodyPreview);
                                                                 boolean isActuallyLoggedIn = possibleName != null

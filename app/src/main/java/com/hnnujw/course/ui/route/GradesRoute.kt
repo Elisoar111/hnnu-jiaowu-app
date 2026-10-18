@@ -470,7 +470,12 @@ private object GradesLogic {
                     )
                 )
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) {
+            // 解析中断时**不能**静默：这里返回的是成绩列表，吞掉异常等于把
+            // "解析到一半失败"变成"少了几门课"，用户看到的是数据错而不是报错。
+            // 保留已解析出的部分（调用方会照常展示），但必须留下痕迹。
+            android.util.Log.w("GradesRoute", "解析成绩详情中断，已解析 ${result.size} 门: ${e.message}")
+        }
         return result
     }
 
@@ -584,7 +589,11 @@ private object GradesLogic {
                 val obj = JSONObject(json)
                 items = obj.optJSONArray("items")
             } catch (e: Exception) {
-                try { items = JSONArray(json) } catch (_: Exception) {}
+                // 不是 {"items":[...]} 形态，试一下裸数组。两种都不成的话下面会
+                // 走"没有成绩"的分支 —— 这里留一句日志，方便区分"接口变了"和"真的空"。
+                try { items = JSONArray(json) } catch (_: Exception) {
+                    android.util.Log.w("GradesRoute", "成绩 JSON 既不是对象也不是数组: ${e.message}")
+                }
             }
             if (items == null) {
                 Log.w("GradesRoute", "parseDetailGroupMap: no 'items' array found in detail JSON")
@@ -742,7 +751,10 @@ private object GradesLogic {
                     )
                 }
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) {
+            // 同上：考试列表解析中断必须留痕，否则用户看到的是"考试少了几场"。
+            android.util.Log.w("GradesRoute", "解析考试列表中断，已解析 ${list.size} 场: ${e.message}")
+        }
         return list
     }
 }

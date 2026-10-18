@@ -71,7 +71,7 @@ class YktAlertReceiver : BroadcastReceiver() {
             return
         }
 
-        val threshold = YktAlertSettings.thresholdYuan(app)
+        // 阈值改为在拿到读数、知道量纲之后再取（见下面的 thresholdFor）
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
                 withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
@@ -88,13 +88,20 @@ class YktAlertReceiver : BroadcastReceiver() {
                         Log.i(TAG, "后台巡检未取到读数，跳过本轮")
                         return@withTimeoutOrNull
                     }
-                    // 只有金额型费项才套"元"阈值。度数型（如 201 的剩余电量）
-                    // 拿 20 元去比会得出荒谬结论，这里直接跳过而不是硬比。
-                    if (!balance.supportsAmountAlert) {
-                        Log.i(TAG, "当前费项为${balance.unit}口径，跳过金额阈值判定")
+                    // 按费项量纲取对应阈值：金额型用元、度数型用度，各自独立可调。
+                    //
+                    // 原先是"非金额型直接跳过"，等于度数型费项**永远不提醒**。
+                    // 现在度数型有自己的阈值，但仍要守住一条：单位认不出来（UNKNOWN）
+                    // 时不提醒 —— 把 312.2 度当成 312.2 元会得出荒谬结论，
+                    // 宁可漏报也不误报（与 YktAlertPolicy 里"余额解析失败不报"同一原则）。
+                    val unitThreshold = YktAlertSettings.thresholdFor(app, balance.unit)
+                    if (unitThreshold == null) {
+                        Log.i(TAG, "费项单位未知（${balance.unit}），跳过阈值判定")
                         return@withTimeoutOrNull
                     }
-                    YktAlertNotifier.evaluateAndNotify(app, accountKey, balance.amount, threshold)
+                    YktAlertNotifier.evaluateAndNotify(
+                        app, accountKey, balance.amount, unitThreshold, balance.unit,
+                    )
                 }
             } catch (e: Exception) {
                 // 后台巡检失败不惊动用户：余额提醒保持上一轮状态即可。

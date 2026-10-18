@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hnnujw.course.ui.system.ChunkedListFooter
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassToaster
 import com.hnnujw.course.ui.system.MarkdownText
@@ -68,6 +69,7 @@ import com.hnnujw.course.ui.system.SystemPrimaryButton
 import com.hnnujw.course.ui.system.SystemSectionHeader
 import com.hnnujw.course.ui.system.SystemStatusBadge
 import com.hnnujw.course.ui.system.SystemTone
+import com.hnnujw.course.ui.system.rememberChunkedListState
 import com.hnnujw.course.ykt.ElectricityBalance
 import com.hnnujw.course.ykt.ElectricityUnit
 import com.hnnujw.course.ykt.SceneOption
@@ -85,9 +87,11 @@ import com.hnnujw.course.ykt.YktOverview
 import com.hnnujw.course.ykt.YktSceneContext
 import com.hnnujw.course.ykt.YktSceneLevel
 import com.hnnujw.course.ykt.YktSceneSelection
+import com.hnnujw.course.ykt.YktPickReconcile
 import com.hnnujw.course.ykt.YktSelectionStore
 import com.hnnujw.course.ykt.YktStore
 import com.hnnujw.course.ykt.YktTurnover
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -308,11 +312,15 @@ fun YktScreen(
             val balance = result.reading
             electricity = balance
             electricityContext = result.context
-            // 界面拉到数就顺手判一次提醒：用户手动查到的余额与后台巡检应口径一致
-            if (balance != null && balance.supportsAmountAlert) {
-                YktAlertNotifier.evaluateAndNotify(
-                    context, accountKey, balance.amount, YktAlertSettings.thresholdYuan(context),
-                )
+            // 界面拉到数就顺手判一次提醒：用户手动查到的余额与后台巡检应口径一致。
+            // 阈值按量纲取（金额/度数各自独立），单位未知时不判 —— 见 YktAlertSettings.thresholdFor。
+            if (balance != null) {
+                val unitThreshold = YktAlertSettings.thresholdFor(context, balance.unit)
+                if (unitThreshold != null) {
+                    YktAlertNotifier.evaluateAndNotify(
+                        context, accountKey, balance.amount, unitThreshold, balance.unit,
+                    )
+                }
             }
             if (result.levels.isNotEmpty()) sceneLevels = result.levels
         } catch (e: Throwable) {
@@ -361,21 +369,38 @@ fun YktScreen(
         }
         selection = reconciled
 
-        // 费项详情：决定要不要选房间、级联几级。取不到时按"不需要选"处理（保守降级）。
-        feeDetail = runCatching { client.feeItemDetail(token, reconciled.feeItemId) }.getOrNull()
-        sceneLevels = feeDetail?.levels.orEmpty()
-        // 记忆里的 picks 若级数与当前不符（学校改了配置），丢弃重选
-        if (sceneLevels.isNotEmpty() && reconciled.picks.size > sceneLevels.size) {
-            reconciled = reconciled.copy(picks = emptyList())
-            selection = reconciled
+        // 以下三路彼此独立（读数只依赖费项详情这一路）：并行请求。
+        // 此前 详情→读数→汇总→流水 全串行，首屏要多等两三个往返。
+        coroutineScope {
+            launch {
+                // 费项详情：决定要不要选房间、级联几级。取不到时按"不需要选"处理（保守降级）。
+                feeDetail = runCatching { client.feeItemDetail(token, reconciled.feeItemId) }.getOrNull()
+                sceneLevels = feeDetail?.levels.orEmpty()
+                // 记忆里的 picks 要与学校当前配置**逐级对账**（见 YktPickReconcile 的说明）。
+                //
+                // 原实现只比级数（`picks.size > sceneLevels.size` 才丢弃）。这挡不住
+                // "级数没变、但级的含义变了"：楼栋→单元→房间 改成 园区→楼栋→房间 时，
+                // 旧的 (code,value) 会被原样传给接口，等于拿别人的房间号查电费。
+                val levelCodes = sceneLevels.map { it.code }
+                val aligned = YktPickReconcile.reconcile(reconciled.picks, levelCodes)
+                if (aligned.size != reconciled.picks.size) {
+                    reconciled = reconciled.copy(picks = aligned)
+                    selection = reconciled
+                }
+                // 语义错位（级数相同、code 不同）时旧记忆一定用不上了，顺手清掉，
+                // 免得每次进来都做一次无意义的对账。
+                if (YktPickReconcile.hasSemanticDrift(aligned, levelCodes)) {
+                    reconciled = reconciled.copy(picks = emptyList())
+                    selection = reconciled
+                }
+                YktSelectionStore.write(context, accountKey, reconciled)
+                loadElectricity(reconciled, token)
+            }
+            // 消费汇总：同样是尽力而为，失败不影响余额与电费展示
+            launch { loadTurnover(monthOffset) }
+            // 逐笔流水：与汇总同一口径（尽力而为），失败只影响明细区块
+            launch { loadBills() }
         }
-        YktSelectionStore.write(context, accountKey, reconciled)
-        loadElectricity(reconciled, token)
-
-        // 消费汇总：同样是尽力而为，失败不影响余额与电费展示
-        loadTurnover(monthOffset)
-        // 逐笔流水：与汇总同一口径（尽力而为），失败只影响明细区块
-        loadBills()
     }
 
     LaunchedEffect(accountKey) {
@@ -545,11 +570,10 @@ fun YktScreen(
                     onToggleBills = { billsExpanded = !billsExpanded },
                     onShiftMonth = { delta ->
                         monthOffset += delta
-                        // 切月：先发汇总与明细两个请求，明细按新月份重置
-                        scope.launch {
-                            loadTurnover(monthOffset)
-                            loadBills()
-                        }
+                        // 切月只重拉汇总：账单接口没有日期参数（ConsumptionCard 注释同款
+                        // 口径），明细与月份无关 —— 此前切月还重拉明细，白打一个请求，
+                        // 还把用户展开的明细弹回第一页，与界面注释自相矛盾。
+                        scope.launch { loadTurnover(monthOffset) }
                     },
                     onLoadMore = { scope.launch { loadBills(append = true) } },
                     onOpenDetail = {
@@ -636,9 +660,11 @@ fun YktScreen(
                     balance = electricity,
                     onThresholdChanged = { threshold ->
                         electricity?.let {
-                            if (it.supportsAmountAlert) {
+                            // 阈值改动后立刻按新阈值重判一次（阈值本身就是该量纲的）。
+                            // 单位未知时不判，与后台巡检同一口径。
+                            if (YktAlertSettings.thresholdFor(context, it.unit) != null) {
                                 YktAlertNotifier.evaluateAndNotify(
-                                    context, accountKey, it.amount, threshold,
+                                    context, accountKey, it.amount, threshold, it.unit,
                                 )
                             }
                         }
@@ -1297,8 +1323,16 @@ private fun ConsumptionCard(
                 bills.isEmpty -> HintText("没有查询到流水记录。")
 
                 else -> {
-                    bills.records.forEach { record ->
+                    // 分块渲染：账单可达上千笔，而外层是 verticalScroll（不能换
+                    // LazyColumn，同轴嵌套会崩）。限制一次组合多少行，其余点「再显示」。
+                    // 与下面的「加载更多」是两件事：那个走网络翻页，这里只是渲染截断。
+                    val chunk = rememberChunkedListState(bills.records.size)
+                    bills.records.take(chunk.visibleCount).forEach { record ->
                         BillRow(record)
+                    }
+                    if (chunk.hasMore) {
+                        Spacer(Modifier.height(6.dp))
+                        ChunkedListFooter(state = chunk, noun = "笔")
                     }
                     if (bills.hasMore) {
                         Spacer(Modifier.height(4.dp))
@@ -1509,7 +1543,11 @@ private fun AlertSettingsCard(
     val context = LocalContext.current
     var enabled by remember { mutableStateOf(YktAlertSettings.isEnabled(context)) }
     var threshold by remember { mutableStateOf(YktAlertSettings.thresholdYuan(context)) }
+    // 度数型费项的独立阈值（与金额阈值分开存、分开调）
+    var kwhThreshold by remember { mutableStateOf(YktAlertSettings.thresholdKwh(context)) }
     var editing by remember { mutableStateOf(false) }
+    // 本次编辑的是金额阈值还是电量阈值（决定输入框标签与保存目标）
+    var editingForKwh by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
     // 电池优化豁免状态：**不缓存**，每次进入该屏都重查（用户可能刚在系统设置里改过）。
     // 用 remember 只是为了让本屏重组时不重复读取；离开再回来会重新求值。
@@ -1547,8 +1585,15 @@ private fun AlertSettingsCard(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
+                // 显示当前**费项量纲**对应的阈值：度数型费项看到的是"度"，
+                // 不是"元"。原先这里恒显示金额，度数型用户改了半天也改不到
+                // 真正生效的那个数。
+                val currentUnit = balance?.unit ?: ElectricityUnit.YUAN
                 Text(
-                    text = "¥${YktBalance.formatYuan(threshold)}",
+                    text = YktBalance.formatWithUnit(
+                        if (currentUnit == ElectricityUnit.KWH) kwhThreshold else threshold,
+                        currentUnit,
+                    ),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
@@ -1558,25 +1603,34 @@ private fun AlertSettingsCard(
                     icon = Icons.Outlined.Edit,
                     contentDescription = "修改阈值",
                     onClick = {
-                        draft = YktBalance.formatYuan(threshold)
+                        editingForKwh = currentUnit == ElectricityUnit.KWH
+                        draft = if (editingForKwh) {
+                            YktBalance.formatYuan(kwhThreshold)
+                        } else {
+                            YktBalance.formatYuan(threshold)
+                        }
                         editing = true
                     },
                     chip = false,
                 )
             }
             HintMarkdown(
-                "- 默认 20 元，可设范围 " +
+                "- 默认 20，可设范围：金额 " +
                     "${YktBalance.formatYuan(YktAlertSettings.MIN_THRESHOLD_YUAN)} ~ " +
-                    "${YktBalance.formatYuan(YktAlertSettings.MAX_THRESHOLD_YUAN)} 元。\n" +
-                    "- 余额低于阈值就会提醒：每日巡检一次，**不限提醒次数**。\n" +
-                    "- 仅对显示为金额的费项生效。"
+                    "${YktBalance.formatYuan(YktAlertSettings.MAX_THRESHOLD_YUAN)} 元；" +
+                    "电量 ${YktBalance.formatYuan(YktAlertSettings.MIN_THRESHOLD_KWH)} ~ " +
+                    "${YktBalance.formatYuan(YktAlertSettings.MAX_THRESHOLD_KWH)} 度。\n" +
+                    "- 低于阈值就会提醒：每日巡检一次，**不限提醒次数**。\n" +
+                    "- 金额与电量各自独立设置，按费项实际返回的单位自动选用。"
             )
-            // 当前费项是度数型时明确说明"为什么不会响"，避免用户以为功能坏了
+            // 度数型费项现在也有提醒了，明确说明用的是哪一套阈值，
+            // 免得用户以为刚才改的金额阈值对它生效。
             if (balance != null && balance.unit == ElectricityUnit.KWH) {
                 Spacer(Modifier.height(4.dp))
                 HintMarkdown(
-                    text = "当前电费项目返回的是**电量（度）**，无法按金额判断是否该提醒。",
-                    color = MaterialTheme.colorScheme.error,
+                    text = "当前电费项目返回的是**电量（度）**，按上面的电量阈值判断；" +
+                        "金额阈值对它不生效。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
@@ -1637,12 +1691,15 @@ private fun AlertSettingsCard(
     if (editing) {
         AlertDialog(
             onDismissRequest = { editing = false },
-            title = { Text("设置提醒阈值") },
+            title = { Text(if (editingForKwh) "设置电量提醒阈值" else "设置提醒阈值") },
             text = {
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
-                    label = { Text("低于该金额时提醒（元）") },
+                    // 标签跟着量纲走：度数型写"元"会让用户按元去理解这个数。
+                    label = {
+                        Text(if (editingForKwh) "低于该电量时提醒（度）" else "低于该金额时提醒（元）")
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 )
@@ -1651,7 +1708,12 @@ private fun AlertSettingsCard(
                 TextButton(onClick = {
                     val parsed = draft.trim().toDoubleOrNull()
                     if (parsed == null) {
-                        GlassToaster.show("请输入有效的金额")
+                        GlassToaster.show(if (editingForKwh) "请输入有效的电量" else "请输入有效的金额")
+                    } else if (editingForKwh) {
+                        kwhThreshold = YktAlertSettings.clampKwhThreshold(parsed)
+                        YktAlertSettings.setThresholdKwh(context, kwhThreshold)
+                        onThresholdChanged(kwhThreshold)
+                        editing = false
                     } else {
                         threshold = YktAlertSettings.clampThreshold(parsed)
                         YktAlertSettings.setThresholdYuan(context, threshold)

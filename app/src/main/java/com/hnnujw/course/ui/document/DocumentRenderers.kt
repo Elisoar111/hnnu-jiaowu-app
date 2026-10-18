@@ -504,26 +504,69 @@ private fun SheetTabs(names: List<String>, selected: Int, onSelect: (Int) -> Uni
 /** `PdfRenderer` 同一时刻只允许打开一页，全 App 串行化渲染即可。 */
 private val pdfRenderMutex = Mutex()
 
+/**
+ * 一个已经打开的 PDF。
+ *
+ * 把 descriptor 与 renderer 打包在一起，是因为它们的**寿命必须一致**：
+ * `PdfRenderer` 持有 descriptor，提前关掉 descriptor 会让渲染直接抛异常。
+ * 打包成一个值之后，"关闭"就只有一处（见 PdfViewerScreen 的 DisposableEffect）。
+ *
+ * [renderer] 为 null 表示打开失败（损坏 / 加密 / 权限），由界面走错误分支。
+ */
+private class OpenPdf(val descriptor: ParcelFileDescriptor?, val renderer: PdfRenderer?)
+
+/**
+ * 在 IO 线程打开 PDF。**必须在后台调用**：两次系统调用都会碰磁盘。
+ */
+private fun openPdfOnIo(file: File): OpenPdf {
+    val descriptor = try {
+        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+    } catch (_: Throwable) {
+        return OpenPdf(null, null)
+    }
+    val renderer = try {
+        PdfRenderer(descriptor)
+    } catch (_: Throwable) {
+        // 打不开就把 descriptor 一起关掉：否则每点一次损坏的 PDF 就漏一个 fd。
+        runCatching { descriptor.close() }
+        null
+    }
+    return OpenPdf(if (renderer == null) null else descriptor, renderer)
+}
+
 @Composable
 internal fun PdfViewerScreen(file: File) {
-    var renderer by remember(file) { mutableStateOf<PdfRenderer?>(null) }
     var pageCount by remember(file) { mutableIntStateOf(0) }
     var failed by remember(file) { mutableStateOf<String?>(null) }
     var zoom by remember(file) { mutableFloatStateOf(1f) }
     val horizontal = rememberScrollState()
 
-    DisposableEffect(file) {
-        val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-        val opened = try {
-            PdfRenderer(descriptor)
-        } catch (t: Throwable) {
-            runCatching { descriptor.close() }
-            null
-        }
-        renderer = opened
-        pageCount = opened?.pageCount ?: 0
-        if (opened == null) failed = "无法打开这个 PDF，文件可能已损坏或带有密码。"
-        onDispose { runCatching { opened?.close() } }
+    // 🔴 打开 PDF 必须在 IO 线程。
+    //
+    // 原实现用 `DisposableEffect` 做这件事，而 DisposableEffect 的块是**在主线程**
+    // 同步执行的：`ParcelFileDescriptor.open` 会碰磁盘，`PdfRenderer(descriptor)`
+    // 还会解析文档结构（几十 MB 的 PDF 要几百毫秒）。结果是"点开附件 → 界面卡住
+    // 到 PDF 出来为止"，首帧直接被吞掉。
+    //
+    // 改用 `produceState` 后：打开动作在 IO 上跑，界面先显示"正在读取 PDF…"，
+    // 打开完再切到内容。真正的页面渲染（renderPdfPage）本来就已经在 IO 上。
+    val opened by produceState<OpenPdf?>(initialValue = null, file) {
+        value = withContext(Dispatchers.IO) { openPdfOnIo(file) }
+    }
+
+    // 关掉上一条已打开的资源。单独一个 effect 只负责释放：
+    // 放进 produceState 的块里会因为"值还没被读走"而提前关掉。
+    DisposableEffect(opened) {
+        onDispose { runCatching { opened?.renderer?.close() } }
+    }
+
+    val renderer = opened?.renderer
+    if (opened != null && renderer == null) {
+        // 打开返回了但文档无效（损坏 / 加密）。与原实现同一套文案。
+        LaunchedEffect(opened) { failed = "无法打开这个 PDF，文件可能已损坏或带有密码。" }
+    }
+    LaunchedEffect(opened) {
+        if (renderer != null) pageCount = runCatching { renderer.pageCount }.getOrDefault(0)
     }
 
     if (failed != null) {

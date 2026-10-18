@@ -63,6 +63,20 @@ object AcademicGatewayFactory {
     fun accountKey(school: SchoolConfig, username: String): String =
         (school.id + "::" + username.trim()).replace(Regex("[^A-Za-z0-9_.-]"), "_")
 
+    /**
+     * 读当前内存会话**正在用**的 Cookie 头（回写成持久化用，见 AcademicCookieSync）。
+     *
+     * 取不到会话（例如进程刚起、还没 importCookie）时返回空串，**不会顺手新建一个**：
+     * `session(...)` 本身会建会话，在"只是想读一下"的路径上调用它等于制造一个空会话，
+     * 后续请求会拿它发出去、全部 401。
+     */
+    fun cookieHeaderFor(school: SchoolConfig, accountStorageKey: String): String {
+        val key = AcademicSessionKey(school.id, accountStorageKey)
+        val session = sessions.snapshot(key) ?: return ""
+        if (session.retired || session.baseUrl != school.getFullBasePath()) return ""
+        return session.cookieHeader()
+    }
+
     /** 淮南师范学院登录页：正方直登表单 /jwglxt/xtgl/login_slogin.html。 */
     fun loginUrl(school: SchoolConfig): String =
         school.fullBasePath.trimEnd('/') + "/xtgl/login_slogin.html"

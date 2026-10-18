@@ -1,0 +1,76 @@
+# 校园助理 — 手写 Baseline Profile（组件层）
+#
+# ## 先说清楚这份文件能做到什么、做不到什么
+#
+# 标准做法是用 `:baselineprofile` 模块跑仪器测试采集真实轨迹。采集需要一台允许
+# `am profile` 的设备，而当前环境只有 `ro.build.type=user` 的 MuMu：
+# 实测 `am profile start` 被拒、`/data/misc/profiles/cur/0/<pkg>/` 无读权限。
+# 采不出轨迹，就用不了那条路。
+#
+# ### 实测得出的关键约束
+#
+# 本工程 `minifyEnabled true`（R8 混淆 + 优化）。这带来一个决定性限制：
+#
+# **手写规则里的类名/方法名必须能在 R8 之后仍然存在，否则规则会被静默丢弃。**
+#
+# 实测三种情况：
+#
+#  1. `com.hnnujw.course.manager.AccountKeys` → mapping 里是
+#     `R8$$REMOVED$$CLASS$$628`，**整个类被内联删除了**，规则无效；
+#  2. `com.hnnujw.course.utils.CrashGuard` → 被重命名为 `ab.n`，
+#     写原名匹配不上；
+#  3. `com.hnnujw.course.MainActivity` / `CourseApplication` → **保留原名**
+#     （Manifest 注册的组件不能被重命名），写原名有效 —— 实测加上
+#     `CourseApplication;->onCreate()V` 后，binary profile 从 5,917 增到 5,922 字节。
+#
+# 所以这份文件**只覆盖 Manifest 注册的组件**。这不是偷懒，是唯一有效的范围。
+#
+# ### 增量有多大（别高估）
+#
+# 现有 APK 里已有 11,952 条规则，其中 16 条属于本应用（AGP 从组件信息自动生成）。
+# 本文件补的是这 14 个组件的其余生命周期方法 —— 数量级在几十条。
+# 相对整个 profile 是**很小的增量**，主要价值在"冷启动时 Activity 的
+# onCreate/onResume 少走解释执行"。
+#
+# 真正的性能热点（Compose 组合、Repository、网络层）**手写不进去**，
+# 只能靠采集。换到 userdebug 设备后跑
+# `./gradlew :baselineprofile:connectedBenchmarkAndroidTest`
+# 产出的结果会覆盖本文件，届时直接替换即可。
+#
+# ## 格式
+#
+# `HSPL<类>;-><方法>(<参数>)<返回>`：H=hot S=startup P=post-startup L=linux
+# ⚠️ 必须写完整签名。实测 `HSPL<class>;->*` 会让 AGP 的通配符展开器抛
+# `StringIndexOutOfBoundsException`（AGP 8.13.2 的已知缺陷）。
+
+# ── 应用入口：冷启动第一行 ────────────────────────────────────────────
+HSPLcom/hnnujw/course/CourseApplication;->onCreate()V
+
+# ── 主界面：每次打开应用都会走 ────────────────────────────────────────
+# ⚠️ 只列**实际覆写**的方法。onPause/onStop/onDestroy 在这些 Activity 里没有覆写，
+# 写上去会被 AGP 静默丢弃（实测 22 条里 6 条因此无效，已删）。
+HSPLcom/hnnujw/course/MainActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/hnnujw/course/MainActivity;->onStart()V
+HSPLcom/hnnujw/course/MainActivity;->onResume()V
+
+# ── 登录页：未登录用户必经 ────────────────────────────────────────────
+HSPLcom/hnnujw/course/LoginActivity;->onCreate(Landroid/os/Bundle;)V
+
+# ── 常用二级页：从首页点进去的概率高 ──────────────────────────────────
+HSPLcom/hnnujw/course/ReviewActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/hnnujw/course/YktActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/hnnujw/course/MessageCenterActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/hnnujw/course/KaojiActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/hnnujw/course/EmptyRoomActivity;->onCreate(Landroid/os/Bundle;)V
+
+# ── 文档与手册：低频，但冷启动成本集中在这里（读 asset / 解析） ────────
+HSPLcom/hnnujw/course/ManualActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/hnnujw/course/AnnouncementActivity;->onCreate(Landroid/os/Bundle;)V
+
+# ── WebView 承载页：首次加载慢，值得预热初始化路径 ────────────────────
+HSPLcom/hnnujw/course/AcademicWebViewActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/hnnujw/course/YktLoginActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/hnnujw/course/YktWebActivity;->onCreate(Landroid/os/Bundle;)V
+
+# ── 图片裁剪：相册/头像流程，纯本地计算 ──────────────────────────────
+HSPLcom/hnnujw/course/ImageCropActivity;->onCreate(Landroid/os/Bundle;)V

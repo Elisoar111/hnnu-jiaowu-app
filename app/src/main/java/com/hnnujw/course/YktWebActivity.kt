@@ -45,6 +45,7 @@ import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.SystemIconButton
 import com.hnnujw.course.ui.theme.CourseSelectorTheme
 import com.hnnujw.course.ykt.YktClient
+import com.hnnujw.course.utils.WebViewDataDir
 
 /**
  * 一卡通**官方页面**的只读查看器（WebView）。
@@ -78,7 +79,6 @@ class YktWebActivity : ComponentActivity() {
         /** 页面标题（可选）。 */
         const val EXTRA_TITLE = "ykt_web_title"
 
-        private var suffixConfigured = false
 
         /** 打开官方页面（便捷入口）。 */
         fun intent(context: Context, url: String, title: String = "一卡通"): Intent =
@@ -135,12 +135,9 @@ class YktWebActivity : ComponentActivity() {
             return
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && !suffixConfigured) {
-            // 与一卡通登录页**共用**存储目录：这样令牌/sessionStorage 可见，
-            // 打开账单页时免去二次认证。
-            WebView.setDataDirectorySuffix("ykt")
-            suffixConfigured = true
-        }
+        // 与一卡通登录页共用同一后缀（WebViewDataDir 进程内只设一次）：
+        // 令牌/sessionStorage 互相可见，打开账单页时免去二次认证。
+        WebViewDataDir.ensureConfigured("ykt")
 
         val browser = createWebView()
         webView = browser
@@ -208,7 +205,9 @@ class YktWebActivity : ComponentActivity() {
         settings.javaScriptCanOpenWindowsAutomatically = true
         settings.allowFileAccess = false
         settings.allowContentAccess = false
-        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                // 混合内容策略跟着主文档 scheme 走（见 WebViewMixedContent 的说明）：
+        // 一卡通登录页是凭据输入页，https 时必须禁止 http 子资源。
+        com.hnnujw.course.web.WebViewMixedContent.applyMode(settings, startUrl)
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(instance, true)

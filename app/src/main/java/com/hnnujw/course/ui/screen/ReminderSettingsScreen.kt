@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.DoNotDisturb
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.School
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -89,6 +90,10 @@ fun ReminderSettingsScreen(
     var showPermissionGuide by remember { mutableStateOf(false) }
     /** 批量开关进行中：防重复点击。 */
     var busy by remember { mutableStateOf(false) }
+    // 错题复习提醒：独立于课程提醒的另一条通知，默认关。
+    var reviewReminderEnabled by remember {
+        mutableStateOf(com.hnnujw.course.review.ReviewReminderScheduler.isEnabled(context))
+    }
 
     // 权限状态不是可观察的：从系统设置页回来、或刚弹完运行时授权框，都要重新读一遍。
     // 少这一下的话，用户明明授了权，页面还写着"未授权"。
@@ -244,6 +249,41 @@ fun ReminderSettingsScreen(
                     },
                     showDivider = false,
                     onClick = { showAutoModePicker = true }
+                )
+            }
+
+            InsetGroupedSection(
+                header = "错题复习",
+                footer = "每天 20:00 检查一次错题本，有到期的就提醒你。默认关闭 —— " +
+                    "这是额外的一条打扰，需要你主动打开。"
+            ) {
+                InsetGroupedRow(
+                    icon = Icons.Outlined.School,
+                    iconTint = Color(0xFF30D158),
+                    title = "复习提醒",
+                    subtitle = if (reviewReminderEnabled) {
+                        "已开启 · 每天 20:00 提醒"
+                    } else {
+                        "关闭时不发任何复习通知"
+                    },
+                    showDivider = false,
+                    trailing = {
+                        LiquidSwitch(
+                            checked = reviewReminderEnabled,
+                            onCheckedChange = { target ->
+                                if (target && !permissions.available) {
+                                    // 与课程提醒同一口径：没权限开了也是空承诺，
+                                    // 先把用户引到权限设置，而不是让他以为已经生效。
+                                    showPermissionGuide = true
+                                } else {
+                                    reviewReminderEnabled = target
+                                    com.hnnujw.course.review.ReviewReminderScheduler
+                                        .setEnabled(context, target)
+                                    GlassToaster.show(if (target) "已开启复习提醒" else "已关闭复习提醒")
+                                }
+                            }
+                        )
+                    }
                 )
             }
 

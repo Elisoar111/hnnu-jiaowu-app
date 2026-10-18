@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -133,6 +134,9 @@ fun KaojiRegistrationScreen(
             nowMillis = System.currentTimeMillis(),
         )
 
+    /** 类别切换竞态的守卫：每次 load 自增；旧请求返回时序号已落后 → 结果整包丢弃。 */
+    var loadSeq by remember { mutableIntStateOf(0) }
+
     /**
      * 读取指定类别。[refreshCategories] 为 true 时连教务菜单一起重取
      * （菜单不是常量：学校开了新类别、或换了账号权限都可能变）。
@@ -145,10 +149,14 @@ fun KaojiRegistrationScreen(
         }
         loading = true
         error = ""
+        val seq = ++loadSeq
         scope.launch {
             val transport = AcademicGatewayFactory.transportFor(school, accountKey)
             if (!categoriesLoaded || refreshCategories) {
                 val discovered = KaojiClient.loadCategories(transport)
+                // 类别请求期间用户又切了档 → 本请求已过时，整包丢弃
+                //（否则旧类别的菜单会把 selectedXmlbfl 拽回去）。
+                if (seq != loadSeq) return@launch
                 categories = discovered
                 categoriesLoaded = true
                 // 菜单里没有当前类别（如权限收回）时退回第一条，别对着空气发请求。
@@ -158,17 +166,22 @@ fun KaojiRegistrationScreen(
             }
             when (val result = KaojiClient.loadPage(transport, school, selectedXmlbfl)) {
                 is KaojiClient.LoadResult.Success -> {
+                    if (seq != loadSeq) return@launch
                     page = result.page
                     needLogin = false
                 }
                 is KaojiClient.LoadResult.NeedLogin -> {
+                    if (seq != loadSeq) return@launch
                     needLogin = true
                     error = result.message
                 }
                 is KaojiClient.LoadResult.Failure -> {
+                    if (seq != loadSeq) return@launch
                     error = result.message
                 }
             }
+            // 页面请求期间用户又切了档：丢结果，也不动 loading（新一轮请求正在跑）。
+            if (seq != loadSeq) return@launch
             loading = false
         }
     }
@@ -366,8 +379,10 @@ fun KaojiRegistrationScreen(
     // ── 报名确认弹窗（含报名说明与联系电话）───────────────────────────────
     val pendingProject = confirmProject
     if (pendingProject != null) {
+        // 提交中锁定：报名要缴费、属准不可逆操作 —— 此前提交中还能取消/点外部关掉
+        // 弹窗，界面却没有任何"正在提交"的反馈。对齐挂失弹窗的口径。
         SystemDialog(
-            onDismissRequest = { confirmProject = null },
+            onDismissRequest = { if (submittingId == null) confirmProject = null },
             title = {
                 Text(
                     text = "确认报名",
@@ -379,13 +394,15 @@ fun KaojiRegistrationScreen(
             dismissButton = {
                 SystemSecondaryButton(
                     text = "取消",
-                    onClick = { confirmProject = null },
+                    onClick = { if (submittingId == null) confirmProject = null },
+                    enabled = submittingId == null,
                     modifier = Modifier.fillMaxWidth()
                 )
             },
             confirmButton = {
                 SystemPrimaryButton(
-                    text = "提交报名",
+                    text = if (submittingId != null) "提交中…" else "提交报名",
+                    enabled = submittingId == null,
                     onClick = { submit(pendingProject) },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -430,6 +447,9 @@ fun KaojiRegistrationScreen(
             confirmText = "确认退报",
             onConfirm = { withdraw(pendingWithdraw) },
             onDismiss = { withdrawTarget = null },
+            // 退报是一发不可撤销的网络请求：提交中锁住弹窗，否则用户连点两次
+            // 就是两个退报请求（第二个会报"已退报"这种让人困惑的错误）。
+            busy = submittingId != null
         )
     }
 }

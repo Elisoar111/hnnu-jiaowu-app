@@ -24,5 +24,8 @@ dependencyResolutionManagement {
 }
 
 include ':app'
+// Baseline Profile 生成模块：只在需要重新生成 profile 时才构建，
+// 不参与 assembleRelease，也不进发布 APK。
+include ':baselineprofile'
 rootProject.name = "CourseSelector"
 

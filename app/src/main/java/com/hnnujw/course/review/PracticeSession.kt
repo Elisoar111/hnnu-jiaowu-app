@@ -63,12 +63,44 @@ class PracticeSession(
      */
     private val judged = LinkedHashSet<String>()
 
+    /**
+     * **本次会话里已经落过库的题**（`bankId::qid`）。
+     *
+     * 为什么需要它：作答是"判分即落库"的（防止进程被杀丢记录），而「再想一下」
+     * 只撤回内存里的判定、**不会回滚已经写进 `records` / `wrong_book` 的那一条**。
+     * 于是「确认答案 → 再想一下 → 再确认」会让同一道题被记两次：
+     *  - `records.correct_count` / `wrong_count` 虚高，正确率失真；
+     *  - `wrong_book.streak` 被单次会话刷满 —— 点三次「再想一下」就能把一道题
+     *    刷成「已掌握」，而用户实际只答对了一次。
+     *
+     * 落库前先问一次 [markRecorded]：返回 true 才写库，false 表示这一轮已经记过。
+     * 该集合随 [exportState] 一起存进 saved state，进程被杀后重建也不会重记。
+     */
+    private val recorded = LinkedHashSet<String>()
+
+    /**
+     * 标记"这道题本轮要落库"，返回**是否应当真的写库**。
+     *
+     * 返回 false = 本次会话已经记过这道题，调用方必须跳过落库（否则就是重复计数）。
+     * 判定与 [judged] 无关：判分可以撤回重来，落库不能。
+     */
+    fun markRecorded(q: ReviewQuestion): Boolean = recorded.add(key(q))
+
     val total: Int get() = questions.size
 
     val answeredCount: Int get() = answers.size
     val judgedCount: Int get() = judged.size
     val isEmpty: Boolean get() = questions.isEmpty()
     val isFinished: Boolean get() = questions.isNotEmpty() && judgedCount == questions.size
+
+    /**
+     * 已判分且答对的题数。
+     *
+     * 增量维护而不是每次遍历全部题目：正确率显示在练习页副标题上，每翻一页、
+     * 每答一题都会读一次，而 `isCorrect` 要跑一遍 `judgeAnswer`（大小写归一 +
+     * 排序 + 拼接）。320 题的题库下，每次重组重算一遍是白烧的。
+     */
+    private var correctCount: Int = 0
 
     /**
      * 本次会话是否应当把作答落库（records / 错题本 / 每日统计）。
@@ -83,11 +115,10 @@ class PracticeSession(
     private fun same(a: ReviewQuestion, b: ReviewQuestion) =
         a.bankId == b.bankId && a.id == b.id
 
-    // 🔴 复合键必须是 bankId::qid 两个纯标识符。历史版本写成 "$q.id"：$q 把整题
-    // toString()（题干+选项+解析全文）插进了 key，.id 只是字面文本 —— 作答快照
-    // 因此膨胀几十倍，大题库 rememberSaveable 有超 Bundle 上限被系统杀掉的风险。
-    // q.id 必须用 ${} 包住，别依赖 $ 的"只吃一段标识符"规则。
-    private fun key(q: ReviewQuestion) = "${q.bankId}::${q.id}"
+    // 🔴 复合键统一走 ReviewQuestion.compositeKey，别再各自拼字符串 ——
+    // 拼法不一致时两边永远匹配不上，而且不会报错，只表现为"判分状态丢了"。
+    // 历史版本还写成过 "$q.id"（把整题 toString() 插进 key），作答快照因此膨胀几十倍。
+    private fun key(q: ReviewQuestion) = q.compositeKey
 
     fun answerOf(q: ReviewQuestion): String = answers[key(q)].orEmpty()
 
@@ -127,12 +158,16 @@ class PracticeSession(
         if (k in judged) return isCorrect(q)
         if (answers[k].isNullOrBlank()) return false
         judged.add(k)
-        return isCorrect(q)
+        val correct = isCorrect(q)
+        if (correct) correctCount++
+        return correct
     }
 
     /** 撤回判定，让这题能重新作答（用户点"再想一下"）。 */
     fun unjudge(q: ReviewQuestion) {
-        judged.remove(key(q))
+        val k = key(q)
+        // 只有真的从 judged 里移除了才回退计数，否则重复调用会把 correctCount 减穿。
+        if (judged.remove(k) && isCorrect(q)) correctCount--
     }
 
     /**
@@ -180,6 +215,7 @@ class PracticeSession(
             if (k in judged) continue
             if (answers[k].isNullOrBlank()) continue
             judged.add(k)
+            if (isCorrect(q)) correctCount++
             newly += q
         }
         return newly
@@ -188,6 +224,8 @@ class PracticeSession(
     fun clear() {
         answers.clear()
         judged.clear()
+        recorded.clear()
+        correctCount = 0
     }
 
     /**
@@ -206,7 +244,10 @@ class PracticeSession(
         answers.forEach { (k, v) -> answerArr.put(JSONObject().put(KEY, k).put(ANS, v)) }
         val judgedArr = JSONArray()
         judged.forEach { judgedArr.put(it) }
-        return JSONObject().put(ANSWERS, answerArr).put(JUDGED, judgedArr).toString()
+        val recordedArr = JSONArray()
+        recorded.forEach { recordedArr.put(it) }
+        return JSONObject().put(ANSWERS, answerArr).put(JUDGED, judgedArr)
+            .put(RECORDED, recordedArr).toString()
     }
 
     /**
@@ -220,6 +261,7 @@ class PracticeSession(
         val root = runCatching { JSONObject(raw) }.getOrNull() ?: return
         answers.clear()
         judged.clear()
+        recorded.clear()
         root.optJSONArray(ANSWERS)?.let { arr ->
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
@@ -234,13 +276,24 @@ class PracticeSession(
                 if (k.isNotEmpty()) judged.add(k)
             }
         }
+        // 老快照里没有 recorded 字段：此时按"已判分的题都记过"回填。
+        // 这是保守估计 —— 宁可少记一条，也不要因为一次进程重建把整轮重记一遍。
+        val recordedArr = root.optJSONArray(RECORDED)
+        if (recordedArr != null) {
+            for (i in 0 until recordedArr.length()) {
+                val k = recordedArr.optString(i)
+                if (k.isNotEmpty()) recorded.add(k)
+            }
+        } else {
+            recorded.addAll(judged)
+        }
+        // 计数缓存必须跟着快照重算，否则恢复后正确率会从 0 开始。
+        correctCount = questions.count { key(it) in judged && isCorrect(it) }
     }
 
     /** 正确率：按已判分的题算。没判分时返回 0。 */
     val accuracy: Float
-        get() = if (judgedCount == 0) 0f else {
-            questions.count { key(it) in judged && isCorrect(it) }.toFloat() / judgedCount
-        }
+        get() = if (judgedCount == 0) 0f else correctCount.toFloat() / judgedCount
 
     /**
      * 本轮的汇总数字。
@@ -256,8 +309,8 @@ class PracticeSession(
     fun result(): PracticeResult = PracticeResult(
         total = total,
         answered = answeredCount,
-        correct = questions.count { key(it) in judged && isCorrect(it) },
-        wrong = questions.count { key(it) in judged && !isCorrect(it) },
+        correct = correctCount,
+        wrong = judgedCount - correctCount,
         unjudged = total - judgedCount
     )
 
@@ -281,6 +334,7 @@ class PracticeSession(
     private companion object {
         const val ANSWERS = "answers"
         const val JUDGED = "judged"
+        const val RECORDED = "recorded"
         const val KEY = "k"
         const val ANS = "a"
     }

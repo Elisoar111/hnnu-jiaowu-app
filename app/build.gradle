@@ -78,7 +78,28 @@ android {
         // 手动下载新版安装一次；这一步靠应用内公告 + 更新弹窗引导，别改回去。
         applicationId "com.hnnujw.course"
         minSdk 24
-        targetSdk 34
+        /**
+         * targetSdk 34 → 35（Android 15）。
+         *
+         * 升级前逐项核查过 Android 15 的强制变更，本项目的适配情况：
+         *
+         *  1. **edge-to-edge 强制**：已经是 edge-to-edge 了 —— 所有 15 个 Activity
+         *     都经过 `CourseSelectorTheme`，那里统一调了
+         *     `WindowCompat.setDecorFitsSystemWindows(window, false)` 并把两个系统栏
+         *     设成透明；页面侧有 46 处 insets 处理（statusBarsPadding 等）。
+         *     所以这条变更对本项目**没有实际影响**，不会出现内容被系统栏盖住。
+         *  2. **前台服务类型强制**：本应用**没有**任何前台服务（`startForeground` 零命中），
+         *     不涉及。
+         *  3. **16 KB page size**：APK 里唯一的 native so 是
+         *     `libandroidx.graphics.path.so`，实测 PT_LOAD 对齐已经是 16384，满足要求。
+         *  4. **`MIXED_CONTENT_NEVER_ALLOW` 收紧**：已经在 2.3 那批里按站点 scheme
+         *     分别处理（见 `web/WebViewMixedContent`），不依赖 targetSdk 的默认值。
+         *  5. **`SYSTEM_ALERT_WINDOW` 收紧**：本项目不用悬浮窗权限，不涉及。
+         *
+         * 保留 34 到 35 的跳跃而不是直接跳 36：Android 16 还有"自适应布局强制"
+         * （大屏忽略屏幕方向锁）需要单独验证，分两次升便于定位问题。
+         */
+        targetSdk 35
         versionCode code
         versionName name
         buildConfigField "boolean", "UI_PREVIEW", "false"
@@ -142,7 +163,14 @@ android {
     buildTypes {
         release {
             minifyEnabled true
-            shrinkResources false
+            // 资源收缩：R8 已经把代码里的无用部分裁掉，但 res/ 下的图片/布局
+            // 不会自动跟着走。开启后会把"没有任何代码引用"的资源一并移除。
+            //
+            // 前提是 minifyEnabled 也为 true（否则 AGP 会拒绝），这里已满足。
+            // 安全性已核查：全仓没有 `getResources().getIdentifier(...)` 这类
+            // 按名字动态取资源的写法 —— 那才是资源收缩唯一的真实风险
+            // （名字是运行时拼的，静态分析看不到引用，会把还在用的资源删掉）。
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             if (hasReleaseSigning || hasFallbackSigning) {
                 signingConfig signingConfigs.release
@@ -205,9 +233,12 @@ android {
         compose true
     }
 
+
     testOptions {
         // CourseParser 等被测类内部调用 android.util.Log，JVM 单测返回默认值而非抛异常
         unitTests.returnDefaultValues = true
+        // Robolectric 跑 SQLite 需要真实资源与 manifest（主题、数据库路径等）。
+        unitTests.includeAndroidResources = true
     }
 }
 
@@ -312,4 +343,69 @@ dependencies {
     testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
     // org.json 在 JVM 单测中来自 android.jar 桩(默认抛异常), 补真实实现供单元测试使用
     testImplementation 'org.json:json:20231013'
+
+    // Robolectric：让 SQLite 层（ReviewDatabase）能在 JVM 上跑真实建表/查询/迁移。
+    // 只作测试依赖，不进发布包。版本钉在 4.14.x —— 它支持到 SDK 35，够本项目用
+    // （compileSdk 37 只是编译目标，测试用 @Config(sdk = [34]) 跑）。
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+    testImplementation 'androidx.test:core:1.6.1'
+}
+
+/**
+ * 覆盖率统计（JaCoCo）。
+ *
+ * 为什么值得配：项目有 1300+ 个单测，但"哪些地方没测"一直只能靠人工比对文件数
+ * 来猜。覆盖率报告让缺口自己浮出来 —— 尤其是 `network/` 这种"要改它之前
+ * 必须先有测试"的模块，先看清现状再动手。
+ *
+ * 用法：`./gradlew :app:jacocoTestReport`
+ * 报告：`app/build/reports/jacoco/jacocoTestReport/html/index.html`
+ *
+ * 只统计 JVM 单测（`testDebugUnitTest`）。仪器测试要真机，合并覆盖率
+ * 的成本（设备依赖 + 报告合并）远高于收益，这次不做。
+ *
+ * ⚠️ 覆盖率高不等于测得对：这里只是"哪些代码完全没被执行过"的地图，
+ * 断言质量仍然只能靠人看测试代码。
+ */
+apply plugin: 'jacoco'
+
+jacoco {
+    // 与 AGP 8.13 配套的版本；不用 latest（报告格式与 Gradle 版本耦合）。
+    toolVersion = '0.8.12'
+}
+
+tasks.register('jacocoTestReport', JacocoReport) {
+    dependsOn 'testDebugUnitTest'
+    group = 'verification'
+    description = '生成 JVM 单测覆盖率报告（HTML + XML）'
+
+    // 只统计生产代码。排除 R 与 BuildConfig —— 它们是生成的，算进来会稀释真实覆盖率。
+    def excludes = [
+        '**/R.class', '**/R$*.class', '**/BuildConfig.*',
+        '**/Manifest*.*', '**/*Test*.*',
+        // Compose 的编译器插件会生成大量合成类，统计它们没有意义。
+        '**/ui/**/*Kt*Composable*.*',
+    ]
+
+    // 兼容 AGP 8.x 的产物路径（新版把 debug 类放在 intermediates/javac 下，
+    // 旧版在 tmp/kotlin-classes）。两处都登记，缺的那个 Gradle 会自己忽略。
+    classDirectories.setFrom(
+        files(
+            fileTree("${buildDir}/tmp/kotlin-classes/debug") { exclude excludes },
+            fileTree("${buildDir}/intermediates/javac/debug/classes") { exclude excludes }
+        )
+    )
+    sourceDirectories.setFrom(files("${projectDir}/src/main/java"))
+    // 多个测试任务可能都产出 exec，跑多少收多少。
+    executionData.setFrom(
+        fileTree(buildDir) {
+            include '**/*.exec', '**/jacoco/testDebugUnitTest.exec'
+        }
+    )
+
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+        csv.required.set(false)
+    }
 }

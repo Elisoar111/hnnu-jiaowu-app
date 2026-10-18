@@ -170,7 +170,18 @@ public class UserManager {
             editor.putBoolean(KEY_LOGGED_IN, isLoggedIn);
             editor.putString(KEY_STUDENT_NAME, studentName != null ? studentName : "");
             editor.putString(KEY_STUDENT_ID, studentId != null ? studentId : "");
-            editor.putString(KEY_COOKIE, savedCookie != null ? savedCookie : "");
+            // 🔴 Cookie 不再明文落盘：它是等同于登录态的凭据（拿着 JSESSIONID 就能
+            // 读学号、成绩、课表、余额，不需要密码）。改存进 CredentialStore 的
+            // AES/GCM 加密文件，这里只保留写入时机的语义。
+            //
+            // 明文键必须**主动删掉**：老版本已经写过，不删就等于加密形同虚设
+            // （攻击者照样能从旧行里读到）。
+            CredentialStore.INSTANCE.saveSessionCookie(
+                    appContext,
+                    cookieStorageKey(),
+                    savedCookie != null ? savedCookie : ""
+            );
+            editor.remove(KEY_COOKIE);
             editor.putLong(KEY_COOKIE_SAVE_TIME, System.currentTimeMillis());
             if (currentAccountKey != null && !currentAccountKey.isEmpty()) {
                 editor.putString(KEY_CURRENT_ACCOUNT_KEY, currentAccountKey);
@@ -203,7 +214,6 @@ public class UserManager {
             isLoggedIn = prefs.getBoolean(KEY_LOGGED_IN, false);
             studentName = prefs.getString(KEY_STUDENT_NAME, "");
             studentId = prefs.getString(KEY_STUDENT_ID, "");
-            savedCookie = prefs.getString(KEY_COOKIE, "");
 
             String schoolId = prefs.getString(KEY_CURRENT_SCHOOL_ID, "");
             Log.d(TAG, "正在恢复学校, 保存的 schoolId=" + schoolId);
@@ -227,8 +237,24 @@ public class UserManager {
             if (!currentAccountKey.isEmpty()) {
                 AccountRecord record = findAccountRecord(currentAccountKey);
                 if (record != null) {
+                    // applyAccountRecord 内部会把 Cookie 从加密存储读回来（见那里的说明）
                     applyAccountRecord(record, false);
                 }
+            }
+
+            // 🔴 Cookie 迁移必须在**账号 key 确定之后**做：加密存储按账号分键，
+            // 早一步迁移会把 Cookie 写到错误的键下，等于本次启动读不到、下次也读不到。
+            // 老版本的明文 `saved_cookie` 在这里搬一次家并删掉明文。
+            String legacyCookie = prefs.getString(KEY_COOKIE, "");
+            if (legacyCookie != null && !legacyCookie.isEmpty()) {
+                CredentialStore.INSTANCE.saveSessionCookie(appContext, cookieStorageKey(), legacyCookie);
+                if (savedCookie == null || savedCookie.isEmpty()) savedCookie = legacyCookie;
+                prefs.edit().remove(KEY_COOKIE).apply();
+                Log.d(TAG, "已把明文 Cookie 迁移到加密存储");
+            } else if (savedCookie.isEmpty()) {
+                // 没有明文残留：从加密存储读（切号/重启后的正常路径）
+                String stored = CredentialStore.INSTANCE.loadSessionCookie(appContext, cookieStorageKey());
+                if (stored != null && !stored.isEmpty()) savedCookie = stored;
             }
 
             Log.d(TAG, "登录状态已加载: isLoggedIn=" + isLoggedIn + ", student=" + studentName + ", school="
@@ -374,6 +400,9 @@ public class UserManager {
         }
 
         deletePassword(accountKey);
+        // 加密存储里的 Cookie 也要删：只清 prefs 与内存的话，这张票还留在
+        // secure_credentials 文件里，账号被"删除"了却仍可被取出使用。
+        if (appContext != null) CredentialStore.INSTANCE.removeSessionCookie(appContext, storageKey);
 
         try {
             CourseApiClient.getInstance().clearCookies(storageKey);
@@ -428,7 +457,9 @@ public class UserManager {
             record.studentId = studentId != null ? studentId : "";
             record.username = prefs.getString(KEY_USERNAME, "");
             record.loginMode = prefs.getString(KEY_LOGIN_MODE, "cookie");
-            record.cookie = savedCookie;
+            // Cookie 不放进 record：它已经在 CredentialStore 里加密存着了。
+            // 放进内存对象再序列化出去，等于把加密又绕开了（见 accountToJson）。
+            record.cookie = "";
             record.cookieSaveTime = prefs.getLong(KEY_COOKIE_SAVE_TIME, System.currentTimeMillis());
             record.key = buildAccountKey(currentSchool, record.username, record.studentId, record.studentName);
             if (record.key.isEmpty()) return;
@@ -443,19 +474,20 @@ public class UserManager {
         }
     }
 
+    /**
+     * 构造账号键。规则本身在 [AccountKeys] 里（纯函数、可单测）。
+     *
+     * 这里只做转发：`UserManager` 是个 900 行的单例，规则留在它内部就只能靠反射测，
+     * 而这两条规则恰恰是"切号看到上一个账号数据"这类 bug 的根源。
+     */
     private String buildAccountKey(SchoolConfig school, String username, String studentId, String studentName) {
-        if (school == null || school.id == null || school.id.isEmpty()) return "";
-        String identity = firstNotBlank(username, studentId, studentName);
-        if (identity.isEmpty()) return "";
-        return school.id + "::" + identity.trim();
+        if (school == null) return "";
+        return AccountKeys.INSTANCE.build(school.id, username, studentId, studentName);
     }
 
+    /** 取第一个非空白项。转发到 [AccountKeys]（纯函数，可单测）。 */
     private String firstNotBlank(String... values) {
-        if (values == null) return "";
-        for (String value : values) {
-            if (value != null && !value.trim().isEmpty()) return value.trim();
-        }
-        return "";
+        return AccountKeys.INSTANCE.firstNotBlank(values);
     }
 
     private JSONObject accountToJson(AccountRecord record) throws Exception {
@@ -467,7 +499,11 @@ public class UserManager {
         obj.put("studentId", record.studentId != null ? record.studentId : "");
         obj.put("username", record.username != null ? record.username : "");
         obj.put("loginMode", record.loginMode != null ? record.loginMode : "cookie");
-        obj.put("cookie", record.cookie != null ? record.cookie : "");
+        // 🔴 账号列表里**不再写明文 Cookie**：这张 JSON 就躺在 course_selector_prefs 里，
+        // 每个账号一份 Cookie，等于把全部账号的登录票明文摆在磁盘上。
+        // Cookie 改由 CredentialStore 按账号加密存；这里只留一个空字段占位，
+        // 老版本读回来的明文由 accountFromJson 负责迁移到加密存储并丢弃。
+        obj.put("cookie", "");
         obj.put("cookieSaveTime", record.cookieSaveTime);
         return obj;
     }
@@ -481,14 +517,39 @@ public class UserManager {
         record.studentId = obj.optString("studentId", "");
         record.username = obj.optString("username", "");
         record.loginMode = obj.optString("loginMode", "cookie");
-        record.cookie = obj.optString("cookie", "");
         record.cookieSaveTime = obj.optLong("cookieSaveTime", 0L);
         if (record.key.isEmpty()) {
             SchoolConfig school = getSchoolById(record.schoolId);
             record.key = buildAccountKey(school, record.username, record.studentId, record.studentName);
         }
+        // 老版本把 Cookie 明文存在这张 JSON 里：读到就搬进加密存储，**内存里也不留明文**。
+        // 迁移后 record.cookie 留空 —— 需要 Cookie 的地方一律走 CredentialStore。
+        String legacyPlain = obj.optString("cookie", "");
+        String storageKey = toStorageKey(record.key);
+        if (legacyPlain != null && !legacyPlain.isEmpty() && appContext != null && !storageKey.isEmpty()) {
+            CredentialStore.INSTANCE.saveSessionCookie(appContext, storageKey, legacyPlain);
+            Log.d(TAG, "已把账号列表里的明文 Cookie 迁移到加密存储: " + storageKey);
+        }
+        record.cookie = "";
         return record;
     }
+
+    /**
+     * 账号列表的解析缓存。
+     *
+     * 为什么需要：[loadAccountRecords] 在切号路径上被反复调用（列表、查找、删除、
+     * 迁移各一次），每次都要读 prefs + `new JSONArray` + 逐条 `accountFromJson`。
+     * 账号只有几个，但这段解析本身对调用频率很敏感。
+     *
+     * 缓存键用**原始 JSON 字符串**而不是"脏标记"：JSON 就是这份数据的唯一真相，
+     * 字符串没变就一定解析出同样的结果（`accountFromJson` 里那次 Cookie 迁移是幂等的 ——
+     * 明文搬走之后就没东西可搬了）。这样连"写入后忘了清缓存"这类 bug 都不可能发生。
+     *
+     * 只在**同一进程内**有效：`appContext` 的 prefs 变化由写入方经过
+     * [saveAccountRecords]，所以进程内不会出现"别人改了而我不知道"。
+     */
+    private volatile String cachedAccountJson = null;
+    private volatile List<AccountRecord> cachedAccountRecords = null;
 
     private List<AccountRecord> loadAccountRecords() {
         List<AccountRecord> records = new ArrayList<>();
@@ -496,6 +557,12 @@ public class UserManager {
         try {
             SharedPreferences prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             String json = prefs.getString(KEY_ACCOUNTS, "[]");
+            // 命中：同一个 JSON 文本，直接返回上次解析的结果。
+            List<AccountRecord> cached = cachedAccountRecords;
+            if (cached != null && json != null && json.equals(cachedAccountJson)) {
+                // 返回副本：调用方会 removeIf / add，共享同一个 List 会互相污染。
+                return new ArrayList<>(cached);
+            }
             JSONArray arr = new JSONArray(json);
             for (int i = 0; i < arr.length(); i++) {
                 AccountRecord record = accountFromJson(arr.getJSONObject(i));
@@ -503,6 +570,8 @@ public class UserManager {
                     records.add(record);
                 }
             }
+            cachedAccountJson = json;
+            cachedAccountRecords = new ArrayList<>(records);
         } catch (Exception e) {
             Log.e(TAG, "加载账号列表失败: " + e.getMessage());
         }
@@ -516,9 +585,17 @@ public class UserManager {
             for (AccountRecord record : records) {
                 arr.put(accountToJson(record));
             }
+            String json = arr.toString();
             SharedPreferences prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            prefs.edit().putString(KEY_ACCOUNTS, arr.toString()).apply();
+            prefs.edit().putString(KEY_ACCOUNTS, json).apply();
+            // 让缓存与实际写下去的内容对齐（而不是简单清空）：
+            // 下一次读会命中，且命中的一定是这份新数据。
+            cachedAccountJson = json;
+            cachedAccountRecords = new ArrayList<>(records);
         } catch (Exception e) {
+            // 写失败：把缓存作废，避免继续用一份与磁盘不符的旧值。
+            cachedAccountJson = null;
+            cachedAccountRecords = null;
             Log.e(TAG, "保存账号列表失败: " + e.getMessage());
         }
     }
@@ -532,7 +609,9 @@ public class UserManager {
         record.studentId = studentId != null ? studentId : "";
         record.username = getUsername();
         record.loginMode = getLoginMode();
-        record.cookie = savedCookie != null ? savedCookie : "";
+        // Cookie 不进来：这条 record 会被序列化进 prefs，带上 Cookie 就是明文落盘。
+        // 真正需要它时按 key 去 CredentialStore 取（见 applyAccountRecord）。
+        record.cookie = "";
         record.cookieSaveTime = System.currentTimeMillis();
         record.key = buildAccountKey(currentSchool, record.username, record.studentId, record.studentName);
         return record.key.isEmpty() ? null : record;
@@ -599,11 +678,24 @@ public class UserManager {
         return toStorageKey(key);
     }
 
-    /** 账号 key → 运行期/缓存用的 storage key。两处必须走同一条规则，否则清不干净。 */
+    /**
+     * 加密存储 Cookie 用的键。
+     *
+     * 与 [getCurrentAccountStorageKey] 同一口径 —— 两处不一致的话，切号后会读到
+     * **上一个账号**的 Cookie，那是最严重的一类串号。
+     */
+    private String cookieStorageKey() {
+        return getCurrentAccountStorageKey();
+    }
+
+    /**
+     * 账号 key → 运行期/缓存用的 storage key。
+     *
+     * 规则在 [AccountKeys.storageKey]。两处必须走同一条规则，否则清不干净 ——
+     * 所以这里**不留第二份实现**，只转发。
+     */
     private String toStorageKey(String accountKey) {
-        String key = accountKey != null ? accountKey : "";
-        if (key.isEmpty()) key = "default";
-        return key.replaceAll("[^A-Za-z0-9_.-]", "_");
+        return AccountKeys.INSTANCE.storageKey(accountKey);
     }
 
     public boolean switchToAccount(String accountKey) {
@@ -623,8 +715,16 @@ public class UserManager {
         currentSchool = school;
         studentName = record.studentName != null ? record.studentName : "";
         studentId = record.studentId != null ? record.studentId : "";
-        savedCookie = record.cookie != null ? record.cookie : "";
         currentAccountKey = record.key != null ? record.key : "";
+        // Cookie 从加密存储读；record.cookie 只是内存里的载体，不再落盘明文。
+        // 读不到（老库/密钥失效）就留空，由上层走「请重新登录」。
+        String storedCookie = "";
+        if (appContext != null && !currentAccountKey.isEmpty()) {
+            String loaded = CredentialStore.INSTANCE.loadSessionCookie(appContext, cookieStorageKey());
+            if (loaded != null && !loaded.isEmpty()) storedCookie = loaded;
+        }
+        if (storedCookie.isEmpty() && record.cookie != null) storedCookie = record.cookie;
+        savedCookie = storedCookie;
         isLoggedIn = true;
         isDemoMode = false;
         // 密码从内存缓存回填，miss 就读 Keystore —— loadLoginState() 也走这里，
@@ -642,11 +742,13 @@ public class UserManager {
 
         if (persist && appContext != null) {
             SharedPreferences prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            // Cookie 只进加密存储，prefs 里不再有明文（见 saveLoginState 的说明）。
+            CredentialStore.INSTANCE.saveSessionCookie(appContext, cookieStorageKey(), savedCookie);
             prefs.edit()
                     .putBoolean(KEY_LOGGED_IN, true)
                     .putString(KEY_STUDENT_NAME, studentName)
                     .putString(KEY_STUDENT_ID, studentId)
-                    .putString(KEY_COOKIE, savedCookie)
+                    .remove(KEY_COOKIE)
                     .putString(KEY_CURRENT_SCHOOL_ID, school.id)
                     .putString(KEY_CURRENT_ACCOUNT_KEY, currentAccountKey)
                     .putString(KEY_USERNAME, record.username != null ? record.username : "")
@@ -756,6 +858,12 @@ public class UserManager {
             Log.w(TAG, "清理账号运行期 Cookie 失败: " + e.getMessage());
         }
 
+        // 退出登录后那张票必须一起删：否则它留在 secure_credentials 里，
+        // 界面上已经是"未登录"，但磁盘上仍有一张可用的会话凭据。
+        if (appContext != null && !accountStorageKeyToClear.isEmpty()) {
+            CredentialStore.INSTANCE.removeSessionCookie(appContext, accountStorageKeyToClear);
+        }
+
         Log.d(TAG, "登录状态已清除");
     }
 
@@ -768,9 +876,10 @@ public class UserManager {
 
     public void setLoggedIn(boolean loggedIn) {
         this.isLoggedIn = loggedIn;
-        if (loggedIn) {
-            saveLoginState();
-        }
+        // 登出方向也要落盘：会话过期（notifyCookieExpired）只改内存字段的话，
+        // 用户杀进程重开后 prefs 里仍是「已登录」，启动会拿死 Cookie 直登、再撞一轮
+        // 失效探测才稳定。demo 模式下 saveLoginState 自身是空操作，不会误写。
+        saveLoginState();
     }
 
     public boolean isLoggedIn() {

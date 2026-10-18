@@ -133,10 +133,17 @@ fun SecondClassActivityCenterRoute(
         )
     }
 
-    /** 详情类请求（拉详情 / 报名 / 取消 / 扫码）失败：错误只写进详情页。 */
+    /** 详情类请求（拉详情 / 报名 / 取消 / 扫码）失败：错误写进详情页；详情页没开时兜底成 Toast。 */
     fun failDetail(e: Exception) {
         val message = SecondClassroomStore.handleFailure(context, accountKey, e)
-        detail = detail?.copy(acting = false, loading = false, error = message)
+        val current = detail
+        // 从列表页顶栏直接扫码时 detail 为 null：直接写 detail 是 no-op，失败会被
+        // 整个吞掉 —— 用户扫了码却毫无反应。任何失败路径都必须有回音。
+        if (current == null) {
+            GlassToaster.show(message)
+        } else {
+            detail = current.copy(acting = false, loading = false, error = message)
+        }
     }
 
     /**
@@ -304,6 +311,13 @@ fun SecondClassActivityCenterRoute(
                 SecondClassroomRepository.activityDetailBundle(c, token, activityId)
             }
             val myUserId = withContext(Dispatchers.IO) { runCatching { c.myUserId(token) }.getOrDefault("") }
+            // 身份拿不到（网络抖动/会话过期）时不能把「扫自己的码」误判成代签 ——
+            // myUserId 为空意味着"我是谁都不知道"，如实报错让用户重试，而不是给出纪律结论。
+            if (myUserId.isBlank()) {
+                scannedCode = payload as? SecondClassScanPayload.SignCode
+                scanDecision = SecondClassScanCodec.SignScanDecision.Blocked("身份校验失败，无法确认签到人，请重试")
+                return@LaunchedEffect
+            }
             val decision = SecondClassScanCodec.evaluateSignScan(
                 payload = payload,
                 myUserId = myUserId,
@@ -321,6 +335,21 @@ fun SecondClassActivityCenterRoute(
             throw e
         } catch (e: Exception) {
             failDetail(e)
+        }
+    }
+
+    // 我的等待签到码周期性重算：站点按毫秒时间戳校验新鲜度（弹窗文案写的是
+    // 「动态码约 10 秒一变」），而 sp 此前只在详情加载时取一次 —— 弹窗开久了码就
+    // 过期，签到员扫不上，用户必须关掉详情重进。服务端给了动态种子时重算结果不变
+    // （同样有效），没给种子时用当前时间，码随重算而变。
+    LaunchedEffect(openActivityId.value, detail?.myUserId) {
+        val activityId = openActivityId.value ?: return@LaunchedEffect
+        val uid = detail?.myUserId.orEmpty()
+        if (uid.isBlank()) return@LaunchedEffect
+        while (true) {
+            delay(10_000)
+            val sp = detail?.bundle?.signCount?.timestamp ?: System.currentTimeMillis()
+            detail = detail?.copy(mySignCode = SecondClassScanCodec.buildWaitSignCode(activityId, uid, sp))
         }
     }
 
@@ -564,6 +593,9 @@ fun SecondClassActivityCenterRoute(
         onClose = onClose,
         onTab = {
             ui = ui.copy(tab = it)
+            // 活动页与申报页共用同一个搜索框：切 Tab 清掉关键词 —— 在活动页搜过的词
+            // 不该继续留在申报页的输入框里（两个列表的搜索语义并不相同）。
+            ui = ui.copy(keyword = "")
             // 下标见 SecondClassActivityCenterScreen 的 TABS：4 = 成绩单
             if (it == 4) onTranscriptTabSelected()
         },
@@ -576,6 +608,9 @@ fun SecondClassActivityCenterRoute(
             // 加载更多放在协程里：列表尾部"正在加载…"由 loadingMore 状态驱动
             run {
                 scope.launch {
+                    // 防重入：列表页脚的自动加载 effect 有守卫，「加载更多」按钮没有 ——
+                    // 快速连点会并发两个相同页的请求（distinctBy 能救列表，但白打请求）。
+                    if (ui.loadingMore || ui.loading) return@launch
                     val token = SecondClassroomStore.token(context, accountKey)
                     if (token.isBlank()) return@launch
                     // 用户点「重试」进入时先清失败标记，否则守卫会一直拦着

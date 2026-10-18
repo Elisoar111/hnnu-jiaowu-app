@@ -23,6 +23,7 @@ object ReviewPrefs {
     private const val KEY_SHUFFLE_OPTIONS = "shuffle_options"
     private const val KEY_AUTO_NEXT = "auto_next"
     private const val KEY_DEMO_SEEDED = "demo_bank_seeded"
+    private const val KEY_KEEP_AI_HISTORY = "keep_ai_history"
 
     /** 是否打乱选项显示顺序。 */
     fun isShuffleOptions(context: Context): Boolean =
@@ -30,6 +31,20 @@ object ReviewPrefs {
 
     fun setShuffleOptions(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SHUFFLE_OPTIONS, enabled).apply()
+    }
+
+    /**
+     * 换题时是否保留 AI 问答历史。
+     *
+     * 默认 **关**：把上一题的问答带进下一题，模型容易被无关上下文带偏，而且每题都
+     * 多花一笔历史 token。但"就着刚才那段讲解继续问"是真实用法，所以给一个开关，
+     * 而不是替用户写死。
+     */
+    fun isKeepAiHistory(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_KEEP_AI_HISTORY, false)
+
+    fun setKeepAiHistory(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_KEEP_AI_HISTORY, enabled).apply()
     }
 
     /**

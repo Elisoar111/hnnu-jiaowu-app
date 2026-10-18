@@ -86,8 +86,12 @@ fun WidgetBoardRoute(onDismiss: () -> Unit) {
     val schedule = remember(snapshot, now) { scheduleCardData(snapshot, now, timelineLimit = 6) }
 
     // ── 成绩 / 考试 ─────────────────────────────────────────────────────────
-    val gradesCache = remember(accountKey) {
-        if (accountKey.isBlank()) null else GradesCacheManager.load(context, accountKey)
+    // 缓存读取必须离开组合期：load 是 SP 读 + JSON 全量解析，在 remember 里同步跑
+    // 会卡主线程（下方消息卡片早已是 LaunchedEffect + IO 的同一模式，这里对齐）。
+    var gradesCache by remember(accountKey) { mutableStateOf<GradesCacheManager.Cached?>(null) }
+    LaunchedEffect(accountKey) {
+        if (accountKey.isBlank()) return@LaunchedEffect
+        gradesCache = withContext(Dispatchers.IO) { GradesCacheManager.load(context, accountKey) }
     }
     val grades = remember(gradesCache) { gradesCardData(gradesCache?.report, gradesCache?.fetchedAt ?: 0L) }
     val exam = remember(gradesCache, now) { examCardData(gradesCache?.exams.orEmpty(), now) }
@@ -104,7 +108,10 @@ fun WidgetBoardRoute(onDismiss: () -> Unit) {
 
     // ── 第二课堂积分（缓存优先 + 后台补一次）────────────────────────────────
     var secondClass by remember(accountKey) {
-        mutableStateOf(SecondClassOverviewCache.load(context, accountKey))
+        mutableStateOf<SecondClassOverviewCache.Cached?>(null)
+    }
+    LaunchedEffect(accountKey) {
+        secondClass = withContext(Dispatchers.IO) { SecondClassOverviewCache.load(context, accountKey) }
     }
     val client = remember(accountKey, school?.id) {
         if (isDemo) null else SecondClassroomStore.clientFor(school)

@@ -40,6 +40,7 @@ import com.hnnujw.course.ui.system.SystemPrimaryButton
 import com.hnnujw.course.ui.theme.CourseSelectorTheme
 import com.hnnujw.course.login.WebLoginNavigation
 import com.hnnujw.course.ui.screen.WebLoginAddressBar
+import com.hnnujw.course.utils.WebViewDataDir
 
 /**
  * Interactive login browser for captcha and SSO pages. Navigation may cross
@@ -59,7 +60,6 @@ class AcademicWebViewActivity : ComponentActivity() {
         const val EXTRA_EXTRA_COOKIE_URLS = "academic_extra_cookie_urls"
         const val EXTRA_PAGE_URL = "academic_page_url"
         const val EXTRA_SEARCH_KEYWORD = "academic_search_keyword"
-        private var suffixConfigured = false
     }
 
     private var webView: WebView? = null
@@ -98,10 +98,9 @@ class AcademicWebViewActivity : ComponentActivity() {
             return
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && !suffixConfigured) {
-            WebView.setDataDirectorySuffix("academic")
-            suffixConfigured = true
-        }
+        // 🔴 进程内只能设一次后缀（WebViewDataDir 守护）：此前各 Activity 各持一个
+        // suffixConfigured，同进程先后打开教务网页与一卡通网页会二次设后缀直接崩溃。
+        WebViewDataDir.ensureConfigured("academic")
         val browser = createWebView()
         webView = browser
         setContent {
@@ -140,7 +139,11 @@ class AcademicWebViewActivity : ComponentActivity() {
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            CookieManager.getInstance().removeAllCookies { browser.loadUrl(initialUrl) }
+            // removeAllCookies 的回调不保证触达（个别 WebView provider 静默不回调）——
+            // 把 loadUrl 放回调里，那些设备会永远白屏。清 Cookie 让它异步完成即可。
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+            browser.loadUrl(initialUrl)
         } else {
             // Before API 28 WebView has no per-process storage suffix. Clear only
             // the configured school cookies instead of unrelated browser sessions.
@@ -167,7 +170,10 @@ class AcademicWebViewActivity : ComponentActivity() {
         settings.javaScriptCanOpenWindowsAutomatically = true
         settings.allowFileAccess = false
         settings.allowContentAccess = false
-        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        // 混合内容策略跟着主文档 scheme 走：https 登录页禁止 http 子资源
+        // （这里是凭据输入页，放行等于给中间人开注入口）；http 备用站才放宽，
+        // 否则页面直接白屏。详见 WebViewMixedContent 的说明。
+        com.hnnujw.course.web.WebViewMixedContent.applyMode(settings, startUrl)
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webViewInstance, true)

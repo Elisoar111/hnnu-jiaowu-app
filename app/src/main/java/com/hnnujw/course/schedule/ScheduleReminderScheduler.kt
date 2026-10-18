@@ -252,7 +252,38 @@ class ScheduleReminderScheduler private constructor(private val context: Context
         reconcile()
     }
 
-    fun timeBase(account: String, term: String): ScheduleTimeBase? = calendars.read(account, term)
+    /**
+     * 提醒规划用的时间基准。
+     *
+     * 与 `ScheduleRepository.timeBase` 同一口径：**设置里的节次时间打底、日历里存过的值覆盖**。
+     *
+     * 为什么要合并：提醒日历里的 `periodStarts/periodEnds` 只有当用户手动进过
+     * 「课表设置 → 节次时间」之后才会被写入。只写过第一周日期的账号，存下来的是一条
+     * 「有日期、无节次」的半截记录；[CourseReminderPlanner] 取不到 `periodStarts[startPeriod]`
+     * 就返回 `NeedsTime`，**一条闹钟都不会排** —— 这就是「课程提醒开了却从不响」的根因。
+     *
+     * 放在读路径而不是只修写路径，是为了让**已经装机的老用户**在下一次 reconcile
+     * 就自动恢复，不必等他们重新点一遍课表设置。
+     */
+    fun timeBase(account: String, term: String): ScheduleTimeBase? {
+        val stored = calendars.read(account, term) ?: return null
+        if (stored.periodStarts.isNotEmpty() && stored.periodEnds.isNotEmpty()) return stored
+        val periods = com.hnnujw.course.manager.ScheduleSettingsManager.getInstance()
+            .apply { init(context) }
+            .getPeriodTimes()
+        return stored.fillMissingPeriodTimes(
+            periods.associate { it.period to it.startTime },
+            periods.associate { it.period to it.endTime }
+        )
+    }
+
+    /**
+     * 只读日历里的**原始记录**，不做任何默认值合并。
+     *
+     * 给「要不要回写日期」这类判断用：如果用 [timeBase] 的合并结果去判断有没有存过，
+     * 会把设置里的默认节次时间当成"已有值"一起落盘，等于把默认值固化成用户选择。
+     */
+    internal fun storedTimeBase(account: String, term: String): ScheduleTimeBase? = calendars.read(account, term)
 
     fun updateTimeBase(account: String, term: String, value: ScheduleTimeBase) {
         if (!calendars.write(account, term, value)) return
@@ -467,7 +498,12 @@ class ScheduleReminderScheduler private constructor(private val context: Context
             // 总开关关掉 = 一条提醒都不该排。传空列表让 reconcileCourseReminders 把已排的
             // 全撤掉，比在 plan 里再加一个分支更不容易漏。
             val active = if (settings.masterEnabled) aligned else emptyList()
-            reconcileCourseReminders(active, activeAccount(), { timeBase(it.account, it.term) }, permission, System.currentTimeMillis(), alarms)
+            // timeBase() 会去读「课表设置」里的节次表并合并，每次调用都要解析一次 JSON。
+            // reconcile 对每条提醒都会问一次，这里按 (account, term) 记忆，一轮只算一遍。
+            val bases = HashMap<String, ScheduleTimeBase?>()
+            reconcileCourseReminders(active, activeAccount(), { key ->
+                bases.getOrPut(key.account + '\u001f' + key.term) { timeBase(key.account, key.term) }
+            }, permission, System.currentTimeMillis(), alarms)
         } catch (_: SecurityException) {
             scheduledPlans().values.forEach { alarms.cancel(it.reminder.key) }
         }
@@ -500,7 +536,16 @@ class ScheduleReminderScheduler private constructor(private val context: Context
                 .setContentTitle("${record.course.name} · 即将上课")
                 .setContentText(listOf(record.course.location, "第 ${record.course.startPeriod}-${record.course.endPeriod} 节").filter { it.isNotBlank() }.joinToString(" · "))
                 .setContentIntent(content).setAutoCancel(true).setOnlyAlertOnce(true).build()
-            try { NotificationManagerCompat.from(context).notify(id, 1, notification) } catch (_: SecurityException) { }
+            // 这里**刻意**保持空 catch，与其它几处不同 —— 原因：
+            // 上面第 525 行已经把这条计划从 pending 里消费掉了，此刻抛出去既不能
+            // 让它重新排队，也没人接（广播接收器里没有能提示用户的界面）。
+            // 能发生的只有 SecurityException（个别 ROM 在通知权限刚被撤销时会抛），
+            // 而对应的处置是"这条提醒不显示"，不是崩溃 —— 记一行日志就够。
+            try {
+                NotificationManagerCompat.from(context).notify(id, 1, notification)
+            } catch (e: SecurityException) {
+                android.util.Log.w("ScheduleReminder", "课程提醒通知未能发出（权限被撤销？）: " + e.message)
+            }
         }
         reconcile()
     }

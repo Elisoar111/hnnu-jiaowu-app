@@ -28,6 +28,18 @@ data class ReviewQuestion(
     val isMulti: Boolean get() = type == TYPE_MULTI
     val isSingle: Boolean get() = type == TYPE_SINGLE
 
+    /**
+     * 全模块统一的复合键 `bankId::qid`。
+     *
+     * 同一道题可能存在于多个题库（`qid` 只在库内唯一），所以一切"按题索引"的地方
+     * —— 作答表、判分集合、落库去重、乱序排序 —— 都必须用这个键。
+     *
+     * 以前是每个调用点自己拼 `"${q.bankId}::${q.id}"`：拼法一旦不一致（少一个 `::`、
+     * 中间多个空格），两边就永远匹配不上，而且**不会报错**，只表现为"判分状态丢了"。
+     * 收敛到一处之后这类失配在结构上就不可能发生。
+     */
+    val compositeKey: String by lazy { "$bankId::$id" }
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("type", type)

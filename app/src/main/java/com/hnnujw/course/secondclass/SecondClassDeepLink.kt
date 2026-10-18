@@ -42,6 +42,13 @@ sealed interface SecondClassDeepLink {
          * 而剪贴板里可能装着密码等敏感内容，宽松匹配会把无关文本误判成活动链接
          * 并把它展示出来。
          */
+        /** 站点链接判定：host 精确等于 [SITE_HOST]（粘贴文本缺 scheme 时按 https 补全解析）。 */
+        private fun isSiteLink(text: String): Boolean {
+            val withScheme = if (text.contains("://", ignoreCase = true)) text else "https://$text"
+            val host = runCatching { java.net.URI(withScheme).host?.lowercase() }.getOrNull() ?: return false
+            return host == SITE_HOST
+        }
+
         fun fromUri(uri: String?): SecondClassDeepLink {
             val text = uri?.trim().orEmpty()
             if (text.isEmpty()) return None
@@ -54,7 +61,9 @@ sealed interface SecondClassDeepLink {
                 }
             }
 
-            if (!text.contains(SITE_HOST, ignoreCase = true)) return None
+            // host 严格判定而不是 contains：后者会把 `https://evil.com/?u=ekta.hnnu.edu.cn/…`
+            // 这种把站点名塞在参数里的文本误认成活动链接。
+            if (!isSiteLink(text)) return None
             val activityId = queryValue(text, "activityId")?.toIntOrNull()
                 ?: queryValue(text, "activityid")?.toIntOrNull()
                 ?: queryValue(text, "id")?.toIntOrNull()

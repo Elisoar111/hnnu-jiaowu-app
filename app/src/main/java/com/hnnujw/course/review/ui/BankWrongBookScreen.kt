@@ -1,6 +1,7 @@
 package com.hnnujw.course.review.ui
 
 import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -38,6 +39,7 @@ import com.hnnujw.course.ui.screen.GlassFilterChip
 import com.hnnujw.course.ui.system.GlassLoadingState
 import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.GlassStatChip
+import com.hnnujw.course.ui.system.GlassToaster
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -57,7 +59,8 @@ import kotlinx.coroutines.withContext
 @Composable
 fun BankWrongBookScreen(
     context: Context,
-    bankId: String,
+    /** null = 跨题库的总错题本。 */
+    bankId: String?,
     onBack: () -> Unit,
     onStartPractice: (PracticeLaunch) -> Unit
 ) {
@@ -76,7 +79,7 @@ fun BankWrongBookScreen(
         val result = withContext(Dispatchers.IO) {
             Triple(
                 db.listWrongBook(bankId),
-                db.listBanks().firstOrNull { it.id == bankId }?.name.orEmpty(),
+                if (bankId == null) "" else db.listBanks().firstOrNull { it.id == bankId }?.name.orEmpty(),
                 System.currentTimeMillis()
             )
         }
@@ -93,7 +96,7 @@ fun BankWrongBookScreen(
 
     GlassPageScaffold(
         title = "错题本",
-        subtitle = if (bankName.isBlank()) null else bankName,
+        subtitle = bankName.ifBlank { if (bankId == null) "全部题库" else "" }.ifBlank { null },
         onBack = onBack
     ) { padding ->
         if (!loaded) {
@@ -115,7 +118,7 @@ fun BankWrongBookScreen(
             item {
                 Card {
                     Text(
-                        text = bankName.ifBlank { "本题库" },
+                        text = bankName.ifBlank { if (bankId == null) "全部题库" else "本题库" },
                         fontSize = 15.sp,
                         lineHeight = 21.sp,
                         fontWeight = FontWeight.Medium,
@@ -148,6 +151,16 @@ fun BankWrongBookScreen(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                    Spacer(Modifier.height(10.dp))
+                    // 导出：把当前筛选/排序后的这一份写成纯文本，走系统分享。
+                    // 导出的是**用户看得见的那一批**（`visible`），不是整个错题本 ——
+                    // "筛到未掌握再点导出"是最自然的用法。
+                    SecondaryAction(
+                        text = "导出当前列表（${visible.size} 题）",
+                        enabled = visible.isNotEmpty(),
+                        onClick = { exportWrongBook(context, bankName.ifBlank { if (bankId == null) "全部题库" else "本题库" }, visible, now) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
 
@@ -172,7 +185,7 @@ fun BankWrongBookScreen(
                 item {
                     Card {
                         Text(
-                            text = "这个题库还没有错题。答错一道题后它会自动进入这里，" +
+                            text = (if (bankId == null) "还没有任何错题。答错一道题后它会自动进入这里，" else "这个题库还没有错题。答错一道题后它会自动进入这里，") +
                                 "按「复习中 → 未掌握 → 已掌握」三态推进。",
                             fontSize = 13.sp,
                             lineHeight = 19.sp,
@@ -319,4 +332,55 @@ private fun SectionLabel(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 4.dp)
     )
+}
+
+
+/**
+ * 把一批错题导出成纯文本并走系统分享。
+ *
+ * 导出的是**用户当前看到的那一批**（已按筛选与排序处理），而不是整个错题本 ——
+ * 「筛到未掌握再导出」才是最自然的用法。
+ *
+ * 用 `ACTION_SEND` + `createChooser` 而不是自己写文件：错题本导出的典型去向是
+ * 微信 / QQ / 备忘录 / 打印服务，系统分享面板已经覆盖了全部这些，而落一个文件
+ * 还得处理存储权限与"导完在哪"的问题。
+ */
+private fun exportWrongBook(
+    context: Context,
+    title: String,
+    entries: List<ReviewDatabase.WrongBookEntry>,
+    now: Long
+) {
+    if (entries.isEmpty()) {
+        GlassToaster.show("当前列表没有可导出的错题")
+        return
+    }
+    val text = buildString {
+        appendLine("错题本 · $title")
+        appendLine("共 ${entries.size} 题（导出时间 ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.CHINA).format(java.util.Date(now))}）")
+        appendLine()
+        entries.forEachIndexed { index, entry ->
+            val q = entry.question
+            appendLine("${index + 1}. [${q.chapter}] ${q.stem}")
+            q.options.forEachIndexed { i, option ->
+                appendLine("    ${('A' + i)}. $option")
+            }
+            appendLine("    正确答案：${q.answer}")
+            if (q.explanation.isNotBlank()) appendLine("    解析：${q.explanation}")
+            appendLine(
+                "    错误 ${entry.wrongCount} 次 · ${entry.status.label} · " +
+                    dueLabel(entry.dueAt, now)
+            )
+            appendLine()
+        }
+    }
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "错题本 · $title")
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    val ok = runCatching {
+        context.startActivity(Intent.createChooser(send, "导出错题本"))
+    }.isSuccess
+    if (!ok) GlassToaster.show("没有可以接收文本的应用")
 }

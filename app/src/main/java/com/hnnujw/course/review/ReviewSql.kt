@@ -75,37 +75,30 @@ object ReviewSql {
     }
 
     /**
-     * [ReviewDatabase.overview] 需要的全部查询，**按名字**持有而不是按下标。
+     * [ReviewDatabase.overview] 需要的全部标量，**合并成一条 SQL**。
      *
-     * 下标取（`scalar(0)`、`scalar(3)`…）虽然短，但加一条删一条就会静默错位 ——
-     * 而这里错位不会报错，只会算错数字。名字对得上，编译器就能帮忙盯着。
+     * 原本这里是六条独立查询（每条一次 cursor 往返），但它们读的是同一批表、
+     * 同一个 `bankId` 条件，没有理由分开跑。合并后首页进入时的数据库往返从 6 次降到 1 次。
      *
-     * sql 与 args 成对生成，好处是「占位符个数 == 参数个数」这条不变量由构造方保证。
-     * `banks` 是全局表，固定不带 bank_id 条件也不带参数。
+     * 用「`SELECT (子查询), (子查询), …`」而不是 `UNION ALL`：六个值必须来自同一行，
+     * 拆成 UNION 还得按行号认哪个是哪个 —— 下标错位不会报错，只会算错数字。
+     *
+     * `banks` 是全局表，固定不带 `bank_id` 条件、也不带参数；这条正是当年
+     * `Cannot bind argument at index` 的源头，由 [BoundQuery] 的 sql/args 成对生成保证不再犯。
      */
-    data class OverviewQueries(
-        val records: BoundQuery,
-        val correctSum: BoundQuery,
-        val wrongPending: BoundQuery,
-        val questions: BoundQuery,
-        val favorites: BoundQuery,
-        val banks: BoundQuery
-    ) {
-        /** 六条查询，按固定顺序排列供批量遍历。 */
-        val ordered: List<BoundQuery>
-            get() = listOf(questions, records, correctSum, wrongPending, favorites, banks)
-    }
-
-    /** 构造 [OverviewQueries]。 */
-    fun overview(bankId: String?): OverviewQueries {
-        val bankArgs = listOfNotNull(bankId)
-        return OverviewQueries(
-            records = BoundQuery(countSql("records", bankId), bankArgs),
-            correctSum = BoundQuery(sumSql("correct_count", "records", bankId), bankArgs),
-            wrongPending = BoundQuery(countSql("wrong_book", bankId, CONDITION_WRONG_PENDING), bankArgs),
-            questions = BoundQuery(countSql("questions", bankId), bankArgs),
-            favorites = BoundQuery(countSql("favorites", bankId), bankArgs),
-            banks = BoundQuery(countSql("banks", null), emptyList())
-        )
+    fun overviewSingle(bankId: String?): BoundQuery {
+        val filter = if (bankId == null) "" else " WHERE bank_id = ?"
+        val sql = buildString {
+            append("SELECT ")
+            append("(SELECT COUNT(*) FROM questions").append(filter).append("), ")
+            append("(SELECT COUNT(*) FROM records").append(filter).append("), ")
+            append("(SELECT COALESCE(SUM(correct_count), 0) FROM records").append(filter).append("), ")
+            append("(SELECT COUNT(*) FROM wrong_book").append(filter)
+            append(if (bankId == null) " WHERE mastered = 0" else " AND mastered = 0").append("), ")
+            append("(SELECT COUNT(*) FROM favorites").append(filter).append("), ")
+            append("(SELECT COUNT(*) FROM banks)")
+        }
+        val args = if (bankId == null) emptyList() else List(5) { bankId }
+        return BoundQuery(sql, args)
     }
 }

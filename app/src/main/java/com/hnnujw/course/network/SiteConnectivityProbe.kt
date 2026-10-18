@@ -99,7 +99,14 @@ object SiteConnectivityProbe {
         }
     }
 
-    private fun describe(error: Throwable): String {
+    /**
+     * 把异常翻译成一句能直接上屏的原因。
+     *
+     * `internal` 而不是 `private`：这段逻辑**纯函数、无 Android 依赖**，
+     * 但恰恰是最容易写错的地方（OkHttp 会把 SSL/DNS 失败再包一层 IOException，
+     * 所以必须走 cause 链）。让单测能直接验证它，比只测 probe() 的端到端行为精确得多。
+     */
+    internal fun describe(error: Throwable): String {
         // 原因常在 cause 链里（OkHttp 会把 SSL / DNS 失败再包一层 IOException）
         var cause: Throwable? = error
         while (cause != null) {
