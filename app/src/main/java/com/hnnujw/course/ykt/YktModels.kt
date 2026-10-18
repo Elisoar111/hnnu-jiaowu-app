@@ -374,8 +374,40 @@ data class YktSceneSelection(
     val feeItemId: String = "",
     val picks: List<ScenePick> = emptyList(),
 ) {
-    /** 是否已经选到"能查"的程度——必须选满到最后一级（房间）。 */
+    /**
+     * 是否已经选到"能查"的程度——必须选满到最后一级（房间）。
+     *
+     * 🔴 **必须是"选满"，不能只是"非空"**（2026-10-18 实测得出的服务端契约）：
+     *
+     * 用测试账号对淮师网关实测，`getThirdData(type=IEC)` 的合法形态**只有一种**：
+     * `level = 总级数` 且各级参数齐全。其余全部被第三方（tsm）拒绝，报
+     * `获取第三方数据异常了-tsm：查询接口，参数type有误`：
+     *
+     *  - `level=0`（无任何 picks）→ 报错；
+     *  - `level=3`（4 级费项只选了 3 级）→ 报错；
+     *  - `level=4` 但缺 `room` 字段 → 报错；
+     *  - `level=4` 且 4 级全齐 → **唯一成功**，返回 showData 读数。
+     *
+     * 旧判据 `picks.isNotEmpty()` 挡不住"记忆被截断"的场景：学校改级定义后
+     * [com.hnnujw.course.ykt.YktPickReconcile] 会把 picks 从 4 级截成 3 级，
+     * 此时"非空"仍成立，于是拿不完整的参数发 IEC —— 这正是线上报错的来源。
+     *
+     * 期望级数从**当前费项详情**（[expectedLevelCount]）传入；调用方拿不到详情时
+     * 传 null，退回旧的"非空"判据（宁可多查一次让服务端拒绝，也不误判可查）。
+     */
     val isQueryable: Boolean get() = feeItemId.isNotBlank() && picks.isNotEmpty()
+
+    /**
+     * 按**期望级数**判断是否选满。
+     *
+     * `expectedLevelCount == null`（调用方还没拿到费项详情）时退回 [isQueryable]
+     * 的旧口径——此时无从判断"满不满"，保持原行为。
+     */
+    fun isFullySelected(expectedLevelCount: Int?): Boolean {
+        if (expectedLevelCount == null) return isQueryable
+        if (expectedLevelCount <= 0) return isQueryable
+        return feeItemId.isNotBlank() && picks.size >= expectedLevelCount
+    }
 
     /** 提交给 `getThirdData` 的参数表：`code -> value`。 */
     val pickMap: Map<String, String> get() = picks.associate { it.code to it.value }

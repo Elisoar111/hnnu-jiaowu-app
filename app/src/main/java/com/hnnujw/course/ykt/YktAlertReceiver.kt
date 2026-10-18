@@ -71,6 +71,25 @@ class YktAlertReceiver : BroadcastReceiver() {
             return
         }
 
+        // 🔴 选满才发 IEC —— 2026-10-18 实测的服务端契约（见 YktSceneSelection 的说明）：
+        // getThirdData(type=IEC) 只有 "level=总级数 且各级参数齐全" 一种合法形态，
+        // picks 不齐会被第三方拒绝并报「参数type有误」。记忆可能因学校改级定义
+        // 被 YktPickReconcile 截短（4 级 → 3 级），此时不能硬发。
+        //
+        // 后台巡检没有费项详情的现成上下文（拿详情要多一次请求），但级数可以直接
+        // 从一次 level=0 的 select 探测取到——不过为省这一往返，这里用一个更便宜的
+        // 等价判据：级数自上次成功以来不变（记录在 prefs），一旦对账截短就跳过本轮，
+        // 用户下次打开界面重选后自然恢复。
+        val expectedLevels = YktAlertStateStore.readExpectedLevels(app, accountKey)
+        if (!selection.isFullySelected(expectedLevels)) {
+            Log.i(
+                TAG,
+                "记忆选择不完整（${selection.picks.size} 级 / 期望 $expectedLevels），跳过本轮巡检等待用户重选",
+            )
+            pending.finish()
+            return
+        }
+
         // 阈值改为在拿到读数、知道量纲之后再取（见下面的 thresholdFor）
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {

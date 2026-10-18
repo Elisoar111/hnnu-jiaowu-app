@@ -76,6 +76,7 @@ import com.hnnujw.course.ykt.SceneOption
 import com.hnnujw.course.ykt.ScenePick
 import com.hnnujw.course.ykt.YktAlertNotifier
 import com.hnnujw.course.ykt.YktAlertSettings
+import com.hnnujw.course.ykt.YktAlertStateStore
 import com.hnnujw.course.ykt.YktBackgroundPermission
 import com.hnnujw.course.ykt.YktBalance
 import com.hnnujw.course.ykt.YktBillPage
@@ -292,8 +293,16 @@ fun YktScreen(
             return
         }
         val detail = feeDetail
-        // 需要选场景但还没选满 → 这不是错误，只是"尚未选择"
-        if (detail != null && detail.requiresSelection && !current.isQueryable) {
+        // 需要选场景但还没选满 → 这不是错误，只是"尚未选择"。
+        //
+        // 🔴 判据必须是"选满"（isFullySelected），不能只是"非空"（isQueryable）：
+        // 2026-10-18 用测试账号实测，getThirdData(type=IEC) 只接受
+        // "level=总级数 且各级参数齐全"这一种形态；picks 被对账截短后（如 4 级剩 3 级）
+        // 硬发会被第三方拒绝，报「获取第三方数据异常了-tsm：查询接口，参数type有误」。
+        // 期望级数取当前费项详情的级数；详情未到时退回旧判据（详情一到自然重查）。
+        if (detail != null && detail.requiresSelection &&
+            !current.isFullySelected(detail.levels.size)
+        ) {
             electricity = null
             electricityContext = null
             electricityError = ""
@@ -312,6 +321,9 @@ fun YktScreen(
             val balance = result.reading
             electricity = balance
             electricityContext = result.context
+            // 成功拿到读数 = 当前费项的级数口径可用。记下来供后台巡检判断
+            // "记忆里的 picks 是否选满"（YktAlertReceiver 不能硬发残缺参数）。
+            YktAlertStateStore.writeExpectedLevels(context, accountKey, detail?.levels?.size ?: current.picks.size)
             // 界面拉到数就顺手判一次提醒：用户手动查到的余额与后台巡检应口径一致。
             // 阈值按量纲取（金额/度数各自独立），单位未知时不判 —— 见 YktAlertSettings.thresholdFor。
             if (balance != null) {
@@ -1085,11 +1097,21 @@ private fun ElectricityCard(
             !needsSelection && selection.feeItemId.isBlank() ->
                 HintText("请先选择电费项目。")
 
-            needsSelection && !selection.isQueryable ->
+            needsSelection && !selection.isFullySelected(levels.size) ->
                 HintText(
-                    "请依次选择" +
-                        levels.joinToString("、") { it.name.ifBlank { "第${it.level}级" } } +
-                        "后查询。"
+                    // 已选一部分但没选满时说清"还差哪几级"，而不是笼统地让用户全部重来 ——
+                    // 对账截短记忆后（学校改级定义）这是最常见的状态。
+                    if (selection.picks.isEmpty()) {
+                        "请依次选择" +
+                            levels.joinToString("、") { it.name.ifBlank { "第${it.level}级" } } +
+                            "后查询。"
+                    } else {
+                        val done = selection.picks.size
+                        "还需选择" +
+                            levels.drop(done)
+                                .joinToString("、") { it.name.ifBlank { "第${it.level}级" } } +
+                            "后查询。"
+                    }
                 )
 
             balance == null -> HintText("已连接到电费接口，但未能识别余额数值，请稍后重试。")
