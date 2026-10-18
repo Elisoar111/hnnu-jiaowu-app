@@ -4,6 +4,65 @@
 > 自 1.0.68 起，每个版本的更新日志以 `release-notes/vX.Y.Z.md` 为唯一数据源，由 CI 扇出到本文件、GitHub Release 与应用内更新提示。
 > 1.0.67 未发布：该 tag 的流水线在版本号校验步骤失败，未产出任何 Release，内容顺延至 1.0.68。
 
+## [1.3.0] - 2026-10-18
+
+### 新增
+
+- **考前提醒改为后台巡检时顺带刷新考试列表**（`academic/ExamWatcher`）：此前 `ExamReminderScheduler.reconcile` 只在打开「成绩 → 考试」页或开机读缓存时被调用，从不点开那个 Tab 的用户本地永远没有考试数据，考前提醒等于不存在。现在挂在已有的 12 小时消息巡检上（不新增闹钟），写入同一份考试缓存并重排提醒；6 小时节流 + 2.5 秒单次上限，排在消息巡检**之前**以免被其预算饿死；失败时按本地缓存重排一次。
+- **「继续上次练习」**：退到首页后回来能接着刷（`review/PracticeResume`）。存档只保留"重建会话所需的最小信息 + 作答快照"，题目仍由同一组参数确定性重抽；新开一轮或交卷即作废。`PracticeLaunch` 的编解码从 Activity 私有函数收进数据类，供 saved state 与本地存档共用。
+- **题库题目搜索**：逐题编辑页支持按题干 / 章节 / 答案字母过滤，并显示命中数。
+- **错题本导出**：把当前筛选与排序后的那一批写成纯文本，走系统分享（`ACTION_SEND`）。
+- **限时考试中途不揭晓**：判分后只提示「已记录作答」，对错与解析留到交卷后 —— 考试中看到"答错了 + 正确答案"等于提前泄题。
+- **答题卡按章分组**：多章节题库里按「首次出现」顺序插入章节分隔行（纯函数 `answerSheetSections`，格子下标与题目下标严格一致），300+ 题时不用再靠翻几十屏找题。
+- **AI 追问可跨题保留上下文**：AI 设置页新增开关（默认关）。开启后换题不清空问答历史，可以就着上一题的讲解继续追问；代价是每题多带一段历史 token。
+- **跨题库总错题本**：首页「全部错题」入口，不必先想这道错题在哪个题库里。
+- **题库支持 Excel / CSV 导入**：题库仓库新增「从 Excel / CSV 导入」。表头认中英文别名（题干 / 题目 / stem…），选项可以写成一列用 | 分隔，也可以分成 A/B/C/D 四列；题型不写时按答案长度推断单选还是多选。逐行校验，跳过的行会带行号报出来。
+
+### 修复
+
+- **课程提醒开了却从不响**：提醒用的「时间基准」缺了节次时间。`ScheduleRoute` 首次回写日历只给 `firstWeekDate`，而补救迁移 `ScheduleCalendarStore.migrateLegacy` 带着「已有第一周日期就整条跳过」的守卫，于是 `periodStarts/periodEnds` 永远补不进来；`CourseReminderPlanner` 取不到 `periodStarts[startPeriod]` 就返回 `NeedsTime`，**一条闹钟都不排**。修法：`ScheduleReminderScheduler.timeBase` 按 `ScheduleRepository` 的口径合并「设置里的节次时间打底、日历里存过的值覆盖」，老用户下一次 reconcile 即自动恢复；`migrateLegacy` 从「有日期就跳过」改成合并。
+- **「通知发不出去，事件却已被消费」——四条推送链路的同类顺序缺陷**：共同形态是「先记账、后确认送达」，通知权限被关时把事件静默吞掉，用户重新打开通知也补不回来。逐条改为先确认送达再推进状态：成绩推送（`GradeWatcher`）不推进基线、教务消息（`MessageCenterNotifier`）不写已播报集合、电费提醒（`YktAlertNotifier`）的 `lastNotifiedAtMillis` 只在真正发出后落盘、考试提醒（`ExamReminderScheduler`）把账号归属判定与 notify 成功都挪到消费计划之前。
+- **题库练习：同一道题在一次会话里被重复记入数据库**。作答是"判分即落库"，而「再想一下」只撤回内存判定、不回滚已写入的 `records` / `wrong_book` —— 「确认答案 → 再想一下 → 再确认」会把同一题记两遍，`wrong_book.streak` 被单次会话刷满（点三次就能刷成「已掌握」），详情页正确率因 `SUM(correct_count)` 超过 `COUNT(*)` 而恒等于 100%。修法：`PracticeSession.markRecorded()` 本轮去重，判据随快照存取。
+- **题库练习：刚答错的题被排到第二天**。`recordAnswers` 用 `dueAt(masteryLevelOf(0, wrongCount), now)` 计算到期时间，而该函数对"刚入册"返回 Learning（间隔 1 天）—— 于是刚做完错题的人打开错题本看到「今日待复习 0 题」。改为答错即 `due_at = 0`（立即到期），与 `ReviewScheduling` 里 "New → 立即进入复习队列" 的设计意图一致。
+- **题库练习：作答快照每次点选项就全量重新编码**（320 题连答 320 次 ≈ 5 万次字符串拼接）。改为 250ms 去抖，并把"恢复"与"保存"两个效果的执行顺序解耦。
+- **题库练习：正确率每次重组全量重算**。`PracticeSession` 改为增量维护 `correctCount`。
+- **题库练习：`daily_stats` 空壳表残留**。`DB_VERSION` 5 → 6，升级时 `DROP TABLE IF EXISTS daily_stats`。
+
+### 新增（续）
+
+- **错题复习提醒**（`review/ReviewReminderScheduler`）：每天 20:00 检查一次错题本，有到期题就发通知。默认关闭 —— 这是新增的一条打扰，由用户主动打开。按**固定钟点**而非固定间隔排期（固定间隔会随作息偏移一天天漂），复用项目已有的链式单次闹钟模式。
+- **数据备份与恢复**（`backup/BackupManager`）：「我的 → 数据与安全」可导出/还原一个 zip，含题库、答题记录、错题本、收藏、自定义课程与各项设置。**不含**账号密码、会话 Cookie、AI API Key —— 备份是明文文件，会离开设备。恢复走 SAF，不需要存储权限。
+- **课表直接写入系统日历**（`utils/ScheduleCalendarWriter`）：与「导出 .ics」并存。优先写本地日历（写进账户日历会触发同步上传）；事件带「校园助理」标记，重复导入只清理带标记的那些；不设日历提醒（课表提醒由应用自己的闹钟负责）。
+- **电费提醒支持度数型费项**：金额与电量各有独立阈值（默认 20 元 / 20 度），按费项实际返回的单位自动选用。单位认不出来时不提醒 —— 把 312 度当成 312 元会得出「余额充足」的结论，然后宿舍就断电了。
+- **隐私政策**（`assets/privacy_policy.json`）：11 章，逐条对应 Manifest 的 14 项权限与全部网络出站域名。写明「数据只存在本机」「无第三方 SDK」「AI 请求只发往 DeepSeek 且不含成绩学号」「备份不含凭据」。
+- **AI 悬浮球显示「AI」字样**：原先用对话气泡图标，在刷题场景里更像「反馈」或「聊天室」，看不出是「问 AI 这道题」。
+
+### 修复（续）
+
+- **成绩订阅：列表位移导致整批误报**。`gradeIdentity` 把该行在列表里的**下标**拼进了身份，而教务列表是插入式的 —— 重修/补考成绩插到中间，其后每一行下标 +1，全部被当成「新成绩」播报一遍（30 门课里插一门补考 = 通知「你有 27 门新成绩」）。改为「课程稳定字段 + 组内出现序号」，列表位移不再改变身份。
+- **会话 Cookie 明文落盘**。它是等同于登录态的凭据（拿着 JSESSIONID 就能读学号、成绩、课表、余额，不需要密码），原先直接写进 `course_selector_prefs`，账号列表 JSON 里还有每个账号一份。改为 AES/GCM 加密存储（复用系统密钥库），并主动删除老版本的明文行；退出登录与删除账号时一并清除。
+- **后台刷新拿到的续期 Cookie 从未落盘**。教务每访问一次可能下发新 Cookie，后台巡检（消息中心/成绩/考试）走的是内存 CookieJar，新值只留在内存 —— 进程下次冷启动会从持久化恢复出一张**可能已作废的旧票**，表现为「刚收到消息通知，重进却提示登录失效」。新增 `AcademicCookieSync`，用带 token 校验的写入（慢请求返回时若会话已换则整笔丢弃）。
+- **WebView 登录页允许混合内容**。三处 WebView（教务登录、一卡通登录、一卡通账单）一律用 `MIXED_CONTENT_COMPATIBILITY_MODE`，对承担凭据输入的页面是实打实的风险。改为**跟着主文档 scheme 走**：https 最严（禁止 http 子资源），http 站点才放宽（否则整页白屏）。
+- **一卡通记忆的选择可能与新配置错位**。原先只比「级数」，挡不住「级数没变但级的含义变了」（楼栋→单元→房间 改成 园区→楼栋→房间）。旧的 `(code, value)` 被原样传给接口，等于拿别人的房间号查电费。改为逐级比对 `code`，遇首个不一致即截断。
+- **CAS 手机登录并发无锁**。`execution` / `sessionValue` 无同步，两个协程并发进入会互相覆盖，先拿到的验证码绑在作废会话上。加锁并把「建会话 → 校验验证码 → 提交」整段纳入临界区。
+- **7 处空 catch 静默吞异常**。`GradesRoute` 两处在解析成绩详情，异常被吞后返回**半截列表** —— 用户看到的是「少了几门课」而不是报错。全部补上带条数的日志。
+
+### 变更
+
+- **题库练习逻辑层性能与可测性**：`recordAnswers` 改为批量预读既有状态（每题 2 次查询 → 每库各 1 次）；乱序 / 错题优先抽题改为「先只取标识符排序、再回读选中的题」，不再把整库题干读进内存；首页概览的 6 条独立查询合并为 1 条；`AiConfigStore` 增加进程内解密结果缓存；抽题的到期判定支持注入 `now`；复合键统一收敛到 `ReviewQuestion.compositeKey`。
+- **题库练习测试基建**：引入 Robolectric（仅测试依赖），为 `ReviewDatabase` 补 25 个真实 SQLite 用例 —— 覆盖抽题三模式与 LIMIT、连对掌握、批量落库、概览口径、题库取出与排序、逐题编辑、脏章节名等此前零覆盖的路径。`ReviewDatabase` 也顺势拆开：表结构与迁移进了 `ReviewSchema.kt`，行读取与批量回读进了 `ReviewDbRows.kt`，主文件从 1,225 行降到 982 行；练习页的临时开关状态收进 `PracticeUiState`，"哪些会随进程死亡恢复、哪些只是页面开关"从代码上一眼可辨。
+### 变更（续）
+
+- **字体子集化**：三个苹方字重各 10.9 MB → 2.2 MB（GB2312 全集 + 项目用字 + 标点，共 7054 字符，零缺字）。APK 从 26.5 MB 降到 **9.8 MB**。
+- **targetSdk 34 → 35**：升级前逐项核查 Android 15 的强制变更（edge-to-edge 已由 `CourseSelectorTheme` 统一处理、无前台服务、native so 已 16 KB 对齐、混合内容已按站点分别处理）。
+- **启动期预热 SharedPreferences**（`utils/PrefsWarmer`）：后台线程（低优先级，不与首帧抢 CPU）把 11 个启动/首屏要用的 prefs 先解析一遍，把首次读盘从主线程挪走。凭据类不预热（要碰 Keystore，反而更慢）。
+- **大列表改为分块渲染**（`ui/system/ChunkedList`）：一卡通账单（可达上千笔）与空闲教室（「加载更多」会累积）改为一次最多组合 40 项。**不换 LazyColumn** —— 外层已是 `verticalScroll`，同轴嵌套会崩。
+- **PDF 打开移到 IO 线程**：`ParcelFileDescriptor.open` + `PdfRenderer(...)` 原先在 `DisposableEffect`（主线程）里，大 PDF 会吞掉首帧。
+- **拦截器 peekBody 改两段式**：原先每条成功 HTML 响应都 peek 256 KB。改为先看 8 KB 判登录表单特征，命中疑似失效才读大块。
+- **资源收缩开启**（`shrinkResources true`）：`resources.arsc` 1,450,272 → 939,312。
+- **诊断基建**：Debug 构建装 StrictMode（违反策略直接打完整调用栈）；release 装崩溃兜底（本地存最近 5 份，接在「导出日志」里，不上报任何数据）。
+- **JaCoCo 覆盖率报告**：`./gradlew :app:jacocoTestReport`。首次报告揭示总体行覆盖率 14%（纯逻辑层 43%~95%，UI 层接近 0）。
+- **测试从 1,227 增至 1,478**：新增 Robolectric 基座；`ReviewDatabase` 25 个真实 SQLite 用例；`xuegong` 从零覆盖到 32 个用例（此前 1,109 行零测试）；`SiteConnectivityProbe` 12 个；`AccountKeys` 19 个；以及成绩身份、复习提醒时间、悬浮球、备份边界、隐私政策、课表事件展开等。
 ## [1.2.7] - 2026-10-05
 
 ### 新增
@@ -25,6 +84,7 @@
 
 - **AI 答疑收缩为只支持 DeepSeek**：`review/AiEndpoint` 重写为一份常量，删除 `AiProfile` / `AiFailover` 与手填端点；`AiConfigStore` 改单配置，Key 走 AndroidKeyStore AES/GCM 加密。思考过程可折叠 + 用量显示。
 - **练习页重构**：1076 行的 `PracticeScreen.kt` 拆成 `PracticeAnswerSheet` / `PracticeSummaryPane` / `PracticeAiController` / `PracticeExamCountdown` 四份；顺带修五处体验——进度条改显作答进度、题间切换加滑动过渡并滚回顶部、倒计时下沉为独立每秒重组的小字、自动下一题开关并入答题卡入口条。
+- **「问 AI」改造为液态玻璃悬浮球 + 讲解弹窗**：新增 `PracticeAiFloatingBall`——常驻练习页的可拖拽玻璃圆球（`adaptiveGlassChip` 真折射芯片材质），拖拽跟手、松手贴边吸附（「减弱动效」时直接落位），生成中球上带进度环。点球弹出 `AiExplainDialog`（`SystemDialog` 玻璃弹窗），答案区独立滚动、输入框固定底部，未配 Key 给「去配置 AI」直达设置页。删除三处被取代的旧交互：题卡「问 AI」按钮行、内嵌 `AiExplainPanel`、模块根层「AI 正在生成」全局胶囊。
 - **判分按钮统一「确认答案」**（此前多选叫「提交答案」）。
 - **按钮排版统一**：`ReviewButtons` 抽出 `ConfirmButtonHeight`(48dp) / `SecondaryButtonHeight`(42dp)，`SecondaryAction` 加 `height` 形参 —— 修掉主/次按钮并排时底部参差（`Row` 默认 `Alignment.Top`）。
 - **斩题彻底下线**：`onUpgrade` v4→v5 `DROP TABLE slashed`，删 `SlashPolicy.kt` 与相关 DB 方法，`PracticeLaunch` 编码收成 8 字段并严格校验字段数。
@@ -32,10 +92,38 @@
 - **删除「查看 → 统计」**入口与整页，连只服务于它的 `daily_stats` 表一并删除（顺带发现那条写入本来就是坏的：`OR REPLACE` 撞主键使 `answered` 恒为 1）。
 - **交卷补判**：`PracticeSession.judgePending()` 把"选了没确认"的题一并判分并落库（三条边界：只补判有作答的、已判过的不动、背题恒空）；删除已无独立行为的 `resultForTimeout()`。
 - **作答落库批量单事务**（`recordAnswers(List<AnswerRecord>)`）+ 失败 `GlassToaster` 提示，此前交卷补判 N 题起 N 个事务、IO 抛错会静默丢记录。
+- **考前提醒改为后台巡检时顺带刷新考试列表**（新增 `academic/ExamWatcher`）：此前 `ExamReminderScheduler.reconcile` 只在用户打开「成绩 → 考试」页或开机读缓存时被调用，从不点开那个 Tab 的用户本地永远没有考试数据，考前提醒等于不存在。现在挂在已有的 12 小时消息巡检上（不新增闹钟），写入同一份 `GradesCacheManager` 考试缓存并重排提醒；6 小时节流 + 2.5 秒单次上限，排在消息巡检**之前**以免被其预算饿死；失败/超时静默跳过，并按本地缓存重排一次。
 
 ### 修复
 
+- **题库练习：同一道题在一次会话里被重复记入数据库**。作答是"判分即落库"（防进程被杀丢记录），而「再想一下」只撤回内存判定、不回滚已写入的 `records` / `wrong_book` —— 「确认答案 → 再想一下 → 再确认」会把同一题记两遍。后果：`wrong_book.streak` 被单次会话刷满（**点三次就能把一道题刷成「已掌握」**，实际只答对一次），详情页正确率因 `SUM(correct_count)` 超过 `COUNT(*)` 而恒等于 100%。修法：`PracticeSession.markRecorded()` 做本轮去重，判据随快照存取，进程重建后同样生效。
+- **题库练习：作答快照每次点选项就全量重新编码**。`exportState()` 把整轮作答拼成 JSON 再写回 `rememberSaveable`，320 题的题库连答 320 次就是 O(n²) 的字符串拼接。改为 250ms 去抖（连点只编码最后一次），并把"恢复"与"保存"两个效果的执行顺序解耦（此前靠声明顺序保证）。
+- **题库练习：正确率每次重组全量重算**。`PracticeSession` 改为增量维护 `correctCount`（`judge` / `unjudge` / `judgePending` / `restoreState` 四处分別更新），`result()` 与 `accuracy` 都读缓存，不再每次遍历全库跑 `judgeAnswer`。
+- **题库练习：`daily_stats` 空壳表残留**。统计页下线后读写代码已删，但老安装的库里表还在。`DB_VERSION` 5 → 6，升级时 `DROP TABLE IF EXISTS daily_stats`。
+- **横向审查遗留问题第二批全部修复**（范围与明细见 `docs/后续更新计划.md`，该文档同时收录剩余技术债与功能演进方向）：
+  - **更新包签名一致性校验**：`AppDownloader.isTrustedUpdate` 比对下载包与当前应用签名，下载完成 / 「已下载直接安装」/ 拉起安装器三处生效 —— 发布通道账号被盗时假包会被提前拦截删除，而不是等用户走到系统安装器才报错。
+  - **二课扫码静默失败**：从列表页顶栏扫码时 `failDetail` 对 null 详情是 no-op，所有失败毫无反应 —— 补 Toast 兜底；「我的签到码」改为每 10 秒重算（文案承诺的动态码此前是静态的，弹窗开久即过期）；本人 userId 拿不到时不再误判「代他人签到」，改提示重试；申报表单必填项本地拦截（此前空字段原样上报），且表单值改 `mutableStateListOf`（普通 Array 不触发重组，校验提示会停在旧值）；「加载更多」按钮防连点；切 Tab 清空搜索关键词；DeepLink 的 host 判定从 `contains` 收紧为精确匹配。
+  - **考级报名**：类别快速切换加请求序号守卫（旧请求返回整包丢弃，不再出现「A 类别的 chip 挂 B 类别的项目」）；确认弹窗提交中锁定（按钮「提交中…」、禁取消/禁点外部关闭）。
+  - **空闲教室**：查询/加载更多加代际守卫（旧翻页不再把旧条件的第 N 页追加进新结果），查询中禁用翻页按钮；切换学期整组重置周次/节次/楼号（旧学期勾选条件在新学期可能不可查）。
+  - **一卡通**：首屏 5 个串行请求改并行（详情→读数一路，汇总、流水各一路，首屏约省一半）；切月不再重拉明细（账单接口没有日期参数，此前白打一个请求还把展开的明细弹回第一页）；令牌采集的手工 JSON 反转义改 `JSONTokener`。
+  - **其它**：教务网页清 Cookie 后不再等 removeAllCookies 回调加载页面（个别 WebView provider 不回调会永远白屏）；附件缓存文件名从 `hashCode` 改 SHA-256 指纹（防不同附件互撞缓存）；「导出日志」的 logcat 拷贝与落盘挪出主线程；二课活动列表的时钟读取与分区、`formatRange` 的三个 SimpleDateFormat 都加 remember/缓存（列表滚动热点）；申报材料上传先查声明大小再读内存（几百 MB 的"图片"不再整读进内存才拒绝）。
+- **全应用横向代码审查修复一批跨模块 bug**（2026-10 用户要求「检查所有模块的问题和优化方案」，审查覆盖题库练习 / 教务与账号 / 一卡通 / 二课 / 考级 / 空闲教室 / 桌面卡片，课表域做了定向扫描未见高风险项）：
+  - **WebView 同进程二次设数据目录后缀崩溃**：教务网页（"academic"）与一卡通两个网页（"ykt"）各持一个静态 `suffixConfigured`，同一次进程会话先后打开两类页面时第二次 `setDataDirectorySuffix` 必抛 `IllegalStateException` 崩掉 Activity。新增 `utils/WebViewDataDir` 进程级守护（先到先得 + runCatching），三处调用点统一接入。
+  - **从练习页去 AI 设置再返回、作答位置回卷到第 1 题**：`when` 切页时 PracticeScreen 离开组合，`rememberSaveable` 随组合注销——悬浮球把「没配 Key → 去配置」变成了必经路径，等于一配 Key 就被踢回第一题。`ReviewFlow` 挂 `SaveableStateHolder` 按页面 key 隔离保存容器（练习页 key 带开练时刻，新开一轮不带上轮状态）。
+  - **消息后台巡检无超时、可被系统腰斩**：`MessageCheckReceiver` 的巡检（消息 2 桶×10 页 + 成绩翻页）超出 goAsync 约 10 秒预算后进程被回收、本轮静默作废。包进 `withTimeoutOrNull(9_000)`，与更新/电费接收器同款。
+  - **会话过期不落盘**：`UserManager.setLoggedIn(false)` 只改内存，杀进程重开后拿死 Cookie「欢迎回来」再撞一轮失效探测。登出方向同样 `saveLoginState()`。
+  - **课表内存缓存跨账号串显**：`CourseCacheManager` 三个内存字段无同步，JMM 重排下可能读到「新账号 key + 旧账号课程列表」，全部加 `@Volatile`。
+  - **消息/成绩缓存的读盘写盘跑主线程**：`MainActivity` / `SettingsRoute` / `MessageCenterScreen`（读缓存、写已读、一键已读）与 `WidgetBoardRoute`（成绩、二课缓存在 `remember` 组合期同步读）全部改 `LaunchedEffect` + `Dispatchers.IO`。
+  - **悬浮球旋转/分屏后悬在屏幕外**：容器尺寸变化时把球夹回新的合法范围（`onSizeChanged`）。
+  - **电费提醒节流状态没落盘**：`YktAlertStateStore` 补 `lastNotifiedAtMillis` 读写——此前读回恒为 0，同余额 24h 节流形同虚设，会退化成每 6 小时一条轰炸。
+  - **`pickQuestions` 的 `limit` 在乱序/错题优先分支被忽略**：重排后补 `take(limit)`（此前谁传 limit 都会静默抽全库）。
+- **课程提醒开了却从不响**：提醒用的「时间基准」缺了节次时间。`ScheduleRoute` 首次回写日历只给 `firstWeekDate`，而补救迁移 `ScheduleCalendarStore.migrateLegacy` 带着「已有第一周日期就整条跳过」的守卫，于是 `periodStarts/periodEnds` 永远补不进来；`CourseReminderPlanner` 取不到 `periodStarts[startPeriod]` 就返回 `NeedsTime`，**一条闹钟都不排**。修法：`ScheduleReminderScheduler.timeBase` 按 `ScheduleRepository` 的口径合并「设置里的节次时间打底、日历里存过的值覆盖」，老用户下一次 reconcile 即自动恢复；`migrateLegacy` 从「有日期就跳过」改成合并（补齐缺失节次、不覆盖用户调过的值）。
 - **一卡通缴费提醒只在打开页面时才触发**：根因是电费巡检用 `setInexactRepeating` 而 `CourseApplication` 每次冷启动都 `schedule`，`FLAG_UPDATE_CURRENT` 把触发时刻一并重置 —— 后台巡检从未触发过。电费 / 消息 / 更新检查三条链路改为「链式单次闹钟 + 持久化下一轮触发时刻」，触发后自我续期；电费巡检加密到六小时一次并按余额下降节流（`YktAlertPolicy`）；更新检查补齐 BOOT_COMPLETED。
+- **「通知发不出去，事件却已被消费」——四条推送链路的同类顺序缺陷**：这组缺陷的共同形态是「先记账、后确认送达」，通知权限被关时直接把事件静默吞掉，用户重新打开通知也补不回来。逐条改为「先确认送达、再推进状态」：
+  - **成绩推送**（`GradeWatcher`）：`postNotification` 返回布尔，未送达时**不推进基线**，下一轮巡检会重新播报这批成绩；
+  - **教务消息推送**（`MessageCenterNotifier`）：同上，未送达时不写已播报集合；
+  - **电费提醒**（`YktAlertNotifier`）：`YktAlertStateStore` 的 `lastNotifiedAtMillis` 只在真正发出后才落盘 —— 此前发不出去也照样写，24h 同额节流会把这条提醒直接压掉一天；
+  - **考试提醒**（`ExamReminderScheduler`）：把账号归属判定与「真的 notify 成功」都挪到 `savePlans` **之前**，一次性计划不再在送不出去的情况下被摘掉。
 - **系统返回键 / 侧滑手势未接进模块内导航**：`ReviewActivity` 挂 `BackHandler`；横向排查 14 个 Activity 后另修公告中心与消息中心的详情页。
 - **乱序抽题在非数字题号下退化成顺序扫描**：SQL 的 `ORDER BY (qid || bank_id) * …` 在非数字 qid 上整个变 0，排序移到 Kotlin 层（`review/QuestionOrder.kt`，`String.hashCode` + 字典序决胜键）。
 - **`PracticeSession.key()` 字符串模板写错**：`"${q.bankId}::$q.id"` 把整道题的 `toString()` 当 map key，作答快照膨胀几十倍；改为 `"${q.bankId}::${q.id}"`。
