@@ -591,14 +591,16 @@ fun MainScreen(
     // 版本更新：冷启动后自动查一次（UpdateCenter 内 6 小时节流），有新版就弹
     // 液态玻璃更新弹窗，用户点一下即可在应用内下载安装。
     // 未登录 / 演示模式不打扰 —— 更新与登录态无关，但启动瞬间弹窗会顶掉欢迎提示。
-    LaunchedEffect(currentAccountStorageKey, isDemoMode) {
+    LaunchedEffect(currentAccountStorageKey, isDemoMode, foreground) {
         // 后台巡检闹钟：让 App 没打开时也能发现新版本（发现后发系统通知）。
         // 与登录态无关，所以排在 isDemoMode 判断之前；同一个 PendingIntent 幂等，重复排没有副作用。
         com.hnnujw.course.network.UpdateCheckScheduler.schedule(context)
         if (isDemoMode) return@LaunchedEffect
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            com.hnnujw.course.network.UpdateCenter.checkQuietly(context)
-        }
+        // 直接调用，不必再包 withContext(Dispatchers.IO)：网络请求已在
+        // AppUpdateChecker.check 内部切到 IO。包一层反而会把 UpdateCenter.pending
+        // 这次 Compose 状态写带离主线程 —— 界面不重组，弹窗永远不出现，
+        // 表现就是"只有手动点检查更新才弹"（2026-10-19 修）。
+        com.hnnujw.course.network.UpdateCenter.checkQuietly(context)
     }
     val pendingUpdate = com.hnnujw.course.network.UpdateCenter.pending
 

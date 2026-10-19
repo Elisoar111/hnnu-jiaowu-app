@@ -86,6 +86,14 @@ fun AppUpdateDialog(
         mutableStateOf(AppDownloader.existingApk(context, info.versionName))
     }
     var hint by remember(info.versionName) { mutableStateOf<String?>(null) }
+    /**
+     * 是否遇到**真的走不通**的安装障碍（如系统没有可用的安装器）。
+     *
+     * 与 [hint] 分开记：`hint` 只是"上屏一句话"，其中"请允许安装未知应用"
+     * 是**用户能自己解决**的（去系统设置授权后回来再点），不能因为它就把
+     * 强制更新的弹窗放成可关闭 —— 否则最常遇到的那个拦路石正好成了后门。
+     */
+    var blockedPermanently by remember(info.versionName) { mutableStateOf(false) }
     // 下载协程句柄：「取消下载」要真的把传输掐掉，而不是只把界面关掉留个孤儿任务
     var downloadJob by remember(info.versionName) { mutableStateOf<Job?>(null) }
 
@@ -110,6 +118,9 @@ fun AppUpdateDialog(
                     readyApk = null
                     AppDownloader.reset()
                 }
+                // 系统连安装器都给不出来：这条路确实走不通，强制更新才允许退出弹窗，
+                // 否则用户会卡在一个关不掉也点不动的框里。
+                blockedPermanently = true
                 hint = result.message
             }
         }
@@ -161,7 +172,7 @@ fun AppUpdateDialog(
      * 用户会卡在一个关不掉、也点不动的框里，比不弹这个版本还糟。所以只要真的
      * 无路可走，就把他放出去。
      */
-    val stuck = directApkUrl == null || failed != null || hint != null
+    val stuck = directApkUrl == null || failed != null || blockedPermanently
     val dismissible = !info.forceUpdate || stuck
 
     SystemDialog(
