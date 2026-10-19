@@ -44,14 +44,7 @@ class AcademicAuthenticatedSmokeTest {
                 if (result.status != AcademicStatus.SUCCESS) throw AcademicException(result.status, "Imported login was not accepted")
                 result.status.name
             }
-            probe("courses") {
-                val context = adapter.loadCourseContext()
-                report.put("scopes", context.scopes.size)
-                val courses = adapter.listCourses(context, CourseQuery(pageSize = 100))
-                report.put("sections", courses.firstOrNull()?.let { adapter.listSections(it).size } ?: 0)
-                courses.size
-            }
-            probe("selected") { adapter.selected(adapter.loadCourseContext()).size }
+            // 选课相关探针（courses / sections / selected）已随选课协议层删除（2026-10-19）。
             probe("schedule") {
                 val catalog = study.catalog()
                 report.put("currentTerm", catalog.currentTerm.id)

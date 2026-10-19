@@ -117,9 +117,7 @@ class AcademicPasswordDeviceTest {
                 println("Password login and Cookie validation passed: system=$system, captchaRounds=$revision")
                 return@runBlocking
             }
-            val courseContext = adapter.loadCourseContext()
-            val courses = if (courseContext.scopes.isEmpty()) emptyList() else adapter.listCourses(courseContext, CourseQuery(pageSize = 100))
-            val selected = adapter.selected(courseContext)
+            // 选课相关的只读探针（scopes / courses / selected）已随选课协议层删除（2026-10-19）。
             val study = AcademicGatewayFactory.createStudy(school, key)
             val catalog = study.catalog()
             val schedule = study.schedule(catalog.currentTerm)
@@ -127,7 +125,7 @@ class AcademicPasswordDeviceTest {
             val exams = study.exams(catalog.currentTerm)
             assertTrue("Expected the authorized student's schedule", schedule.isNotEmpty())
             assertTrue("Expected the authorized student's grades", grades.grades.isNotEmpty())
-            println("Password gateway and read-only queries passed: system=$system, captchaRounds=$revision, scopes=${courseContext.scopes.size}, courses=${courses.size}, selected=${selected.size}, schedule=${schedule.size}, grades=${grades.grades.size}, exams=${exams.size}")
+            println("Password gateway and read-only queries passed: system=$system, captchaRounds=$revision, schedule=${schedule.size}, grades=${grades.grades.size}, exams=${exams.size}")
         } finally {
             gateway.clearSensitiveState()
             events.close()

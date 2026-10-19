@@ -51,25 +51,23 @@ class AcademicHttpTransport(
         return bytes
     }
 
-    suspend fun writeGet(url: String, referer: String? = null): AcademicResponse = request("GET", url, null, referer, true, ajax = true)
-
-    suspend fun postForm(url: String, fields: Iterable<Pair<String, String>>, referer: String? = null, write: Boolean = false, ajax: Boolean = false): AcademicResponse {
+        suspend fun postForm(url: String, fields: Iterable<Pair<String, String>>, referer: String? = null, ajax: Boolean = false): AcademicResponse {
         val charset = session.pageCharset ?: runCatching { Charset.forName(school.pageCharset) }.getOrDefault(Charsets.UTF_8)
         val body = FormBody.Builder(charset).apply { fields.forEach { add(it.first, it.second) } }.build()
-        return request("POST", url, body, referer, write, ajax)
+        return request("POST", url, body, referer, ajax = ajax)
     }
 
     suspend fun postBody(url: String, body: RequestBody, referer: String? = null): AcademicResponse =
         request("POST", url, body, referer)
 
-    private suspend fun request(method: String, initialUrl: String, body: RequestBody?, referer: String?, write: Boolean = false, ajax: Boolean = false): AcademicResponse {
-        val response = requestBytes(method, initialUrl, body, referer, write, ajax)
+    private suspend fun request(method: String, initialUrl: String, body: RequestBody?, referer: String?, ajax: Boolean = false): AcademicResponse {
+        val response = requestBytes(method, initialUrl, body, referer, ajax = ajax)
         return AcademicResponse(response.code, response.url, decode(response.bytes, response.contentType), response.headers)
     }
 
     private data class RawResponse(val code: Int, val url: String, val bytes: ByteArray, val headers: Map<String, List<String>>, val contentType: String?)
 
-    private suspend fun requestBytes(method: String, initialUrl: String, body: RequestBody?, referer: String?, write: Boolean = false, ajax: Boolean = false): RawResponse {
+    private suspend fun requestBytes(method: String, initialUrl: String, body: RequestBody?, referer: String?, ajax: Boolean = false): RawResponse {
         var url = initialUrl
         var currentMethod = method
         var redirects = 0
@@ -90,11 +88,7 @@ class AcademicHttpTransport(
                 session.requireActive()
                 if (it.code in 300..399) {
                     val location = it.headers["Location"] ?: throw AcademicException(AcademicStatus.PAGE_CHANGED, "Redirect has no location")
-                    if (write) {
-                        // Never replay a write across a redirect. The caller must verify the
-                        // selected list before deciding whether a retry is safe.
-                        throw AcademicException(AcademicStatus.RESULT_UNKNOWN, "Write request was redirected")
-                    }
+
                     if (currentMethod == "POST") {
                         if (it.code == 307 || it.code == 308) throw AcademicException(AcademicStatus.PAGE_CHANGED, "POST redirect requires a new login")
                         currentMethod = "GET"
@@ -112,17 +106,16 @@ class AcademicHttpTransport(
                 session.requireActive()
                 if (bytes.size > MAX_BODY_BYTES) throw AcademicException(AcademicStatus.PAGE_CHANGED, "Academic response is too large")
                 if (it.code == 401 || it.code == 403) throw AcademicException(AcademicStatus.SESSION_EXPIRED, "登录已失效，请重新登录")
-                if (it.code == 429 || it.code >= 500) throw AcademicException(if (write && it.code >= 500) AcademicStatus.RESULT_UNKNOWN else AcademicStatus.NETWORK_RETRYABLE, "教务系统暂时不可用（HTTP ${it.code}），请稍后重试")
+                if (it.code == 429 || it.code >= 500) throw AcademicException(AcademicStatus.NETWORK_RETRYABLE, "教务系统暂时不可用（HTTP ${it.code}），请稍后重试")
                 return RawResponse(it.code, it.request.url.toString(), bytes, it.headers.toMultimap(), it.headers["Content-Type"])
                 }
             } catch (e: IOException) {
                 currentCoroutineContext().ensureActive()
-                if (!write && readRetries++ < 1) {
+                if (readRetries++ < 1) {
                     delay(250)
                     continue
                 }
-                val status = if (write) AcademicStatus.RESULT_UNKNOWN else AcademicStatus.NETWORK_RETRYABLE
-                throw AcademicException(status, if (write) "请求中断，结果尚未确认，请先刷新已选课程" else "无法连接教务系统，请检查网络或稍后重试", e)
+                throw AcademicException(AcademicStatus.NETWORK_RETRYABLE, "无法连接教务系统，请检查网络或稍后重试", e)
             }
         }
     }

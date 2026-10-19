@@ -29,12 +29,8 @@ class AcademicLiveSmokeTest {
                 report.put("login", login.status.name)
                 if (login.status == AcademicStatus.SUCCESS) {
                     report.put("identityVerified", login.studentId.isNotBlank())
-                    val context = adapter.loadCourseContext()
-                    report.put("scopes", context.scopes.size)
-                    val courses = adapter.listCourses(context, CourseQuery(pageSize = 100))
-                    report.put("courses", courses.size)
-                    report.put("sections", courses.firstOrNull()?.let { adapter.listSections(it).size } ?: 0)
-                    report.put("selected", adapter.selected(context).size)
+                    // 选课相关的只读探针（scopes / courses / sections / selected）已随
+                    // 选课协议层删除（2026-10-19）；这里只验证登录后的身份读取。
                     report.put("readOnlyChain", "SUCCESS")
                 }
             } catch (e: Exception) {

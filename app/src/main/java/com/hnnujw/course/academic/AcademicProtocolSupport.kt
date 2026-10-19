@@ -173,38 +173,11 @@ internal abstract class BaseAcademicAdapter(
         val fallback = parseName(org.jsoup.Jsoup.parse(menu.text, menu.url))
         return identity.first.ifBlank { fallback.first } to fallback.second
     }
-    protected fun check(context: CourseContext) {
-        if (context.sessionEpoch != session.epoch) throw AcademicException(AcademicStatus.SESSION_EXPIRED, "Course context belongs to an expired session")
-    }
+    // 选课专用的 check/scope/offer/section/selected 解析已随选课协议层删除（2026-10-19）。
 
     protected suspend fun <T> serial(block: suspend () -> T): T =
         if (system.serial) session.withProtocolLock(block) else block()
 
-    protected fun scope(context: CourseContext, id: String): CourseScope =
-        context.scopes.firstOrNull { it.id == id } ?: throw AcademicException(AcademicStatus.PAGE_CHANGED, "Course scope is no longer available")
-
-    protected fun offer(json: JSONObject, scopeId: String, idNames: Array<String>): CourseOffer {
-        val id = AcademicJson.string(json, *idNames).ifBlank { AcademicJson.string(json, "kch", "kcid", "jx0404id") }
-        return CourseOffer(id, AcademicJson.string(json, "kcmc", "kc_mc", "fzmc", "ktmc"),
-            AcademicJson.string(json, "jsxm", "skls", "xm", "jsxx"),
-            AcademicJson.string(json, "sksj", "sksjmc"), AcademicJson.string(json, "jxdd", "skdd", "skddyw"),
-            AcademicJson.string(json, "xf"), AcademicJson.int(json, "jxbrl", "capacity", "xkrs"),
-            AcademicJson.int(json, "yxzrs", "yxrs", "selected"), scopeId, AcademicJson.operationFields(json) + mapOf("scopeId" to scopeId, "sessionEpoch" to session.epoch.toString(), "academic_system" to system.id))
-    }
-
-    protected fun section(json: JSONObject, course: CourseOffer): CourseSection {
-        val id = AcademicJson.string(json, "do_jxb_id", "jxb_id", "jx0404id", "jx02id", "kcid", "kch")
-        return CourseSection(id, course.stableId, AcademicJson.string(json, "jxbmc", "ktmc", "fzmc"),
-            AcademicJson.string(json, "jsxm", "skls", "xm", "jsxx"), AcademicJson.string(json, "sksj", "sksjmc"),
-            AcademicJson.string(json, "jxdd", "skdd"), AcademicJson.int(json, "jxbrl", "capacity"),
-            AcademicJson.int(json, "yxzrs", "yxrs", "selected"), AcademicJson.fields(json))
-    }
-
-    protected fun selected(json: JSONObject): SelectedCourse = SelectedCourse(
-        AcademicJson.string(json, "do_jxb_id", "jxb_id", "jx0404id", "jx0501id", "kch"),
-        AcademicJson.string(json, "kcmc", "kc_mc", "kc_mc"), AcademicJson.string(json, "jsxm", "skls", "xm"),
-        AcademicJson.string(json, "kch_id", "kcid", "jx02id", "kch"), AcademicJson.string(json, "jxb_id", "jx0404id", "jx0501id"), AcademicJson.fields(json)
-    )
 }
 
 internal fun Document.firstForm(): Element? = select("form").firstOrNull()
