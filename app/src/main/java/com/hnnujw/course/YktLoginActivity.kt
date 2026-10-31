@@ -27,19 +27,29 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.hnnujw.course.manager.AppThemeCoordinator
@@ -49,19 +59,29 @@ import com.hnnujw.course.ui.system.GlassPageScaffold
 import com.hnnujw.course.ui.system.SystemIconButton
 import com.hnnujw.course.ui.system.SystemPrimaryButton
 import com.hnnujw.course.ui.theme.CourseSelectorTheme
+import com.hnnujw.course.ykt.YktCasLogin
 import com.hnnujw.course.ykt.YktClient
 import com.hnnujw.course.ykt.YktStore
 import com.hnnujw.course.utils.WebViewDataDir
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 一卡通的登录页（WebView + 统一身份认证）。
  *
- * ## 为什么必须是 WebView，而不是账号密码表单
+ * ## 两条登录路径：网页（默认）与账号密码（第 17 轮新增）
  *
- * 淮师一卡通前端 `frontInfo.loginType` **只有 `sso`**（wisedu CAS）：
- * 站点根本没有对外暴露账密登录接口，客户端无法"自己换一个 token 出来"。
- * 因此唯一正确的做法是让用户在官方页面上走完 CAS，再从 Cookie 里接管
- * `synjones-auth` —— 与二课那种"`POST /token` 换 Bearer"是完全不同的形态。
+ * 淮师一卡通前端 `frontInfo.loginType` **只有 `sso`**（wisedu CAS），站点没有
+ * 对外暴露账密登录接口（`berserker-auth/oauth/token` 要客户端密钥，实测 401）。
+ * 但 CAS 登录页本身就是**纯明文表单**——页面上的 `userLogin()` 已被校方删成空壳，
+ * 服务端却仍按标准 7 字段处理，所以客户端可以照浏览器那份表单直接提交，
+ * 从会话里接管 `synjones-auth`。这就是 [YktCasLogin] 与右上角
+ * 「账号密码直接登录」弹窗所做的事。
+ *
+ * **WebView 依然是默认路径**：它能承接验证码、二次确认、密码过期改密、
+ * 门户 SSO 等所有网页侧分支。账号密码弹窗只是让"只想快速登一次"的人少开一个
+ * 网页；失败时原样显示 CAS 的文案，并可就地退回网页登录。
  *
  * ## 为什么不做静默登录（重要，别以后又改回去）
  *
@@ -241,6 +261,15 @@ class YktLoginActivity : ComponentActivity() {
     /** 已捕获到令牌：按钮文案随之改变，避免用户反复点。 */
     private var capturedToken by mutableStateOf("")
 
+    /**
+     * false = 原生账号密码表单；true = 内嵌网页登录。
+     *
+     * **默认 true**：这个 Activity 的入口就是「改用网页登录」，用户点进来必须看到真的网页。
+     * 早先默认 false（先给原生表单）导致用户点了「改用网页登录」看到的还是同一张表单
+     * —— 这正是 m01875 第 2 条 bug 的后半句。
+     */
+    private var webMode by mutableStateOf(true)
+
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(AppThemeCoordinator.wrapContext(newBase))
     }
@@ -264,14 +293,44 @@ class YktLoginActivity : ComponentActivity() {
                 BackHandler { navigateBack() }
                 GlassPageScaffold(
                     title = "一卡通登录",
-                    subtitle = Uri.parse(currentUrl).host.orEmpty(),
+                    subtitle = if (webMode) Uri.parse(currentUrl).host.orEmpty() else "统一身份认证",
                     modifier = Modifier.imePadding(),
                     onBack = ::navigateBack,
                     actions = {
-                        SystemIconButton(Icons.Default.School, "一卡通首页", { browser.loadUrl(startUrl) })
-                        SystemIconButton(Icons.Default.Refresh, "刷新网页", { browser.reload() })
+                        if (!webMode) {
+                            SystemIconButton(Icons.Default.School, "改用网页登录", {
+                                webMode = true
+                                browser.loadUrl(startUrl)
+                            })
+                        } else {
+                            SystemIconButton(Icons.Default.AccountCircle, "密码直接登录", {
+                                webMode = false
+                                currentUrl = startUrl
+                                pageError = null
+                            })
+                            SystemIconButton(Icons.Default.School, "一卡通首页", { browser.loadUrl(startUrl) })
+                            SystemIconButton(Icons.Default.Refresh, "刷新网页", { browser.reload() })
+                        }
                     },
                 ) { padding ->
+                    if (!webMode) {
+                        NativeLoginForm(
+                            initialStudentId = YktStore.academicStudentId(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(padding)
+                                .padding(horizontal = 20.dp, vertical = 8.dp),
+                            onOpenWeb = {
+                                webMode = true
+                                browser.loadUrl(startUrl)
+                            },
+                            onSuccess = { auth ->
+                                capturedToken = auth
+                                finishWithToken()
+                            },
+                        )
+                        return@GlassPageScaffold
+                    }
                     Column(
                         Modifier
                             .fillMaxSize()
@@ -317,8 +376,116 @@ class YktLoginActivity : ComponentActivity() {
                 }
             }
         }
+    }
 
-        browser.loadUrl(startUrl)
+    /**
+     * 「账号密码直接登录」弹窗（第 17 轮）。
+     *
+     * 用户 m00932 明确要求"不走 WebView，像登账号密码一样直接登录"。实现见
+     * [YktCasLogin]：它照浏览器那份明文表单直接打 CAS，拿到 `synjones-auth`。
+     *
+     * 行为约定：
+     * - 学号预填 [YktStore.academicStudentId]（当前教务账号的学号），可改；
+     * - 密码不回显、只活在本次组合里，弹窗一关即丢（[YktStore] 也不存密码）；
+     * - 登录中禁用输入与按钮，后台线程跑同步 IO；
+     * - 失败**不关弹窗**，原样显示 CAS 的文案，可改密码重试，也可退回网页登录。
+     */
+    /**
+     * 一卡通原生登录表单（第 18 轮）。
+     *
+     * 用户 m01620 要求"一卡通登录要像一开始登录软件那样"，即进来就是账号密码表单，
+     * 而不是先铺一个网页再让人去右上角找入口。现在它是本 Activity 的**默认页面**，
+     * 网页登录退到「改用网页登录」。
+     *
+     * 行为约定：
+     * - 学号预填 [YktStore.academicStudentId]（当前教务账号的学号），可改；
+     * - 密码不回显、只活在本次组合里，页面一退即丢（[YktStore] 也不存密码）；
+     * - 登录中禁用输入与按钮，后台线程跑同步 IO（[YktCasLogin.login] 是阻塞的）；
+     * - 失败不跳页，原样显示 CAS 的文案，可改密码重试，也可退回网页登录。
+     */
+    @Composable
+    private fun NativeLoginForm(
+        initialStudentId: String,
+        modifier: Modifier = Modifier,
+        onOpenWeb: () -> Unit,
+        onSuccess: (String) -> Unit,
+    ) {
+        var studentId by remember { mutableStateOf(initialStudentId) }
+        var password by remember { mutableStateOf("") }
+        var showPassword by remember { mutableStateOf(false) }
+        var busy by remember { mutableStateOf(false) }
+        var failure by remember { mutableStateOf<String?>(null) }
+        val scope = rememberCoroutineScope()
+
+        Column(
+            modifier = modifier.verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "统一身份认证",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+                text = "用学校的学号与统一身份认证密码直接登录一卡通，不需要打开网页。" +
+                    "密码只用于这一次登录，不会被保存。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = studentId,
+                onValueChange = { studentId = it.trim() },
+                label = { Text("学号") },
+                singleLine = true,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text("统一身份认证密码") },
+                singleLine = true,
+                enabled = !busy,
+                visualTransformation = if (showPassword) VisualTransformation.None
+                else PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            TextButton(onClick = { showPassword = !showPassword }) {
+                Text(if (showPassword) "隐藏密码" else "显示密码")
+            }
+            if (failure != null) {
+                Text(
+                    text = failure.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            SystemPrimaryButton(
+                text = if (busy) "正在登录…" else "登录",
+                onClick = {
+                    if (busy) return@SystemPrimaryButton
+                    busy = true
+                    failure = null
+                    scope.launch {
+                        // 隐藏 WebView 驱动校方真实登录页，必须留在主线程。
+                        val result = YktCasLogin.login(this@YktLoginActivity, studentId, password)
+                        busy = false
+                        when (result) {
+                            is YktCasLogin.Result.Success -> {
+                                Log.i(TAG, "原生 CAS 登录成功，已取得一卡通令牌")
+                                onSuccess(result.auth)
+                            }
+
+                            is YktCasLogin.Result.Failure -> failure = result.message
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !busy && studentId.isNotBlank() && password.isNotEmpty(),
+            )
+            TextButton(onClick = { if (!busy) onOpenWeb() }) {
+                Text("改用网页登录")
+            }
+        }
     }
 
     private fun hintText(): String = if (capturedToken.isNotBlank()) {

@@ -1,5 +1,7 @@
 # 公告按版本下发（versionCode 锁定）、随包内置与已读记录
 
+（该功能已在 2026-10-30 随公告模块一起移除，本文只作历史记录保留。）
+
 日期：2026-09-20
 涉及文件：`app/src/main/assets/announcement.json`、`app/src/main/java/com/hnnujw/course/announcement/*`、
 `scripts/verify_delivery.py`、`scripts/release.sh`、`.github/workflows/release.yml`

@@ -3,6 +3,7 @@ package com.hnnujw.course.ui.route
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,9 +33,7 @@ import com.hnnujw.course.ui.screen.SecondClassActivityCenterUi
 import com.hnnujw.course.ui.screen.SecondClassActivityDetailUi
 import com.hnnujw.course.ui.system.GlassSubpage
 import com.hnnujw.course.ui.system.SystemConfirmDialog
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanIntentResult
-import com.journeyapps.barcodescanner.ScanOptions
+import com.hnnujw.course.ui.system.scan.InAppQrScanner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -183,26 +182,19 @@ fun SecondClassActivityCenterRoute(
     }
 
     // ── 扫码入口（顶栏 / 详情页按钮共用）───────────────────────────────────
-    // 用 zxing 的 ScanContract：输入是 ScanOptions，回调直接拿到 ScanIntentResult
-    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { scanResult ->
-        val text = scanResult.contents
-        if (!text.isNullOrBlank()) {
-            pendingScanPayload = SecondClassScanCodec.parse(text)
-        }
-    }
+    // 第 15 轮：相机扫码改成**应用内**（原来是 zxing 的 CaptureActivity 外跳）。
+    // 外跳那个页面是库自带的白色系统页面，观感跟本应用完全不搭，进入时状态栏还会闪一下。
+    // 现在用同一个库已经依赖的 BarcodeView 自己搭一层全屏扫码，零新依赖。
+    var showInAppScanner by remember { mutableStateOf(false) }
 
     fun launchScanner() {
-        scanLauncher.launch(
-            ScanOptions()
-                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                .setPrompt("对准第二课堂签到码")
-                .setBeepEnabled(false)
-                .setOrientationLocked(true)
-        )
+        showInAppScanner = true
     }
 
     // 「图片导入扫码」：系统相册选图 → 本地解码 → 与相机扫码同一条处理链路。
-    val galleryScanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    // 第 15 轮：GetContent 换成 PickVisualMedia（系统照片选择器），由系统进程代理读图，
+    // 应用侧不再需要任何存储/相册权限，也不用处理「部分授权」那种分支。
+    val galleryScanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch(Dispatchers.IO) {
             val text = runCatching { decodeQrFromImage(context, uri) }.getOrNull()
@@ -216,7 +208,9 @@ fun SecondClassActivityCenterRoute(
     }
 
     fun scanFromGallery() {
-        galleryScanLauncher.launch("image/*")
+        galleryScanLauncher.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
     }
 
     // ── 申报证明材料选图（/import/upload/image 直传）──────────────────────
@@ -896,6 +890,18 @@ fun SecondClassActivityCenterRoute(
         },
         onBindSecondClass = onBindSecondClass,
     )
+
+    // 应用内扫码：居中玻璃弹窗（外壳走 SystemDialog，卡片里是相机预览 + 相册识别/手电筒）。
+    // 先收起扫码弹窗再喂 pendingScanPayload，避免扫码弹窗压着「确认签到」弹窗。
+    if (showInAppScanner) {
+        InAppQrScanner(
+            onDismiss = { showInAppScanner = false },
+            onCodeScanned = { text ->
+                showInAppScanner = false
+                pendingScanPayload = SecondClassScanCodec.parse(text)
+            },
+        )
+    }
 
     // 扫码结果：拦截原因 / 确认提交
     scanDecision?.let { decision ->

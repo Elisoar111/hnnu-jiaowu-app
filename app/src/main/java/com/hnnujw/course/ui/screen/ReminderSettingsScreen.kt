@@ -38,6 +38,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -361,7 +363,7 @@ fun ReminderSettingsScreen(
                         icon = Icons.Outlined.Alarm,
                         iconTint = Color(0xFFFF9F0A),
                         title = "精确闹钟权限",
-                        subtitle = "Android 12 起必须授予，否则闹钟排不出来",
+                        subtitle = "未开启时提醒仍会发，但可能被系统推迟几分钟",
                         trailing = { StatusText(on = permissions.exactAlarms, onText = "已开启", offText = "已关闭") },
                         onClick = {
                             openSystemSettings(
@@ -499,26 +501,32 @@ private fun SemesterToggleButtons(
             com.hnnujw.course.ui.system.SystemSecondaryButton(
                 text = "有 $needsPermissionCount 门课待授权，去开启",
                 onClick = onGrantPermission,
+                compact = true,
                 modifier = Modifier.fillMaxWidth()
             )
         }
         when (availability) {
             is com.hnnujw.course.schedule.SemesterReminderPlan.ToggleAvailability.Ready -> {
+                // 两个批量按钮只占内容宽度、居中对齐：以前各占 weight(1f) 铺满整行，
+                // 配上 52dp 高度就成了两块巨型胶囊（用户反馈"太大了"）。
                 androidx.compose.foundation.layout.Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     com.hnnujw.course.ui.system.SystemPrimaryButton(
                         text = "全部开启",
                         onClick = onEnable,
                         enabled = availability.canEnable && !busy,
-                        modifier = Modifier.weight(1f)
+                        compact = true,
+                        modifier = Modifier.widthIn(min = 120.dp)
                     )
                     com.hnnujw.course.ui.system.SystemSecondaryButton(
                         text = "全部关闭",
                         onClick = onDisable,
                         enabled = availability.canDisable && !busy,
-                        modifier = Modifier.weight(1f)
+                        compact = true,
+                        modifier = Modifier.widthIn(min = 120.dp)
                     )
                 }
             }
@@ -533,6 +541,7 @@ private fun SemesterToggleButtons(
                     text = "全部关闭",
                     onClick = onDisable,
                     enabled = false,
+                    compact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -543,6 +552,7 @@ private fun SemesterToggleButtons(
                     text = "全部开启",
                     onClick = onEnable,
                     enabled = false,
+                    compact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

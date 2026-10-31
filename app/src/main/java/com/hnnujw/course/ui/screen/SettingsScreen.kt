@@ -53,6 +53,9 @@ import androidx.compose.material.icons.outlined.HowToReg
 import androidx.compose.material.icons.outlined.MeetingRoom
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.School
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Style
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -98,9 +101,18 @@ fun SettingsScreen(
     collegeName: String = "",
     /** 本人所学专业；拿不到时为空串。 */
     majorName: String = "",
+    /**
+     * 学号（= 教务登录账号）。「个人信息」弹窗里把它编成二维码出示。
+     *
+     * 注意与上面的 [studentId] 区分：[studentId] 目前是**设备 ID**，两者不是一回事，
+     * 别把设备 ID 印成学号二维码。
+     */
+    studentNumber: String = "",
     currentVersion: String = "1.0.0",
     onSchoolSelect: () -> Unit,
     onAccountManage: () -> Unit = {},
+    /** 打开「个人信息」（学号二维码）弹窗。 */
+    onPersonInfo: () -> Unit = {},
     /** 设备上已绑定的账号数（上限 3）。 */
     savedAccountCount: Int = 0,
     /** 账号管理的空槽位：登录一个新账号。 */
@@ -111,8 +123,6 @@ fun SettingsScreen(
     onBackup: () -> Unit = {},
     /** 从用户选定的备份文件恢复。 */
     onRestore: () -> Unit = {},
-    /** 打开隐私政策。 */
-    onPrivacy: () -> Unit = {},
     onRefreshCookieClick: () -> Unit = {},
     onLogExport: () -> Unit = {},
     onWallpaperSelect: () -> Unit = {},
@@ -157,9 +167,6 @@ fun SettingsScreen(
     /** 题库练习（从题库仓库取出题库刷题 + AI 答疑）。 */
     onReview: () -> Unit = {},
     onMessageCenter: () -> Unit = {},
-    /** 公告中心未读数；> 0 时入口显示红点。 */
-    announcementUnread: Int = 0,
-    onAnnouncements: () -> Unit = {},
     /** 检查更新（Gitee Release）。 */
     onCheckUpdate: () -> Unit = {},
     /** 应用内阅读用户手册。 */
@@ -180,12 +187,6 @@ fun SettingsScreen(
     onAbout: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
-    // 表头第二行：优先显示「院系 · 专业」（用户更关心这个），
-    // 院系/专业都拿不到时（没绑二课）回退成校名，宁可少一点信息也不要空一行。
-    val affiliation = listOf(collegeName, majorName)
-        .filter { it.isNotBlank() }
-        .joinToString(" · ")
-        .ifBlank { schoolName }
     // 折叠进度随滚动偏移连续变化（约 96px 行程），全程跟手
     val headerCollapse by remember {
         derivedStateOf { (scrollState.value / 96f).coerceIn(0f, 1f) }
@@ -217,14 +218,14 @@ fun SettingsScreen(
             SettingsHeader(
                 name = studentName,
                 studentId = studentId,
-                affiliation = affiliation,
                 isSuper = isSuper,
                 canRefreshCookie = canRefreshCookie,
                 isRefreshingCookie = isRefreshingCookie,
                 onRefreshCookieClick = onRefreshCookieClick,
                 hasAvatar = hasAvatar,
                 avatarRefreshKey = avatarRefreshKey,
-                onAvatarClick = onAvatarClick
+                onAvatarClick = onAvatarClick,
+                onPersonInfo = onPersonInfo
             )
 
             InsetGroupedSection(Modifier.moduleEntrance(2), header = "账号与教务") {
@@ -242,6 +243,19 @@ fun SettingsScreen(
                     },
                     onClick = onAccountManage
                 )
+                // 顺序：账号管理 → 提醒与权限 → 消息中心。
+                // 日常最常按的是"提醒没响"和"有没有新消息"，所以提醒排在消息前面。
+                SettingsRow(
+                    icon = Icons.Outlined.Notifications,
+                    iconTint = Color(0xFF32ADE6),
+                    title = "提醒与权限",
+                    subtitle = if (notificationsAllowed) {
+                        "课程提醒 · 提前量 · 通知/闹钟权限自检"
+                    } else {
+                        "已关闭 · 点进去开启通知后课程提醒才生效"
+                    },
+                    onClick = onNotificationSettings
+                )
                 SettingsRow(
                     icon = Icons.Outlined.Email,
                     iconTint = Color(0xFF64D2FF),
@@ -252,59 +266,34 @@ fun SettingsScreen(
                         "教务通知与站内消息"
                     },
                     badgeCount = messageUnread,
-                    onClick = onMessageCenter
-                )
-                SettingsRow(
-                    icon = Icons.Outlined.Campaign,
-                    iconTint = Color(0xFFFF3B30),
-                    title = "公告",
-                    subtitle = if (announcementUnread > 0) {
-                        "有 $announcementUnread 条未读公告"
-                    } else {
-                        "开发者发布的更新与迁移说明"
-                    },
-                    badgeCount = announcementUnread,
-                    onClick = onAnnouncements
-                )
-                SettingsRow(
-                    icon = Icons.Outlined.Notifications,
-                    iconTint = Color(0xFF32ADE6),
-                    title = "通知提醒",
-                    subtitle = if (notificationsAllowed) {
-                        "已开启 · 成绩发布、站内消息与考前提醒"
-                    } else {
-                        "已关闭 · 点击前往系统设置开启"
-                    },
                     showDivider = false,
-                    onClick = onNotificationSettings
+                    onClick = onMessageCenter
                 )
             }
 
-            // 校园服务：考级项目报名（教务系统内的等级考试报名，复用教务登录态）
+            // 校园服务：四个校园业务入口，按使用频率从高到低排。
             InsetGroupedSection(Modifier.moduleEntrance(3), header = "校园服务") {
+                // 顺序按使用频率：一卡通（天天看余额/消费）→ 空闲教室 → 考级报名 → 题库练习。
                 SettingsRow(
-                    icon = Icons.Outlined.HowToReg,
-                    iconTint = Color(0xFF5E5CE6),
-                    title = "考级项目报名",
-                    subtitle = "四六级 / 普通话等等级考试报名与退报",
-                    onClick = onKaojiRegistration,
-                    showDivider = false
+                    icon = Icons.Outlined.CreditCard,
+                    iconTint = Color(0xFF34C759),
+                    title = "一卡通",
+                    subtitle = "余额、消费与宿舍电费查询",
+                    onClick = onCampusCard
                 )
                 SettingsRow(
                     icon = Icons.Outlined.MeetingRoom,
                     iconTint = Color(0xFFFF9500),
                     title = "空闲教室",
                     subtitle = "按周次 / 星期 / 节次查询没课的教室",
-                    onClick = onEmptyRoom,
-                    showDivider = false
+                    onClick = onEmptyRoom
                 )
                 SettingsRow(
-                    icon = Icons.Outlined.CreditCard,
-                    iconTint = Color(0xFF34C759),
-                    title = "一卡通",
-                    subtitle = "余额、消费与宿舍电费查询",
-                    onClick = onCampusCard,
-                    showDivider = false
+                    icon = Icons.Outlined.HowToReg,
+                    iconTint = Color(0xFF5E5CE6),
+                    title = "考级项目报名",
+                    subtitle = "四六级 / 普通话等等级考试报名与退报",
+                    onClick = onKaojiRegistration
                 )
                 SettingsRow(
                     icon = Icons.Outlined.MenuBook,
@@ -394,6 +383,40 @@ fun SettingsScreen(
                 }
             }
 
+            // 数据与安全放在外观之后、应用与支持之前：它能"把数据搬走 / 删掉"，
+            // 比 Star、推荐网站这类外围内容更需要被看到。
+            InsetGroupedSection(Modifier.moduleEntrance(3), header = "数据与安全") {
+                SettingsRow(
+                    icon = Icons.Outlined.FileDownload,
+                    iconTint = Color(0xFF30D158),
+                    title = "备份数据",
+                    subtitle = "题库、答题记录、自定义课程与设置（不含账号与 Key）",
+                    onClick = onBackup
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.FileUpload,
+                    iconTint = Color(0xFF0A84FF),
+                    title = "恢复数据",
+                    subtitle = "从备份文件还原；会覆盖当前题库",
+                    onClick = onRestore
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.Delete,
+                    iconTint = Color(0xFFFF9F0A),
+                    title = "清除缓存",
+                    subtitle = "释放本地存储空间",
+                    onClick = onClearCache
+                )
+                SettingsRow(
+                    icon = Icons.Outlined.ImportContacts,
+                    iconTint = Color(0xFFFF9F0A),
+                    title = "用户手册",
+                    subtitle = "完整功能说明、使用技巧与常见问题",
+                    onClick = onOpenManual,
+                    showDivider = false
+                )
+            }
+
             InsetGroupedSection(Modifier.moduleEntrance(3), header = "应用与支持") {
                 SettingsRow(
                     icon = Icons.Outlined.Home,
@@ -408,13 +431,6 @@ fun SettingsScreen(
                     title = "检查更新",
                     subtitle = "从 Gitee 获取最新版本与更新说明",
                     onClick = onCheckUpdate
-                )
-                SettingsRow(
-                    icon = Icons.Outlined.ImportContacts,
-                    iconTint = Color(0xFFFF9F0A),
-                    title = "用户手册",
-                    subtitle = "功能说明、使用技巧与常见问题",
-                    onClick = onOpenManual
                 )
                 SettingsRow(
                     icon = Icons.Outlined.Public,
@@ -479,41 +495,6 @@ fun SettingsScreen(
                 )
             }
 
-            InsetGroupedSection(Modifier.moduleEntrance(3), header = "数据与安全") {
-                SettingsRow(
-                    icon = Icons.Outlined.FileDownload,
-                    iconTint = Color(0xFF30D158),
-                    title = "备份数据",
-                    subtitle = "题库、答题记录、自定义课程与设置（不含账号与 Key）",
-                    onClick = onBackup,
-                    showDivider = true
-                )
-                SettingsRow(
-                    icon = Icons.Outlined.FileUpload,
-                    iconTint = Color(0xFF0A84FF),
-                    title = "恢复数据",
-                    subtitle = "从备份文件还原；会覆盖当前题库",
-                    onClick = onRestore,
-                    showDivider = true
-                )
-                SettingsRow(
-                    icon = Icons.Outlined.PrivacyTip,
-                    iconTint = Color(0xFF5E5CE6),
-                    title = "隐私政策",
-                    subtitle = "这个应用会碰到哪些数据、它们去哪了",
-                    onClick = onPrivacy,
-                    showDivider = true
-                )
-                SettingsRow(
-                    icon = Icons.Outlined.Delete,
-                    iconTint = Color(0xFFFF9F0A),
-                    title = "清除缓存",
-                    subtitle = "释放本地存储空间",
-                    onClick = onClearCache,
-                    showDivider = false
-                )
-            }
-
             InsetGroupedSection(Modifier.moduleEntrance(3)) {
                 InsetGroupedRow(
                     title = "退出登录",
@@ -540,15 +521,15 @@ fun SettingsScreen(
 private fun SettingsHeader(
     name: String,
     studentId: String,
-    /** 表头第二行：通常是「院系 · 专业」，拿不到时是校名。 */
-    affiliation: String,
     isSuper: Boolean,
     canRefreshCookie: Boolean,
     isRefreshingCookie: Boolean,
     onRefreshCookieClick: () -> Unit,
     hasAvatar: Boolean = false,
     avatarRefreshKey: Int = 0,
-    onAvatarClick: () -> Unit = {}
+    onAvatarClick: () -> Unit = {},
+    /** 点整块表头 → 打开「个人信息」（学号二维码）弹窗。头像区域仍走 [onAvatarClick]。 */
+    onPersonInfo: () -> Unit = {}
 ) {
     // 裸玻璃容器（不走 Surface，避免 elevation 阴影在半透色下泛白）
     val heroShape = RoundedCornerShape(24.dp)
@@ -557,6 +538,9 @@ private fun SettingsHeader(
             .fillMaxWidth()
             .moduleEntrance(1)
             .clip(heroShape)
+            // 整块表头可点：这就是「个人信息」入口（学号二维码）。
+            // 头像那个小圆是内层 clickable，点它仍然进头像设置，不会被这里抢走。
+            .clickable(onClick = onPersonInfo)
             .background(com.hnnujw.course.ui.system.glassSurfaceColor())
             .border(0.5.dp, com.hnnujw.course.ui.system.glassBorderColor(), heroShape)
             .padding(16.dp),
@@ -596,16 +580,21 @@ private fun SettingsHeader(
             ) {
                 Text(
                     text = name.ifBlank { "同学" },
-                    style = MaterialTheme.typography.titleMedium,
+                    // 用户要求：名字放大一点。titleMedium(16sp) → titleLarge(22sp)，
+                    // 并收紧张行距容器，避免去掉副行后留白显得空。
+                    style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Text(
-                    text = affiliation.ifBlank { "未选择学校" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
+
+            // 右侧一枚二维码图标：不占额外一行，但把「这块表头可以点」说出来。
+            Icon(
+                imageVector = Icons.Outlined.QrCodeScanner,
+                contentDescription = "学号二维码",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp)
+            )
         }
 
         androidx.compose.foundation.layout.FlowRow(

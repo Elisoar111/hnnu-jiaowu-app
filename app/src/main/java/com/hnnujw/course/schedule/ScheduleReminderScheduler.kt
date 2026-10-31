@@ -59,6 +59,15 @@ class ScheduleReminderScheduler private constructor(private val context: Context
         /** 预排自动模式闹钟的前瞻窗口。 */
         private const val AUTO_MODE_HORIZON = 7L * 24 * 60 * 60 * 1000L
 
+        /**
+         * 广播迟到后仍然补发通知的宽限窗口。
+         *
+         * Doze / 各家省电模式会把 `setExactAndAllowWhileIdle` 推迟十几分钟甚至更久。
+         * 以前只要到点时间已经晚于上课时间就**静默丢弃**，用户看到的就是"这节课没提醒"。
+         * 现在迟到 10 分钟以内照样补发（文案改成"已经开始"）。
+         */
+        private const val LATE_GRACE_MS = 10L * 60 * 1000L
+
         @Volatile private var instance: ScheduleReminderScheduler? = null
         @JvmStatic fun get(context: Context): ScheduleReminderScheduler = instance ?: synchronized(this) {
             instance ?: ScheduleReminderScheduler(context.applicationContext).also { instance = it }
@@ -342,7 +351,7 @@ class ScheduleReminderScheduler private constructor(private val context: Context
             val intent = alarmIntent(key).putExtra(EXTRA_REMINDER_ID, key.storageId)
                 .putExtra(EXTRA_REVISION, plan.reminder.revision).putExtra(EXTRA_TRIGGER, plan.triggerAt)
             val pending = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, plan.triggerAt, pending)
+            setAlarm(pending, plan.triggerAt)
             savePlans(scheduledPlans() + (key.storageId to plan))
         }
         override fun cancel(key: CourseReminderKey) {
@@ -352,6 +361,28 @@ class ScheduleReminderScheduler private constructor(private val context: Context
             savePlans(scheduledPlans() - key.storageId)
             NotificationManagerCompat.from(context).cancel(key.storageId, 1)
         }
+    }
+
+    /**
+     * 排一个闹钟；精确闹钟不可用时就降级成不精确的，而不是干脆不排。
+     *
+     * 为什么必须降级：`SCHEDULE_EXACT_ALARM` 在 Android 14+ 会被系统**回收**
+     * （应用长时间不使用、或用户在设置里关掉「闹钟和提醒」）。以前这里直接调
+     * `setExactAndAllowWhileIdle`，被回收后抛 SecurityException，[reconcile] 的 catch
+     * 会把所有已排闹钟清空 —— 用户看到的就是「提醒有时响、有时不响」。
+     * `setAndAllowWhileIdle` 在 Doze 下同样能唤醒，只是可能被推迟几分钟。
+     */
+    private fun setAlarm(pending: PendingIntent, at: Long) {
+        val canExact = Build.VERSION.SDK_INT < 31 || alarmManager.canScheduleExactAlarms()
+        if (canExact) {
+            try {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending)
+                return
+            } catch (_: SecurityException) {
+                // 权限恰好在两次检查之间被回收：落到下面的不精确路径，别再往上抛。
+            }
+        }
+        runCatching { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending) }
     }
 
     // ---- 上课自动模式（勿扰 / 静音） ----
@@ -513,17 +544,36 @@ class ScheduleReminderScheduler private constructor(private val context: Context
 
     @Synchronized
     fun receive(id: String, expectedRevision: Long, expectedTrigger: Long) {
-        val plan = scheduledPlans()[id] ?: return
-        val record = records().firstOrNull { it.key.storageId == id } ?: return
-        if (record.revision != expectedRevision || plan.triggerAt != expectedTrigger) return
+        // 每一个"这条广播用不上"的分支都要先把闹钟链重排一遍再退出。
+        // 以前这些分支直接 return：这一次既没响，后续几周也不会再排，
+        // 直到用户恰好打开一次 App 才恢复 —— 表现就是「提醒有时响、有时不响」。
+        val plan = scheduledPlans()[id]
+        val record = records().firstOrNull { it.key.storageId == id }
+        if (plan == null || record == null) {
+            reconcile(); return
+        }
+        if (record.revision != expectedRevision || plan.triggerAt != expectedTrigger) {
+            // 排闹钟之后记录或计划被改过：这条广播对应的是旧计划，作废并重排。
+            reconcile(); return
+        }
         if (!isCurrentReminderOccurrence(plan, record, timeBase(record.key.account, record.key.term), permissions(), activeAccount())) {
             reconcile(); return
         }
         val now = System.currentTimeMillis()
-        if (now < plan.triggerAt) return
+        if (now < plan.triggerAt) {
+            // 系统提前送达（时间被往回拨等）：这条计划还没到点，保留它并重排闹钟。
+            reconcile(); return
+        }
         // An old broadcast must never replace or advance a newer pending occurrence.
         savePlans(scheduledPlans() - id)
-        if (now >= plan.triggerAt && now < plan.startsAt) {
+        // 迟到也要发：Doze / 省电模式会把 setExactAndAllowWhileIdle 推迟十几分钟，
+        // 以前 now >= startsAt 就直接静默丢弃，用户只会看到"这节课没提醒"。
+        // 只要迟到没超过 LATE_GRACE_MS 就补发，文案改成"已经开始"。
+        val late = now >= plan.startsAt
+        if (late && now - plan.startsAt > LATE_GRACE_MS) {
+            reconcile(); return
+        }
+        run {
             val manager = context.getSystemService(NotificationManager::class.java)
             if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(NotificationChannel(CHANNEL, "课程提醒", NotificationManager.IMPORTANCE_DEFAULT))
             val open = Intent(context, MainActivity::class.java).apply {
@@ -533,15 +583,21 @@ class ScheduleReminderScheduler private constructor(private val context: Context
             }
             val content = PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val notification = NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_course_reminder)
-                .setContentTitle("${record.course.name} · 即将上课")
+                .setContentTitle("${record.course.name} · " + (if (late) "已经开始上课" else "即将上课"))
                 .setContentText(listOf(record.course.location, "第 ${record.course.startPeriod}-${record.course.endPeriod} 节").filter { it.isNotBlank() }.joinToString(" · "))
-                .setContentIntent(content).setAutoCancel(true).setOnlyAlertOnce(true).build()
+                .setContentIntent(content).setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH).setCategory(NotificationCompat.CATEGORY_REMINDER).build()
             // 这里**刻意**保持空 catch，与其它几处不同 —— 原因：
-            // 上面第 525 行已经把这条计划从 pending 里消费掉了，此刻抛出去既不能
+            // 上面已经把这条计划从 pending 里消费掉了，此刻抛出去既不能
             // 让它重新排队，也没人接（广播接收器里没有能提示用户的界面）。
             // 能发生的只有 SecurityException（个别 ROM 在通知权限刚被撤销时会抛），
             // 而对应的处置是"这条提醒不显示"，不是崩溃 —— 记一行日志就够。
             try {
+                // 先把同一门课上一次（上周）还没被划掉的通知清掉，再发新的。
+                // 以前这里带 `setOnlyAlertOnce(true)`：只要上周那条通知还躺在通知栏里，
+                // 本周的更新就是**静默替换**——不响、不亮屏、也没有横幅，用户只会觉得
+                // "这次提醒没来"。同一个 tag+id 直接覆盖发，才会正常提示音。
+                NotificationManagerCompat.from(context).cancel(id, 1)
                 NotificationManagerCompat.from(context).notify(id, 1, notification)
             } catch (e: SecurityException) {
                 android.util.Log.w("ScheduleReminder", "课程提醒通知未能发出（权限被撤销？）: " + e.message)

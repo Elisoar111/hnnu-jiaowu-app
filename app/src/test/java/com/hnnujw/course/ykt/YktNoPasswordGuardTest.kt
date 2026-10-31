@@ -20,7 +20,11 @@ import java.io.File
  * 因此这里把边界写成可执行断言：
  * 1. 一卡通包内**不出现任何密码存取 API 的定义**；
  * 2. 一卡通包内**不出现 `CredentialStore.save` 调用**；
- * 3. 登录页（WebView）不出现密码输入/读取逻辑。
+ * 3. 登录页的密码（2026-10 起允许存在）**只走 [YktCasLogin] 一次性换票，永不落盘**。
+ *
+ * 第 3 条最初写的是"登录页不出现密码输入逻辑"。用户的后续要求（"一卡通也支持
+ * 账号密码直接登录，不要弹 WebView"）让这条规则从"禁止输入"变成"禁止保存"——
+ * 边界守的从来不是"不许用户打字"，而是"应用不持有用户口令"。
  *
  * ## 已知边界
  *
@@ -77,10 +81,22 @@ class YktNoPasswordGuardTest {
     }
 
     /**
-     * 登录页必须是 WebView + 令牌，**不能变成账号密码表单**。
+     * 登录页的两条路都只负责**换到令牌**：网页换票（WebView）与原生账密换票（CAS）。
      *
-     * 判据：存在令牌落盘调用，且令牌来自页面（Web Storage / Cookie），
-     * 且不存在密码输入控件。
+     * 判据：存在令牌落盘调用、令牌来自页面（Web Storage / Cookie）；
+     * 若出现密码输入控件，则它必须把密码交给 [YktCasLogin]，
+     * 且全文件不得出现任何密码写入。
+     *
+     * ## 2026-10 的规则变更（用户明确要求，非退化）
+     *
+     * 用户要求"一卡通也支持账号密码直接登录，不要弹 WebView"。CAS 协议已实测：
+     * 零加密、纯明文 7 字段 POST（见 [YktCasLogin] 的说明）。于是登录页里
+     * **合法地**出现了密码框，原来的断言 `!code.contains("PasswordVisualTransformation")`
+     * 会把用户要的功能直接判成违规。
+     *
+     * 初衷没变，只是换了落点：**密码只用于这一次换票，永不落盘**。
+     * 所以断言改成"允许有密码框，但必须是 [YktCasLogin] 的一次性通道，
+     * 且不出现任何 savePassword / SharedPreferences 写入"。
      *
      * ## 为什么断言 `CAPTURE_TOKEN_JS`（而不是原来的 `readAuthCookie`）
      *
@@ -90,7 +106,7 @@ class YktNoPasswordGuardTest {
      * 的取令牌路径，否则会变成"测试在测一个没人调用的函数"。
      */
     @Test
-    fun loginActivityCapturesTokenInsteadOfAskingForPassword() {
+    fun loginActivityExchangesTokenAndNeverPersistsPassword() {
         val file = File(projectRoot(), "app/src/main/java/com/hnnujw/course/YktLoginActivity.kt")
         assertTrue("YktLoginActivity.kt 不见了：一卡通没有可用的登录入口", file.isFile)
 
@@ -108,8 +124,22 @@ class YktNoPasswordGuardTest {
             code.contains("extractAuthFromStorageJson"),
         )
         assertTrue(
-            "登录页出现了密码输入控件：一卡通只有 SSO，不应收集用户在应用内输入的一卡通密码",
-            !code.contains("PasswordVisualTransformation") && !code.contains("savePassword"),
+            "登录页有密码框却没有走 YktCasLogin.login —— 自己拼 CAS 请求会漏字段、漏跳转",
+            !code.contains("PasswordVisualTransformation") || code.contains("YktCasLogin.login("),
+        )
+        for (bad in listOf("savePassword", "saveCredential", "loadPassword", "hasPassword")) {
+            assertTrue(
+                "登录页出现了 `$bad` —— 一卡通密码只能用于本次 CAS 换票，任何落盘都越过了边界",
+                !code.contains(bad),
+            )
+        }
+        val cas = File(projectRoot(), "app/src/main/java/com/hnnujw/course/ykt/YktCasLogin.kt")
+        assertTrue("YktCasLogin.kt 不见了：原生登录无从校验", cas.isFile)
+        val casCode = cas.readText().stripComments()
+        assertTrue(
+            "YktCasLogin 里出现了持久化调用 —— 密码与令牌都只应在本进程内存里过一遍，" +
+                "令牌的落盘是 YktStore 的职责，密码则永不落盘",
+            !casCode.contains("SharedPreferences") && !casCode.contains("putString"),
         )
     }
 

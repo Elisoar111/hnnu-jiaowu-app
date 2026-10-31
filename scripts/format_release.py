@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""排版「本次更新说明 + 随包公告」：写一份草稿，生成两个产物。
+"""排版「本次更新说明」：写一份草稿，生成 release-notes/vX.Y.Z.md。
 
 为什么要有这个程序
 ------------------
-每发一版，同一件事要写进两个地方，而这两处的排版要求**完全不同**：
+每发一版都要写 `release-notes/vX.Y.Z.md`，其中 `## notes` 区块是应用内更新弹窗的
+正文，排版有硬约束 —— 手写容易踩一批**"写错了不报错、只是用户看不到"**的坑：
 
   1. `release-notes/vX.Y.Z.md` 的 `## notes` 区块 —— 应用内更新弹窗的正文。
      `AppUpdateDialog` 现在用 `MarkdownText` 渲染它，所以 `**加粗**` 与 `- ` 列表
@@ -11,21 +12,17 @@
      被截断，内容凭空消失且不报错）与反引号（窄弹窗里等宽底纹和中文糊在一起）；
      `notes_violations` 只拦这两类。段与段之间**必须空一行**——Markdown 的单个换行
      只是软换行，没空行就会被并成一大段。
-  2. `app/src/main/assets/announcement.json` 里本版那条公告 —— 公告中心用 Markdown
-     渲染，需要 `**一、标题**` 这种加粗小标题、编号列表、分节空行；而且
-     `id` / `created_at` / `minVersionCode` / `maxVersionCode` 必须与本版严格对齐。
+  2. `## changelog` 区块 —— Markdown 随便写，程序不解析它，原样搬进产物。
 
-手写两份的代价不只是双倍维护，更麻烦的是一批**"写错了不报错、只是用户看不到"**的坑：
+手写的代价是踩坑时没有任何提示：
 
-  - 公告 id 里不带 `vX_Y_Z` → `AnnouncementLogicTest`「本版必须有一条覆盖当前
-    versionCode 的公告」会红（这条好歹拦得住）；
-  - 版本范围写成 `0/不限` → 这条公告会一直骚扰后面每一个版本，**不会报错**；
-  - 范围写成本版以外的数字 → 装上新版的人看不到任何更新说明，**不会报错**；
   - notes 里混进反引号 → 弹窗里原样显示这个符号，**不会报错**；
+  - notes 里出现行首 `#` → 抽取时被截断，后面的内容凭空消失，**不会报错**；
+  - 段与段之间漏了空行 → 弹窗里被并成一大段，**不会报错**。
 
-所以这里把两份排版收拢成一个：**草稿只写一份，两种版式由程序生成**，生成后当场
-用发版链条上真正的那两个校验器（`release_notes.sh` 的 `notes_violations`、
-`publish.py` 的 `release_notes_for`）验一遍再落盘。
+所以草稿只写一份、成品由程序生成，生成后当场用发版链条上真正的那两个校验器
+（`release_notes.sh` 的 `notes_violations`、`publish.py` 的 `release_notes_for`）
+验一遍再落盘。
 
 草稿格式（`release-notes/drafts/<tag>.md`）
 -----------------------------------------
@@ -33,7 +30,7 @@
 
     ## 标题
     课表新增日视图，桌面小组件回归，顶栏更清爽
-    （只进公告标题：「v1.2.6 更新：<这里>」。省略则用各章标题拼）
+    （一句话概括这一版，预览页顶部会显示。省略则用各章标题拼）
 
     ## 概览
     这一版围绕课表做了一次大改版。          ← notes 的开场白，纯文本一段
@@ -64,12 +61,13 @@
     - 顶栏动作区重构
 
 五条规则：
-  - 每个 `### <章>` 的**第一段**是「摘要」：它同时进 notes（一行）和公告（章首段），
-    所以写一遍就够了；列表项只进公告（notes 不允许行首 `-`）；
-  - `## 概览` / `## 结尾` 进 notes 与公告收尾，不加小标题；
+  - 每个 `### <章>` 的**第一段**是「摘要」，它进 notes（一行）：缺了它，这一章在
+    弹窗里就一个字都没有；`- ` 列表项不进 notes（notes 不允许行首 `-`），现在也
+    没有别的去处 —— 保留解析只是让既有草稿照常能过；
+  - `## 概览` / `## 结尾` 进 notes 的开头与结尾，不加小标题；
   - `## 强制更新` 可选，只要有这一节，notes 顶部就会写入 `[force-update]` 标记行
     与紧随其后的「为什么强制」（这一行用户在弹窗里**看得到**，要写成人话）；
-  - `## 变更` 原样进 `## changelog`（Markdown 随便写），程序会再补一条 `### 公告`；
+  - `## 变更` 原样进 `## changelog`（Markdown 随便写）；
   - 其余 `## ` 小节名一律报错，避免把 `## 章节名字` 这种笔误静默吞掉。
 
 用法
@@ -77,32 +75,24 @@
     python scripts/format_release.py                 # 用 version.properties 的版本
     python scripts/format_release.py 1.2.6           # 指定版本（草稿必须是 drafts/v1.2.6.md）
     python scripts/format_release.py --check         # 只校验，不写盘
-    python scripts/format_release.py --dry-run       # 打印将要写入的内容（含终端渲染预览）
-    python scripts/format_release.py --date 2026-09-23
+    python scripts/format_release.py --dry-run       # 打印将要写入的内容
     python scripts/format_release.py --init          # 没有草稿时生成骨架
-    python scripts/format_release.py --notes-only    # 只写 release-notes/<tag>.md
-    python scripts/format_release.py --announcement-only
     python scripts/format_release.py --preview       # 额外写出排版预览页（HTML）
 
-看 md 的原本版式
-----------------
-公告是 Markdown，`**一、标题**` 渲染出来才是小标题，光看源码只有一串星号。所以：
+看排版预览
+----------
+notes 会被弹窗按 Markdown 渲染，光看源码判断不出"读起来是什么样"。所以：
 
-  - 每次运行都会在终端里把公告**渲染后**打一遍（加粗、编号列表缩进）；
+  - 每次运行都会在终端里把更新弹窗的正文逐行打一遍（`[force-update]` 标记会注明
+    应用里会被剥掉）；
   - `--preview`（或实际写盘时自动）再生成 `release-notes/preview/<tag>.html`，
-    一份自包含的预览页，四块内容：① 应用内更新弹窗的纯文本长相（`[force-update]`
-    标记会注明"应用里会被剥掉"）；② 公告中心里 Markdown 渲染后的样子；
-    ③ 每章摘要分别落在 notes 的第几行 / 公告的哪一节；④ changelog 区块。
-
-幂等：公告条目按 id 里的 `vX_Y_Z` 认领，重跑只会**原地替换**那一条（换了 `--date`
-就更新 id 与 `created_at`），不会重复追加，也不会动其它条目的字段顺序与格式。
+    一份自包含的预览页，三块内容：① 应用内更新弹窗的长相；② 每章摘要分别落在
+    notes 的第几行；③ changelog 区块。
 """
 
 from __future__ import annotations
 
 import argparse
-import datetime as dt
-import json
 import pathlib
 import re
 import subprocess
@@ -113,7 +103,6 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 VERSION_PROPERTIES = ROOT / "app" / "version.properties"
 RELEASE_NOTES_DIR = ROOT / "release-notes"
 DRAFT_DIR = RELEASE_NOTES_DIR / "drafts"
-ANNOUNCEMENT_JSON = ROOT / "app" / "src" / "main" / "assets" / "announcement.json"
 RELEASE_NOTES_SH = ROOT / "scripts" / "release_notes.sh"
 # 预览页只是给人看的，不属于产物（.gitignore 已忽略这个目录）。
 PREVIEW_DIR = RELEASE_NOTES_DIR / "preview"
@@ -133,19 +122,6 @@ LOCAL_NOTES_VIOLATION = re.compile(r"(^[ \t]*#)|`")
 # 必须独立成行、不能以 `#` 开头。
 FORCE_UPDATE_MARKER = "[force-update]"
 
-# 公告条目的 type 取值由 AnnouncementLogicTest 断言（info / warning / important）。
-ENTRY_TYPE = "important"
-ENTRY_AUDIENCE = "app"
-ENTRY_NOTE = (
-    "每个版本一条公告：范围恰好锁在本版（{code}\u2013{code}），只有装了这一版的用户会收到；"
-    "下一版用户会在「已读 → 历史」里看到它。不要写成 0/不限，那会让它一直打扰后续版本。"
-)
-# 键顺序照抄既有的公告条目，让 diff 只落在真正变化的那几行上。
-ENTRY_KEY_ORDER = (
-    "id", "title", "content", "type", "contentType", "showOnce", "audience",
-    "created_at", "minVersionCode", "maxVersionCode", "note",
-)
-
 CN_DIGITS = "〇一二三四五六七八九"
 
 
@@ -160,7 +136,7 @@ def die(message: str) -> None:
 def cn_number(value: int) -> str:
     """章序号：0 → 〇、1 → 一、10 → 十、11 → 十一。
 
-    章节编号**从「一」开始**（调用处传 index + 1）。v1.2.5 及更早的公告是首章「〇」，
+    章节编号**从「一」开始**（调用处传 index + 1）。早先首章是「〇」，
     但那是编号从 0 起，读起来别扭 —— 已按作者要求改掉，别再退回去。
     """
     if 0 <= value < 10:
@@ -194,12 +170,12 @@ class Section:
 
     @property
     def summary(self) -> str:
-        """章首段。notes 与公告共用它 —— 摘要缺失就没法给用户一行说明，直接拦下。"""
+        """章首段。notes 里它独占一行 —— 摘要缺失就没法给用户一行说明，直接拦下。"""
         for block in self.blocks:
             if not block.is_list:
                 return block.text
         die(f"章节「{self.title}」缺少摘要：`### {self.title}` 下面要先写一段说明文字，"
-            "再写 `- ` 列表项（notes 只收摘要，列表项进公告）")
+            "再写 `- ` 列表项（notes 只收摘要，列表项请写进 `## 变更`）")
 
 
 @dataclass
@@ -215,12 +191,6 @@ class Draft:
     @property
     def version(self) -> str:
         return self.tag.lstrip("vV")
-
-    @property
-    def announcement_title(self) -> str:
-        if self.title:
-            return f"v{self.version} 更新：{self.title}"
-        return f"v{self.version} 更新：" + "、".join(s.title for s in self.sections)
 
 
 TOP_LEVEL = ("标题", "概览", "章节", "结尾", "强制更新", "变更")
@@ -320,7 +290,7 @@ def parse_draft(text: str, path_for_error: str = "<草稿>") -> Draft:
         bullet = re.match(r"^[ \t]*[-*][ \t]+(.*)$", line)
         if bullet:
             # 先把攒着的段落落盘，否则「段落 + 列表」的顺序会被反过来 —— 渲染出来
-            # 变成列表在前、说明在后，公告读起来很别扭。
+            # 变成列表在前、说明在后，notes 读起来很别扭。
             flush_paragraph()
             if section_kind == "章节" and current is not None:
                 if current.blocks and current.blocks[-1].is_list:
@@ -338,7 +308,7 @@ def parse_draft(text: str, path_for_error: str = "<草稿>") -> Draft:
     if draft is None:
         die(f"{path_for_error}: 找不到 `# vX.Y.Z` 一级标题")
     if not draft.sections:
-        die(f"{path_for_error}: `## 章节` 下至少要有 `### 一章`（notes 与公告都以章节为主体）")
+        die(f"{path_for_error}: `## 章节` 下至少要有 `### 一章`（notes 以章节为主体）")
     for section in draft.sections:
         _ = section.summary  # 触发摘要缺失的校验
     return draft
@@ -370,22 +340,16 @@ def render_notes(draft: Draft) -> str:
     return "\n\n".join(paragraphs) + "\n"
 
 
-def render_changelog(draft: Draft, code: int, announcement_id: str) -> str:
-    """`## changelog` 区块：变更分组原样保留，末尾补一条自动生成的「公告」。"""
-    groups: list[tuple[str, list[str]]] = list(draft.changes)
-    groups.append((
-        "公告",
-        [f"随包新增 v{draft.version} 公告（`{announcement_id}`），"
-         f"版本范围锁 {code}\u2013{code}。"],
-    ))
+def render_changelog(draft: Draft) -> str:
+    """`## changelog` 区块：变更分组原样保留。"""
     parts = []
-    for name, bullets in groups:
+    for name, bullets in draft.changes:
         body = "\n".join(f"- {item}" for item in bullets)
         parts.append(f"### {name}\n\n{body}")
     return "\n\n".join(parts) + "\n"
 
 
-def render_release_notes_file(draft: Draft, code: int, announcement_id: str) -> str:
+def render_release_notes_file(draft: Draft) -> str:
     return (
         f"# v{draft.version} 更新说明\n\n"
         f"<!-- 由 scripts/format_release.py 从 release-notes/drafts/{draft.tag}.md 生成，"
@@ -393,82 +357,20 @@ def render_release_notes_file(draft: Draft, code: int, announcement_id: str) -> 
         f"## notes\n\n"
         f"{render_notes(draft)}"
         f"\n## changelog\n\n"
-        f"{render_changelog(draft, code, announcement_id)}"
+        f"{render_changelog(draft)}"
     )
 
 
-def render_announcement_content(draft: Draft) -> str:
-    """公告正文（Markdown）：`**一、标题**` + 章首段 + 编号列表，节间空一行。
-
-    章节序号从「一」起（index + 1）—— 不从 0 起，所以第一章是「一、」而不是「〇、」。
-    """
-    parts = []
-    for index, section in enumerate(draft.sections):
-        lines = [f"**{cn_number(index + 1)}、{section.title}**"]
-        for block in section.blocks:
-            if block.is_list:
-                lines.extend(f"{i}. {item}" for i, item in enumerate(block.items, start=1))
-            else:
-                lines.append(block.text)
-        parts.append("\n".join(lines))
-    if draft.closing:
-        parts.append(draft.closing)
-    return "\n\n".join(parts)
-
-
-def announcement_id(tag: str, date: str) -> str:
-    return f"{date.replace('-', '')}_{tag.replace('.', '_')}_release"
-
-
-def announcement_entry(draft: Draft, code: int, date: str) -> dict:
-    entry = {
-        "id": announcement_id(draft.tag, date),
-        "title": draft.announcement_title,
-        "content": render_announcement_content(draft),
-        "type": ENTRY_TYPE,
-        "contentType": "markdown",
-        "showOnce": True,
-        "audience": ENTRY_AUDIENCE,
-        "created_at": date,
-        # 两端都显式写死本版：没写过范围（hasVersionRange=false）的公告 appliesTo
-        # 恒为 false，等于发出去一条谁都不会看到的公告。
-        "minVersionCode": code,
-        "maxVersionCode": code,
-        "note": ENTRY_NOTE.format(code=code),
-    }
-    return {key: entry[key] for key in ENTRY_KEY_ORDER}
-
-
-# ── 预览（把 md 按原本的版式显示出来）───────────────────────────────────────
+# ── 预览（把成品按应用里的样子显示出来）────────────────────────────────────
 #
-# 公告是 Markdown，`**一、标题**` 只有在渲染后才是小标题；直接看源码只会看到一串
-# 星号，改稿时根本判断不出"读起来是什么样"。所以这里做两件事：
-#   - `render_markdown_ansi`：终端里把加粗与编号列表渲染出来（dry-run / check 用）；
-#   - `render_preview_html`：生成一份自包含的预览页，把「更新弹窗的纯文本」与
-#     「公告中心的 Markdown 效果」并排放在一起，还能对照每章摘要落在哪一行。
-# 只支持草稿里实际用到的子集（段落 / `**加粗**` / 编号列表），不引第三方库。
+# 更新弹窗里的 notes 会被按 Markdown 渲染，光看源码判断不出"读起来是什么样"。
+# `render_preview_html` 生成一份自包含的预览页，把弹窗长相与摘要对照表摆在一起。
+# 页面用到的 Markdown 子集（段落 / `**加粗**` / 编号列表）交给
+# `render_markdown_html` 渲染，不引第三方库。
 
 MD_BOLD = re.compile(r"\*\*([^*]+)\*\*")
 MD_ORDERED = re.compile(r"^\s*(\d+)\.\s+(.*)$")
 MD_HEADING = re.compile(r"\*\*[^*]+\*\*")
-BOLD_ON = "\033[1m"
-BOLD_OFF = "\033[0m"
-
-
-def _md_bold(text: str) -> str:
-    return MD_BOLD.sub(lambda m: BOLD_ON + m.group(1) + BOLD_OFF, text)
-
-
-def render_markdown_ansi(markdown: str) -> str:
-    """终端预览：`**x**` 加粗，编号列表加缩进，空行保留。"""
-    out: list[str] = []
-    for line in markdown.splitlines():
-        numbered = MD_ORDERED.match(line)
-        if numbered:
-            out.append(f"   {numbered.group(1)}. {_md_bold(numbered.group(2))}")
-        else:
-            out.append(_md_bold(line))
-    return "\n".join(out)
 
 
 def _md_inline_html(text: str) -> str:
@@ -488,7 +390,11 @@ def escape_html(text: str) -> str:
 
 
 def render_markdown_html(markdown: str) -> str:
-    """把公告正文（段落 / 加粗 / 编号列表）渲染成 HTML。"""
+    """把 Markdown 子集（段落 / 加粗 / 编号列表）渲染成 HTML。
+
+    主流程已经不再用它（更新弹窗自己渲染），留着是因为它是一份通用的小工具，
+    单测也还在覆盖它。
+    """
     html: list[str] = []
     paragraph: list[str] = []
     ordered: list[str] = []
@@ -547,15 +453,6 @@ dialog { display: block; border: none; padding: 0; margin: 0; background: none; 
 .dialog p { margin: 0 0 12px; font-size: 14px; }
 .dialog p:last-child { margin-bottom: 0; }
 .dialog .force { color: #c0392b; font-weight: 600; }
-.announcement h3 { margin: 0 0 2px; font-size: 17px; }
-.announcement .meta { color: #8a8a8e; font-size: 12px; margin-bottom: 14px; }
-.announcement p { margin: 0 0 10px; font-size: 15px; }
-.announcement p.h { margin: 0 0 8px; }
-.announcement p.h + p { margin-top: -2px; }
-.announcement p:has(+ ol) { margin-bottom: 6px; }
-.announcement ol { margin: 0 0 14px; padding-left: 22px; font-size: 15px; }
-.announcement li { margin-bottom: 4px; }
-.announcement strong { font-size: 16px; }
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 td { padding: 7px 10px; border-bottom: 1px solid rgba(0,0,0,.06); vertical-align: top; }
 td:first-child { width: 42%; color: #6c6c70; }
@@ -567,7 +464,7 @@ pre { background: #f6f6f8; border-radius: 10px; padding: 12px 14px; overflow-x: 
   body { background: #0e0e10; color: #f2f2f4; }
   .card, .dialog { background: #1c1c1f; border-color: rgba(255,255,255,.08);
                    box-shadow: none; }
-  .card > h2, .sub, .dialog .meta, .announcement .meta { color: #9a9aa0; }
+  .card > h2, .sub, .dialog .meta { color: #9a9aa0; }
   td { border-color: rgba(255,255,255,.08); }
   td:first-child { color: #9a9aa0; }
   pre { background: #232326; }
@@ -576,9 +473,9 @@ pre { background: #f6f6f8; border-radius: 10px; padding: 12px 14px; overflow-x: 
 """
 
 
-def render_preview_html(draft: Draft, code: int, entry: dict, notes_text: str,
+def render_preview_html(draft: Draft, code: int, notes_text: str,
                         release_notes_body: str) -> str:
-    """自包含的排版预览页：md 渲染后的样子 + 每章摘要落在哪一行。"""
+    """自包含的排版预览页：更新弹窗里读起来是什么样 + 每章摘要落在哪一行。"""
     notes_lines = [line for line in notes_text.splitlines() if line.strip()]
     dialog_body = []
     for line in notes_lines:
@@ -607,7 +504,7 @@ def render_preview_html(draft: Draft, code: int, entry: dict, notes_text: str,
         rows.append((f"notes 第 {cursor} 行（开场白）", escape_html(draft.overview)))
     for index, section in enumerate(draft.sections):
         cursor += 1
-        rows.append((f"notes 第 {cursor} 行 · 公告「{cn_number(index + 1)}、"
+        rows.append((f"notes 第 {cursor} 行 · 第{cn_number(index + 1)}章「"
                      f"{escape_html(section.title)}」", escape_html(section.summary)))
     if draft.closing:
         cursor += 1
@@ -621,38 +518,30 @@ def render_preview_html(draft: Draft, code: int, entry: dict, notes_text: str,
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{escape_html(entry['title'])} · 排版预览</title>
+<title>{escape_html(draft.tag)} · 排版预览</title>
 <style>{PREVIEW_CSS}</style>
 </head>
 <body>
 <div class="wrap">
   <h1>{escape_html(draft.tag)} 排版预览</h1>
-  <div class="sub">versionCode {code} · 公告 id {escape_html(entry['id'])} ·
-    公告日期 {escape_html(entry['created_at'])} · 仅预览，不是产物</div>
+  <div class="sub">versionCode {code} · 仅预览，不是产物</div>
 
   <div class="card">
-    <h2>① 应用内更新弹窗（notes 被当纯文本逐行显示）</h2>
+    <h2>① 应用内更新弹窗（notes 就是弹窗正文）</h2>
     <div class="dialog">
-      <h3>{escape_html(entry['title'])}</h3>
-      <div class="meta">发现新版本 {escape_html(draft.version)} · 本次更新须知</div>
+      <h3>发现新版本</h3>
+      <div class="meta">版本 v{escape_html(draft.version)} · 本次更新须知</div>
       {''.join(dialog_body)}
     </div>
   </div>
 
-  <div class="card announcement">
-    <h2>② 公告中心（Markdown 渲染后的原本版式）</h2>
-    <h3>{escape_html(entry['title'])}</h3>
-    <div class="meta">{escape_html(entry['created_at'])} · 更新公告</div>
-    {render_markdown_html(entry['content'])}
-  </div>
-
   <div class="card">
-    <h2>③ 一段摘要进两个地方（章摘要 = notes 一行 = 公告章首段）</h2>
+    <h2>② 一段摘要进两个地方（章摘要 = notes 一行 = changelog 一条）</h2>
     <table>{table}</table>
   </div>
 
   <div class="card">
-    <h2>④ release-notes/{escape_html(draft.tag)}.md 的 changelog 区块</h2>
+    <h2>③ release-notes/{escape_html(draft.tag)}.md 的 changelog 区块</h2>
     <pre>{escape_html(release_notes_body.split('## changelog', 1)[-1].strip())}</pre>
   </div>
 </div>
@@ -661,50 +550,15 @@ def render_preview_html(draft: Draft, code: int, entry: dict, notes_text: str,
 """
 
 
-# ── 公告文件读写 ────────────────────────────────────────────────────────────
+# ── 落盘 ────────────────────────────────────────────────────────────────────
 
 def write_text_lf(path: pathlib.Path, text: str) -> None:
     """一律写 LF。
 
-    Python 在 Windows 上默认把 `\\n` 翻成 CRLF，而仓库里这两份产物都是 LF；不显式指定
+    Python 在 Windows 上默认把 `\\n` 翻成 CRLF，而仓库里的产物都是 LF；不显式指定
     就会留下一个"全文件每一行都变了"的 diff，还会让 CI 的 sed/awk 多带一个 `\\r`。
     """
     path.write_bytes(text.encode("utf-8"))
-
-
-def load_announcements(path: pathlib.Path) -> list[dict]:
-    if not path.is_file():
-        die(f"找不到 {path}")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        die(f"{path} 不是合法 JSON：{exc}")
-    if isinstance(data, dict):
-        data = data.get("announcements", [])
-    if not isinstance(data, list):
-        die(f"{path} 的结构不对：顶层应当是 {{\"announcements\": [...]}} 或数组")
-    return [item for item in data if isinstance(item, dict)]
-
-
-def save_announcements(path: pathlib.Path, entries: list[dict]) -> None:
-    """2 空格缩进 + 不转义中文，与既有文件逐字节一致（便于 review diff）。"""
-    body = json.dumps({"announcements": entries}, ensure_ascii=False, indent=2)
-    write_text_lf(path, body + "\n")
-
-
-def upsert_announcement(entries: list[dict], entry: dict, tag: str) -> tuple[list[dict], bool]:
-    """按 id 里的 `vX_Y_Z` 认领旧条目，原地替换；没有就追加。
-
-    只按 tag 认领（不按完整 id）是有意的：id 里含发布日期，改 `--date` 重跑时
-    完整 id 已经变了，按 id 找会再追加一条，同一版就出现两条公告。
-    """
-    marker = tag.replace(".", "_")
-    for index, existing in enumerate(entries):
-        if marker in str(existing.get("id", "")):
-            updated = list(entries)
-            updated[index] = entry
-            return updated, True
-    return list(entries) + [entry], False
 
 
 # ── 校验 ────────────────────────────────────────────────────────────────────
@@ -732,8 +586,7 @@ def notes_violations(text: str) -> list[str]:
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
-def validate(draft: Draft, code: int, notes_text: str, entry: dict,
-             entries: list[dict]) -> None:
+def validate(draft: Draft, notes_text: str) -> None:
     """生成物的自检。这里的每一条都对应一个"写错了不会报错、只是用户看不到"的坑。"""
     if draft.tag != f"v{draft.version}":
         die(f"草稿的一级标题 `{draft.tag}` 与版本号对不上")
@@ -744,54 +597,13 @@ def validate(draft: Draft, code: int, notes_text: str, entry: dict,
             "逐行显示，符号会原样出现在更新弹窗里。技术细节请写进 `## 变更`：\n       "
             + "\n       ".join(violations))
 
-    marker = draft.tag.replace(".", "_")
-    if marker not in entry["id"]:
-        die(f"公告 id `{entry['id']}` 里没有 `{marker}`："
-            "AnnouncementLogicTest 靠 id 找「本版公告」，找不到会直接让单测红")
-    if not (entry["minVersionCode"] == entry["maxVersionCode"] == code):
-        die(f"公告版本范围 {entry['minVersionCode']}\u2013{entry['maxVersionCode']} "
-            f"不等于本版 versionCode {code}")
-    if entry["minVersionCode"] > entry["maxVersionCode"]:
-        die("公告的版本下限大于上限，永远不会命中任何版本")
-    if entry["type"] not in ("info", "warning", "important"):
-        die(f"公告 type `{entry['type']}` 不在 info / warning / important 里")
-    for key in ("id", "title", "content"):
-        if not str(entry[key]).strip():
-            die(f"公告 {key} 不能为空")
-
-    ids = [str(item.get("id", "")) for item in entries]
-    if len(ids) != len(set(ids)):
-        duplicated = sorted({i for i in ids if ids.count(i) > 1})
-        die(f"公告 id 重复：{duplicated}")
-
-    applying = [item for item in entries if applies_to(item, code)]
-    if not applying:
-        die(f"assets/announcement.json 里没有任何一条公告适用于 versionCode {code}")
-    # 与 AnnouncementLogicTest 的第 178 行同一条不变量："必须有一条明确写着本版的"。
-    own = [item for item in entries if marker in str(item.get("id", ""))]
-    if not own or not applies_to(own[-1], code):
-        die(f"id 含 `{marker}` 的公告没有覆盖 versionCode {code}")
-
-
-def applies_to(entry: dict, code: int) -> bool:
-    """`Announcement.appliesTo` 的等价实现：没写过范围 = 恒不适用。"""
-    if "minVersionCode" not in entry and "maxVersionCode" not in entry:
-        return False
-    low = int(entry.get("minVersionCode") or 0)
-    high = int(entry.get("maxVersionCode") or 0)
-    if low and code < low:
-        return False
-    if high and code > high:
-        return False
-    return True
-
 
 # ── 草稿骨架 ────────────────────────────────────────────────────────────────
 
 SKELETON = """# {tag}
 
 ## 标题
-一句话概括这一版（会接在「v{version} 更新：」后面，作为公告标题）
+一句话概括这一版（只进 changelog 的标题行，用户看不到）
 
 ## 概览
 这一版围绕……（notes 的开场白，纯文本一段）
@@ -799,9 +611,7 @@ SKELETON = """# {tag}
 ## 章节
 
 ### 第一件事
-这一章的一句话说明（同时进 notes 与公告；notes 里它独占一行）
-- 细节一（只进公告的编号列表）
-- 细节二
+这一章的一句话说明（进 notes 一行，同时进 changelog 一条）
 
 ### 第二件事
 这一章的一句话说明。
@@ -832,28 +642,21 @@ SKELETON = """# {tag}
 def parse_args(argv):
     parser = argparse.ArgumentParser(
         prog="format_release.py",
-        description="把 release-notes/drafts/<tag>.md 排版成更新说明与随包公告。",
+        description="把 release-notes/drafts/<tag>.md 排版成 release-notes/<tag>.md。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__.split("用法\n----\n", 1)[-1],
     )
     parser.add_argument("version", nargs="?",
                         help="版本号（如 1.2.6）。省略则用 app/version.properties 里的版本")
-    parser.add_argument("--date", help="公告日期 YYYY-MM-DD（默认今天；决定公告 id 前缀）")
     parser.add_argument("--check", action="store_true", help="只校验，不写盘")
     parser.add_argument("--dry-run", action="store_true", help="打印将要写入的内容，不写盘")
     parser.add_argument("--init", action="store_true",
                         help="草稿不存在时生成骨架（不覆盖已有草稿）")
     parser.add_argument("--preview", action="store_true",
                         help="写出 release-notes/preview/<tag>.html 排版预览页")
-    parser.add_argument("--notes-only", action="store_true", help="只写 release-notes/<tag>.md")
-    parser.add_argument("--announcement-only", action="store_true", help="只写公告条目")
     args = parser.parse_args(argv)
     if args.version and re.fullmatch(r"\d+\.\d+\.\d+", args.version) is None:
         parser.error("版本号形如 X.Y.Z（不带 v 前缀）")
-    if args.notes_only and args.announcement_only:
-        parser.error("--notes-only 与 --announcement-only 不能同时用")
-    if args.date and re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date) is None:
-        parser.error("--date 形如 2026-09-23")
     return args
 
 
@@ -875,11 +678,10 @@ def main(argv=None):
                   f"{file_version}（code {file_code}）不同 —— 发版前 release.sh 会对齐",
                   flush=True)
     tag = f"v{version}"
-    date = args.date or dt.date.today().isoformat()
     draft_path = DRAFT_DIR / f"{tag}.md"
     notes_path = RELEASE_NOTES_DIR / f"{tag}.md"
 
-    print(f"=== 排版 {tag}（versionCode={code}，公告日期 {date}）===", flush=True)
+    print(f"=== 排版 {tag}（versionCode={code}）===", flush=True)
 
     if not draft_path.is_file():
         if args.init:
@@ -897,38 +699,22 @@ def main(argv=None):
         die(f"草稿里写的是 `# {draft.tag}`，与本次版本 `{tag}` 不一致"
             f"（草稿文件名也必须叫 {tag}.md）")
 
-    entry_id = announcement_id(tag, date)
     notes_text = render_notes(draft)
-    release_notes_body = render_release_notes_file(draft, code, entry_id)
-    entry = announcement_entry(draft, code, date)
-
-    entries = load_announcements(ANNOUNCEMENT_JSON)
-    merged, replaced = upsert_announcement(entries, entry, tag)
-    validate(draft, code, notes_text, entry, merged)
+    release_notes_body = render_release_notes_file(draft)
+    validate(draft, notes_text)
 
     print(f"   草稿   {draft_path.relative_to(ROOT)}"
           f"（{len(draft.sections)} 章，notes {len(notes_text.splitlines())} 行）", flush=True)
-    print(f"   公告   {entry['id']}"
-          f"（{'原地替换' if replaced else '新增'}，范围 {code}\u2013{code}）", flush=True)
-
-    # 公告是 Markdown：渲染一遍才是它真正的版式，看源码只有一串星号。
-    print(f"\n--- 公告渲染预览（{entry['title']}）---", flush=True)
-    print(render_markdown_ansi(entry["content"]), flush=True)
     print(f"\n--- 更新弹窗正文（notes 逐行当纯文本显示，共 {len(notes_text.splitlines())} 行）---",
           flush=True)
-    for line in notes_text.splitlines():
-        print(f"   {'[标记]' if line == FORCE_UPDATE_MARKER else '      '} {line}",
-              flush=True)
 
     if args.dry_run or args.check:
         print(f"\n--- {notes_path.relative_to(ROOT)} ---\n{release_notes_body}", flush=True)
-        print(f"--- announcement.json 里的这一条 ---\n"
-              f"{json.dumps(entry, ensure_ascii=False, indent=2)}\n", flush=True)
         if args.preview:
             PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
             preview_path = PREVIEW_DIR / f"{tag}.html"
             write_text_lf(preview_path,
-                          render_preview_html(draft, code, entry, notes_text, release_notes_body))
+                          render_preview_html(draft, code, notes_text, release_notes_body))
             print(f"   预览   {preview_path.relative_to(ROOT)}（--preview，其余未写盘）",
                   flush=True)
         if args.check:
@@ -937,20 +723,15 @@ def main(argv=None):
             print("=== dry-run 结束，未写盘 ===", flush=True)
         return
 
-    if not args.announcement_only:
-        notes_path.parent.mkdir(parents=True, exist_ok=True)
-        write_text_lf(notes_path, release_notes_body)
-        print(f"   写出   {notes_path.relative_to(ROOT)}", flush=True)
-    if not args.notes_only:
-        save_announcements(ANNOUNCEMENT_JSON, merged)
-        print(f"   写出   {ANNOUNCEMENT_JSON.relative_to(ROOT)}"
-              f"（共 {len(merged)} 条公告）", flush=True)
+    notes_path.parent.mkdir(parents=True, exist_ok=True)
+    write_text_lf(notes_path, release_notes_body)
+    print(f"   写出   {notes_path.relative_to(ROOT)}", flush=True)
 
-    # 预览页默认就写：改完稿最想看的是"渲染出来长什么样"，不该还要多记一个开关。
+    # 预览页默认就写：改完稿最想确认的是"读起来是什么样"，不该还要多记一个开关。
     PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
     preview_path = PREVIEW_DIR / f"{tag}.html"
     write_text_lf(preview_path,
-                  render_preview_html(draft, code, entry, notes_text, release_notes_body))
+                  render_preview_html(draft, code, notes_text, release_notes_body))
     print(f"   预览   {preview_path.relative_to(ROOT)}", flush=True)
 
     # 端到端复核：发版链条读的就是 publish.release_notes_for(tag)，它内部再调

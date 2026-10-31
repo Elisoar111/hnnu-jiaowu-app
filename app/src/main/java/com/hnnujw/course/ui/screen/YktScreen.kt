@@ -50,6 +50,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -90,10 +92,13 @@ import com.hnnujw.course.ykt.YktSceneLevel
 import com.hnnujw.course.ykt.YktSceneSelection
 import com.hnnujw.course.ykt.YktPickReconcile
 import com.hnnujw.course.ykt.YktSelectionStore
+import com.hnnujw.course.ykt.YktCasLogin
 import com.hnnujw.course.ykt.YktStore
 import com.hnnujw.course.ykt.YktTurnover
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 一卡通页面：**卡余额 + 宿舍电费查看**。
@@ -527,7 +532,17 @@ fun YktScreen(
             needLogin -> LoginRequiredCard(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 refreshing = refreshing,
-                onLogin = {
+                // 原生 CAS 登录成功后直接落令牌并重载：不再跳一个中间页，
+                // 用户输入完密码当场就能看到余额。
+                onToken = { auth ->
+                    YktStore.saveToken(context, accountKey, auth)
+                    scope.launch {
+                        loading = true
+                        load()
+                        loading = false
+                    }
+                },
+                onWebLogin = {
                     loginLauncher.launch(
                         Intent(context, com.hnnujw.course.YktLoginActivity::class.java)
                     )
@@ -797,73 +812,110 @@ internal fun applyPick(
 }
 
 /**
- * 「未登录」态：**必须给出可点的登录入口**。
+ * 「未登录」态：**直接就是登录表单本身**（用户 m01742 要求）。
  *
- * 之前这里只显示一句"尚未登录一卡通，请先在设置中登录"，但设置里并没有
- * 对应的登录项 —— 提示指向了一个不存在的地方，用户无路可走。
- * 现在直接把登录按钮放在这里，点开就是 WebView 走学校统一身份认证。
+ * 原先这里是一张"需要登录一卡通 → 点按钮"的说明卡，点了才跳到一个独立的
+ * 登录页——等于让用户为一个必然要做的动作多点一次。现在把统一身份认证的
+ * 学号/密码表单内联在这一屏里：进来就能输，登录成功立刻落令牌并重载余额。
  *
- * 同时显式说明**登录之后会得到什么**（后台电费提醒才可能生效），
- * 让用户明白这一步不是多余的。
+ * 密码只在本次组合内存在，成功后立刻丢弃（[YktStore] 不存一卡通密码）；
+ * 失败原样显示 CAS 的文案，方便区分"密码错"与"账号没激活"。
+ * 需要手机号/短信等其它方式时，底部仍留「改用网页登录」兜底。
  */
 @Composable
 private fun LoginRequiredCard(
     modifier: Modifier = Modifier,
     refreshing: Boolean,
-    onLogin: () -> Unit,
+    onToken: (String) -> Unit,
+    onWebLogin: () -> Unit,
     onRetry: () -> Unit,
 ) {
+    var studentId by remember { mutableStateOf(YktStore.academicStudentId()) }
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    // 隐藏 WebView 登录需要 Context；LocalContext 只能在 composable 作用域读。
+    val context = androidx.compose.ui.platform.LocalContext.current
+
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = PagePadding, vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .padding(horizontal = PagePadding, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        SystemCard {
+        Text(
+            text = "统一身份认证",
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = "用学校的学号与统一身份认证密码直接登录一卡通，不需要打开网页。" +
+                "密码只用于这一次登录，不会被保存。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            lineHeight = 19.sp,
+        )
+        OutlinedTextField(
+            value = studentId,
+            onValueChange = { studentId = it.trim() },
+            label = { Text("学号") },
+            singleLine = true,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("统一身份认证密码") },
+            singleLine = true,
+            enabled = !busy,
+            visualTransformation = if (showPassword) VisualTransformation.None
+            else PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        TextButton(onClick = { showPassword = !showPassword }) {
+            Text(if (showPassword) "隐藏密码" else "显示密码")
+        }
+        failure?.let { message ->
             Text(
-                text = "需要登录一卡通",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "一卡通使用学校统一身份认证，与教务、第二课堂的登录状态互不通用，" +
-                    "因此需要单独登录一次。",
+                text = message,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.error,
                 lineHeight = 19.sp,
             )
-            Spacer(Modifier.height(10.dp))
-            MarkdownText(
-                text = "登录后可以：\n" +
-                    "- 查看校园卡余额与未结算金额\n" +
-                    "- 查看每月消费与充值汇总，并能跳官方账单看逐笔明细\n" +
-                    "- 按宿舍房间查询剩余电费\n" +
-                    "- 开启电费低于阈值的系统通知（后台自动巡检）",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                lineHeight = 20.sp,
-            )
-            Spacer(Modifier.height(14.dp))
-            SystemPrimaryButton(
-                text = "登录一卡通",
-                onClick = onLogin,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-            MarkdownText(
-                text = "登录在学校统一身份认证页面完成，本应用**不接收、不保存**你的一卡通密码。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth(),
-            )
         }
+        SystemPrimaryButton(
+            text = if (busy) "正在登录…" else "登录",
+            onClick = {
+                if (busy) return@SystemPrimaryButton
+                busy = true
+                failure = null
+                scope.launch {
+                    // YktCasLogin 现在用一个隐藏 WebView 跑校方真实登录页，
+                    // 只能在主线程驱动，所以这里不再切 Dispatchers.IO。
+                    val result = YktCasLogin.login(context, studentId, password)
+                    busy = false
+                    when (result) {
+                        is YktCasLogin.Result.Success -> {
+                            password = ""
+                            onToken(result.auth)
+                        }
 
+                        is YktCasLogin.Result.Failure -> failure = result.message
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !busy && studentId.isNotBlank() && password.isNotEmpty(),
+        )
+        TextButton(onClick = { if (!busy) onWebLogin() }) {
+            Text("改用网页登录")
+        }
         // 已登录却仍进到这一屏是罕见状态（如令牌刚被清掉但界面没刷新），
         // 给一个重新检测的出口，避免用户只能杀进程。
-        TextButton(onClick = onRetry, enabled = !refreshing) {
+        TextButton(onClick = onRetry, enabled = !refreshing && !busy) {
             Text(if (refreshing) "检测中…" else "我已登录过，重新检测")
         }
     }

@@ -56,7 +56,7 @@ import java.util.concurrent.TimeUnit
 /**
  * 附件查看器宿主页。
  *
- * 与 [com.hnnujw.course.AnnouncementActivity] 同构：独立全屏页 + 液态玻璃页壳。
+ * 结构约定：独立全屏页 + 液态玻璃页壳。
  * 职责只有三件 —— 把直链附件下载到缓存、按**内容**嗅探类型、分发给对应渲染器；
  * 具体怎么渲染（Word/Excel/PDF/图片/文本）在 [DocumentRenderers]。
  */

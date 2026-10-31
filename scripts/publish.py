@@ -98,11 +98,10 @@ EXPECTED_CERT_SHA256 = "4a02c49c06fb4acd9091fcc0c747bf5b9b2d61a79aed00adab828701
 # 必须是一个明确的 .apk 名字，别让用户和程序都去猜。
 ASSET_NAME = "app-release.apk"
 
-# 至少要打进包里的内置资产。公告跟代码同一次构建、同一个版本号，是 v1.2.2 起
-# 定下的规矩（不再有线上拉取通道）；漏掉它等于发出去一个"没有任何公告"的版本。
-# 用户手册同理：由 scripts/build_manual.py 从 用户手册.md 生成的 users_manual.json，
-# 漏掉它「我的 → 用户手册」就成了空页。
-REQUIRED_ASSETS = ("assets/announcement.json", "assets/users_manual.json")
+# 至少要打进包里的内置资产。用户手册由 scripts/build_manual.py 从 用户手册.md
+# 生成的 users_manual.json，跟代码同一次构建、同一个版本号；漏掉它
+# 「我的 → 用户手册」就成了空页。
+REQUIRED_ASSETS = ("assets/users_manual.json",)
 
 GRADLE_TASKS = (
     ":app:assembleDebug",
@@ -303,6 +302,22 @@ def sha256_of(path):
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def with_checksum_line(notes, apk_path):
+    """在 Release 正文末尾补一行 `sha256: <hex>`（第 16 轮）。
+
+    应用端 [AppUpdateIntegrity] 会核对这一行：下载完安装包后自己算一遍 SHA-256，
+    与这里声明的值不一致就**拒绝安装**并清掉缓存包。强制更新把"不装"这个选项拿走
+    了，那"装上去的确实是发布方构建的那个包"就得能被证明，不能只靠相信下载链接。
+
+    校验和必须由发布脚本自己算 —— 让人手抄一次 64 位十六进制，抄错的概率远高于
+    写错的概率，而抄错的后果是**所有人都装不上**，比不校验还糟。
+    release-notes 里已经手写了校验和就尊重它，不覆盖。
+    """
+    if re.search(r"(?im)^[\s>*`\-]*sha-?256[\s*`]*[:：][\s*`]*[0-9a-f]{64}\b", notes):
+        return notes
+    return f"{notes}\n\nsha256: {sha256_of(apk_path)}"
 
 
 def release_notes_for(tag):
@@ -522,8 +537,7 @@ def step_verify_apk(version, code):
         )
     ok(f"已签名（证书 {fingerprint[:16]}…，与 EXPECTED_CERT_SHA256 一致）")
 
-    # 内置资产：公告跟代码同一次构建，"这一版必须带公告"由单测
-    # （AnnouncementLogicTest）守；这里只确认它真的被打进了包。
+    # 内置资产：用户手册跟代码同一次构建；这里只确认它真的被打进了包。
     with zipfile.ZipFile(apk) as zf:
         names = set(zf.namelist())
     for required in REQUIRED_ASSETS:
@@ -899,7 +913,7 @@ def main(argv=None):
         say(f"    确认无误后跑 `python scripts/publish.py` 推送并发布")
         return
 
-    notes = release_notes_for(tag)
+    notes = with_checksum_line(release_notes_for(tag), staged)
     step_push(tag, platforms)
     step_release(tag, notes, staged, platforms, args.reupload)
     step_verify_live(tag, platforms)

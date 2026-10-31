@@ -22,7 +22,15 @@ data class AppUpdateInfo(
      * 用来兜"不升级就没法用"的版本（例如教务端改了协议、旧版的登录直接失败）。
      * 这**不是**安全边界 —— 用户永远可以直接杀掉进程，它只表达"请务必更新"。
      */
-    val forceUpdate: Boolean = false
+    val forceUpdate: Boolean = false,
+    /**
+     * 发布说明里声明的安装包 SHA-256（小写，64 位）；没写就是 null。
+     *
+     * 有了它，装之前就能核对"下下来的包确实是我发布的那个包"。强制更新意味着
+     * 用户没有拒绝的余地，那这件事就必须能被证明，而不能只相信 URL 没被改。
+     * 解析见 [AppUpdateIntegrity.parseDeclaredSha256]。
+     */
+    val declaredSha256: String? = null,
 )
 
 /**
@@ -88,6 +96,8 @@ object AppUpdateChecker {
             val rawBody = json.optString("body", "")
             val force = isForceUpdate(rawBody)
             val notes = notesForDisplay(rawBody)
+            // 发布说明里可选声明本版安装包的 SHA-256，装之前用来核对包没被替换。
+            val declaredSha = AppUpdateIntegrity.parseDeclaredSha256(rawBody)
             // 只有 .apk 资产才是安装包。同一个 Release 下还有 v1.2.2.zip / .tar.gz
             // 两个**源码包**，它们排在前面的可能性不小，所以这里必须按扩展名严格挑，
             // 挑不到就退回 Release 网页让用户自己选，绝不能把源码包当安装包下下来。
@@ -100,7 +110,7 @@ object AppUpdateChecker {
             }
             val downloadUrl = assetUrl ?: RELEASE_PAGE
             if (isNewer(tag, currentVersion)) {
-                Result.Update(AppUpdateInfo(tag, notes, downloadUrl, forceUpdate = force))
+                Result.Update(AppUpdateInfo(tag, notes, downloadUrl, forceUpdate = force, declaredSha256 = declaredSha))
             } else {
                 Result.UpToDate(tag)
             }
@@ -134,6 +144,8 @@ object AppUpdateChecker {
      */
     fun notesForDisplay(body: String): String = body
         .replace(forceUpdateLine, "")
+        // 校验和行同理：机器读的，露出来只是一串十六进制。
+        .let(AppUpdateIntegrity::stripDeclaredSha256)
         .lines()
         .joinToString("\n")
         .replace(Regex("\n{3,}"), "\n\n")

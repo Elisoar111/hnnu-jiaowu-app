@@ -22,7 +22,19 @@ data class ScheduleTimeBase(val firstWeekDate: String = "", val periodStarts: Ma
 }
 
 data class ReminderPermissions(val notifications: Boolean, val exactAlarms: Boolean) {
-    val available: Boolean get() = notifications && exactAlarms
+    /**
+     * 能不能排提醒 —— **只看通知权限**。
+     *
+     * 这里以前是 `notifications && exactAlarms`，代价非常具体：Android 14 起系统会回收
+     * 长期未使用应用的「精确闹钟」权限（`canScheduleExactAlarms()` 变 false），一旦被回收，
+     * [reconcileCourseReminders] 就把所有已排的闹钟**全部撤掉**，用户看到的现象正是
+     * 「课程提醒有时响、有时不响」。现在没有精确权限时降级成不精确闹钟
+     * （见 `ScheduleReminderScheduler.alarms.schedule`）：宁可晚一两分钟，也不要静默不响。
+     */
+    val available: Boolean get() = notifications
+
+    /** 是否真能卡在整分钟上响；false 时提醒照样发，只是可能被系统推迟几分钟。 */
+    val precise: Boolean get() = notifications && exactAlarms
 }
 
 enum class ReminderAvailability { Off, NeedsPermission, NeedsTime, InvalidWeeks, Scheduled, NoUpcoming, InactiveAccount }

@@ -89,10 +89,16 @@ object ReviewReminderNotifier {
             .setStyle(NotificationCompat.BigTextStyle().bigText(ReviewReminderTime.body(dueCount)))
             .setContentIntent(content)
             .setAutoCancel(true)
-            // 同一天多次触发只更新这一条，不要叠成一堆。
-            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .build()
         return runCatching {
+            // 先把昨天那条还没被划掉的清掉，再发新的。
+            // 以前这里用 `setOnlyAlertOnce(true)` 表达"多次触发只更新这一条"，
+            // 但它的真实语义是：**只要旧通知还在通知栏里，新的就静默替换**——
+            // 不响、不亮屏、没有横幅。复习提醒是每天一条，用户不划掉就再也听不到提示，
+            // 表现正好是"有时候有提醒、有时候没有"。
+            compat.cancel(NOTIFICATION_ID)
             compat.notify(NOTIFICATION_ID, notification)
             true
         }.getOrElse {

@@ -97,7 +97,7 @@ private fun ScheduleCourseSheetContent(course: ScheduleCourseUi, account: String
         "「课程提醒」总开关已关闭，这里的开关暂不生效"
     } else when (status.availability) {
         ReminderAvailability.Off -> if (term.isBlank()) "学期信息加载后可设置提醒" else "开启后，在上课前通知你"
-        ReminderAvailability.NeedsPermission -> "待授权：允许通知和精确闹钟后生效"
+        ReminderAvailability.NeedsPermission -> "待授权：允许通知后即可生效"
         ReminderAvailability.NeedsTime -> "待补全本学期第一周周一日期或节次时间"
         ReminderAvailability.InvalidWeeks -> "周次待核对"
         ReminderAvailability.Scheduled -> "下次提醒：" + SimpleDateFormat("M月d日 E HH:mm", Locale.CHINA).format(Date(status.next!!.triggerAt))

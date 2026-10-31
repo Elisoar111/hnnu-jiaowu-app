@@ -193,3 +193,6 @@ plugins-workspace/
 .bskhome/
 .npmcache/
 .npm-cache/
+
+# 旁支工程：与本仓库无关的独立插件项目（115MB，含 node_modules），不入库
+/ceru-lyrics-plugin/

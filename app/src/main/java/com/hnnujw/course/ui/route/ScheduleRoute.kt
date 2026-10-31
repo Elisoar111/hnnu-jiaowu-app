@@ -966,7 +966,8 @@ fun ScheduleRoute() {
                     // 而设置页是压在它上面的独立窗口，不关就看不见弹窗。
                     close()
                 },
-                // 提醒设置单独一页，行上显示当前状态（总开关/提前量/自动模式）。
+                // 课表设置里也保留一份提醒入口（与「我的 → 提醒与权限」打开的是同一页，
+                // 靠 showReminderSettings 在同一个子页窗口内切换），两处改的是同一份配置。
                 onOpenReminderSettings = { showReminderSettings = true },
                 reminderSummary = reminderSummary,
                 effectiveFirstWeekDate = displayedTimeBase?.firstWeekDate,

@@ -758,12 +758,15 @@ fun SystemPrimaryButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    compact: Boolean = false,
     leadingIcon: (@Composable () -> Unit)? = null
 ) {
     // iOS filled button：不透明实色胶囊。按压回缩与灰罩由全局 GlassPressIndication 统一提供。
+    // compact 档（40dp）只给卡片里并排的批量按钮用，避免铺满整行的巨型胶囊。
+    val buttonHeight = if (compact) 40.dp else 52.dp
     LiquidButton(
         onClick = onClick,
-        modifier = modifier.height(52.dp),
+        modifier = modifier.height(buttonHeight),
         enabled = enabled,
         style = LiquidButtonStyle.SolidTinted,
         tint = MaterialTheme.colorScheme.primary,
@@ -785,13 +788,15 @@ fun SystemSecondaryButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    compact: Boolean = false,
     leadingIcon: (@Composable () -> Unit)? = null
 ) {
     val appearance = LocalWallpaperAppearanceColors.current
     // iOS gray-fill：不透明浅灰胶囊，文字用 onSurface 实色，保证任何底色上都清晰。
+    val buttonHeight = if (compact) 40.dp else 52.dp
     LiquidButton(
         onClick = onClick,
-        modifier = modifier.height(52.dp),
+        modifier = modifier.height(buttonHeight),
         enabled = enabled,
         style = LiquidButtonStyle.SolidSurface,
         contentColor = appearance.onSurface,
@@ -812,11 +817,13 @@ fun SystemDestructiveButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    compact: Boolean = false,
     leadingIcon: (@Composable () -> Unit)? = null
 ) {
+    val buttonHeight = if (compact) 40.dp else 52.dp
     LiquidButton(
         onClick = onClick,
-        modifier = modifier.height(52.dp),
+        modifier = modifier.height(buttonHeight),
         enabled = enabled,
         style = LiquidButtonStyle.SolidTinted,
         tint = MaterialTheme.colorScheme.error,

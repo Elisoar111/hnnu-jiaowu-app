@@ -317,10 +317,14 @@ public class UserManager {
         if (!key.isEmpty()) {
             currentAccountKey = key;
             if (!this.sessionPassword.isEmpty()) {
-                sessionPasswords.put(key, this.sessionPassword);
+                // 统一按 storage key（`school__id`）缓存与落盘：账号管理界面的查询用的是
+                // getCurrentAccountStorageKey()，若这里写未归一化的 key（含 "::"），
+                // 就会出现「明明已经登录，界面却显示未存密码」且永远删不掉。
+                String storageKey = toStorageKey(key);
+                sessionPasswords.put(storageKey, this.sessionPassword);
                 // 落盘（Keystore 加密）：冷启动后仍能静默续期，这是"账号永久保存"的落点
                 if (appContext != null) {
-                    CredentialStore.INSTANCE.save(appContext, key, this.sessionPassword);
+                    CredentialStore.INSTANCE.save(appContext, storageKey, this.sessionPassword);
                 }
             }
         }
@@ -340,15 +344,22 @@ public class UserManager {
      * 所以杀进程重开之后依然拿得到 —— 会话失效时的自动续期靠的就是这一条。
      */
     public String getAccountPassword() {
-        String key = currentAccountKey;
-        if (key != null && !key.isEmpty()) {
+        for (String key : passwordKeyForms(currentAccountKey)) {
             String cached = sessionPasswords.get(key);
             if (cached != null && !cached.isEmpty()) return cached;
-            if (appContext != null) {
+        }
+        if (appContext != null) {
+            for (String key : passwordKeyForms(currentAccountKey)) {
                 String stored = CredentialStore.INSTANCE.load(appContext, key);
                 if (stored != null && !stored.isEmpty()) {
-                    sessionPasswords.put(key, stored);
+                    String canonical = toStorageKey(currentAccountKey);
+                    sessionPasswords.put(canonical, stored);
                     sessionPassword = stored;
+                    // 旧版本按未归一化 key 存的，顺手迁到 storage key，之后只认一份
+                    if (!canonical.equals(key)) {
+                        CredentialStore.INSTANCE.save(appContext, canonical, stored);
+                        CredentialStore.INSTANCE.remove(appContext, key);
+                    }
                     return stored;
                 }
             }
@@ -359,22 +370,49 @@ public class UserManager {
     /** 指定账号是否有已保存的密码（账号管理界面用来决定要不要显示"删除密码"）。 */
     public boolean hasSavedPassword(String accountKey) {
         if (accountKey == null || accountKey.isEmpty()) return false;
-        String cached = sessionPasswords.get(accountKey);
-        if (cached != null && !cached.isEmpty()) return true;
-        return appContext != null && CredentialStore.INSTANCE.has(appContext, accountKey);
+        for (String key : passwordKeyForms(accountKey)) {
+            String cached = sessionPasswords.get(key);
+            if (cached != null && !cached.isEmpty()) return true;
+            if (appContext != null && CredentialStore.INSTANCE.has(appContext, key)) return true;
+        }
+        return false;
     }
 
     /** 只删密码，账号记录与 Cookie 保留：之后仍能用这个账号，但不再自动续期。 */
     public void deletePassword(String accountKey) {
         if (accountKey == null || accountKey.isEmpty()) return;
-        sessionPasswords.remove(accountKey);
-        if (accountKey.equals(currentAccountKey)) {
-            sessionPassword = "";
-        }
-        if (appContext != null) {
-            CredentialStore.INSTANCE.remove(appContext, accountKey);
+        String currentStorage = currentAccountKey != null && !currentAccountKey.isEmpty()
+                ? toStorageKey(currentAccountKey) : "";
+        for (String key : passwordKeyForms(accountKey)) {
+            sessionPasswords.remove(key);
+            if (appContext != null) {
+                CredentialStore.INSTANCE.remove(appContext, key);
+            }
+            if (key.equals(currentStorage)) {
+                sessionPassword = "";
+            }
         }
         Log.d(TAG, "已删除账号密码: " + accountKey);
+    }
+
+    /**
+     * 同一个账号的两种键形态：[AccountKeys.storageKey] 归一化后的 storage key
+     * （`hnnu__2505050111`）与原始账号键（`hnnu::2505050111`）。
+     *
+     * 为什么需要：口令的写入侧与读取侧历史上用了不同口径 —— 账号管理面板传的是
+     * {@link #getCurrentAccountStorageKey()}，而账号列表传的是 [AccountRecord.key]
+     * （原始键）。只认一种就会出现「已经登录却显示未存密码」和「点了删除没反应」。
+     * 这里统一成"两种都认"，旧数据不迁移也能正确显示。
+     */
+    private String[] passwordKeyForms(String accountKey) {
+        if (accountKey == null || accountKey.isEmpty()) return new String[0];
+        String storage = toStorageKey(accountKey);
+        String currentRaw = currentAccountKey != null ? currentAccountKey : "";
+        if (currentRaw.isEmpty()) return new String[]{storage};
+        String currentStorage = toStorageKey(currentRaw);
+        if (!storage.equals(currentStorage)) return new String[]{storage};
+        if (currentRaw.equals(storage)) return new String[]{storage};
+        return new String[]{storage, currentRaw};
     }
 
     /**

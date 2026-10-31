@@ -280,8 +280,7 @@ fun SecondClassActivityCenterScreen(
     onRequestCollegeInfo: () -> Unit = {},
 ) {
     val currentDetail = detail
-    // 扫码入口合并成一个图标：点开后再选相机扫码或从相册识别
-    var showScanPicker by rememberSaveable { mutableStateOf(false) }
+    // 扫码入口合并成一个图标：点开**直接**进扫码弹窗（弹窗内自带相册识别）
     // 活动筛选弹窗：只看未报满 / 只看本院系可报
     var showFilterSheet by rememberSaveable { mutableStateOf(false) }
     var filterNotFull by rememberSaveable { mutableStateOf(false) }
@@ -335,7 +334,9 @@ fun SecondClassActivityCenterScreen(
                             actions = listOf(
                                 SystemMenuAction("筛选活动", Icons.Outlined.FilterList, onClick = { showFilterSheet = true }),
                                 SystemMenuAction("刷新", Icons.Outlined.Refresh, onClick = { onRefresh() }),
-                                SystemMenuAction("扫码签到", Icons.Outlined.QrCodeScanner, onClick = { showScanPicker = true })
+                                // 直接进扫码：以前这里再弹一层"相机扫码 / 从相册识别"的选择框，
+                            // 等于为必然动作多点一次；相册入口已经做进扫码弹窗里了。
+                            SystemMenuAction("扫码签到", Icons.Outlined.QrCodeScanner, onClick = onScan)
                             )
                         )
                     }
@@ -439,36 +440,6 @@ fun SecondClassActivityCenterScreen(
         onDeclareFormChange(null)
     }
 
-    // 扫码方式选择：相机扫码 / 从相册识别（合并成一个入口后的二级选择）
-    if (showScanPicker) {
-        SystemDialog(onDismissRequest = { showScanPicker = false }, title = {
-            Text(
-                text = "扫码签到",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SystemPrimaryButton(
-                    text = "相机扫码",
-                    onClick = {
-                        showScanPicker = false
-                        onScan()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                SystemSecondaryButton(
-                    text = "从相册识别",
-                    onClick = {
-                        showScanPicker = false
-                        onScanFromGallery()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-    }
 
     // 活动筛选：报名人数已满 / 本院系可报（本地过滤）
     if (showFilterSheet) {

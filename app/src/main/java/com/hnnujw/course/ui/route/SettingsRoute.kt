@@ -100,6 +100,13 @@ fun SettingsRoute(
     
     var studentName by remember { mutableStateOf("") }
     var deviceId by remember { mutableStateOf("") }
+    /**
+     * 学号（= 教务登录账号）。「个人信息」弹窗用它生成二维码。
+     *
+     * 来源顺序：`UserManager.studentId`（首页解析教务时写入）→ `UserManager.username`
+     * （正方教务的登录账号本身就是学号）→ 空串（弹窗显示空态，绝不拿设备 ID 冒充）。
+     */
+    var studentNumber by remember { mutableStateOf("") }
     var schoolName by remember { mutableStateOf("") }
     /**
      * 本人院系 / 专业（「我的」页头像下面那行，替换原先只显示校名的做法）。
@@ -116,11 +123,15 @@ fun SettingsRoute(
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var showAccountManagerDialog by remember { mutableStateOf(false) }
+    // 课程提醒 + 权限自检整页：原先是课表设置里的「课程提醒」入口，
+    // 现在合并到「我的 → 通知提醒」，「我的」和课表不再各有一套权限引导。
+    var showReminderSettings by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var pendingPasswordDelete by remember { mutableStateOf<UserManager.AccountRecord?>(null) }
     var pendingAccountDelete by remember { mutableStateOf<UserManager.AccountRecord?>(null) }
     var showWallpaperDialog by remember { mutableStateOf(false) }
     var showThemeDialog by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var showFontDialog by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var showPersonInfoDialog by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var showStartupPageDialog by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     val startupPagePreferences = remember(context) { StartupPagePreferences.from(context) }
     var startupPage by remember(startupPagePreferences) { mutableStateOf(startupPagePreferences.read()) }
@@ -297,16 +308,6 @@ fun SettingsRoute(
             )
         }
     }
-    // 开发者公告：进入「我的」时确保内置公告已载入（进程内只解析一次），用来算红点；
-    // 点入口进独立的公告中心页（与消息中心同构）。
-    // 以前这里弹一个列表弹窗、点开再叠一个详情弹窗，正文长了很难读；现在统一成整页。
-    val announcementUnread = com.hnnujw.course.announcement.AnnouncementCenter.unreadCount
-    LaunchedEffect(isDemoMode) {
-        if (isDemoMode) return@LaunchedEffect
-        // 读 assets 那一步在 load 内部切到 IO，状态更新落在主线程；这里不用再包一层
-        com.hnnujw.course.announcement.AnnouncementCenter.load(context)
-    }
-
     // 通知权限状态：Android 13+ 需要在系统里授权才会弹成绩发布/站内消息/考前提醒。
     // 用户在系统设置里改完回到前台时，生命周期回到 RESUMED，这里跟着更新。
     val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
@@ -341,6 +342,10 @@ fun SettingsRoute(
 
         studentName = name ?: "同学"
         deviceId = ActivationManager.getSavedDeviceId(context)
+        // 学号：先取教务侧解析出的 studentId，没有再退回登录用户名（正方账号就是学号）。
+        studentNumber = userManager.studentId?.takeIf { it.isNotBlank() }
+            ?: userManager.username?.takeIf { it.isNotBlank() }
+            ?: ""
         schoolName = school?.name ?: "未选择"
 
         isSuper = ActivationManager.getMaxStudents(context) <= 0
@@ -546,6 +551,7 @@ fun SettingsRoute(
     SettingsScreen(
         studentName = studentName,
         studentId = deviceId,
+        studentNumber = studentNumber,
         schoolName = schoolName,
         collegeName = collegeName,
         majorName = majorName,
@@ -556,14 +562,10 @@ fun SettingsRoute(
         onAccountManage = {
             if (isDemoMode) GlassToaster.show("本地演示模式不读取真实账号") else showAccountManagerDialog = true
         },
+        onPersonInfo = { showPersonInfoDialog = true },
         onAddAccount = { launchRelogin() },
         savedAccountCount = allAccounts.size,
         onClearCache = { showClearCacheDialog = true },
-        onPrivacy = {
-            // 与手册共用同一个 Activity，只是读的 asset 不同。
-            runCatching { context.startActivity(com.hnnujw.course.ManualActivity.privacyIntent(context)) }
-                .onFailure { GlassToaster.show("无法打开隐私政策") }
-        },
         onBackup = {
             if (backupBusy) GlassToaster.show("正在处理上一个操作，请稍候")
             else backupLauncher.launch(com.hnnujw.course.backup.BackupManager.suggestedFileName())
@@ -601,14 +603,15 @@ fun SettingsRoute(
         navBarLayoutSummary = navBarLayoutSummary,
         onNavBarEdit = { onNavBarEdit() },
         messageUnread = messageUnread,
-        announcementUnread = announcementUnread,
-        onAnnouncements = { context.startActivity(Intent(context, com.hnnujw.course.AnnouncementActivity::class.java)) },
         isSuper = isSuper,
         canRefreshCookie = canRefreshCookie,
         isRefreshingCookie = isRefreshingCookie,
         academicSystemName = com.hnnujw.course.academic.AcademicCapabilities.name(UserManager.getInstance().currentSchool?.academicSystem),
         notificationsAllowed = notificationsAllowed,
-        onNotificationSettings = { MainActivity.openNotificationSettings(context) },
+        // 「通知提醒」现在打开**课程提醒整页**（总开关 / 提前量 / 权限自检 /
+        // 错题复习提醒），不再只是跳系统通知设置 —— 那条路只能看到系统开关，
+        // 课程提醒怎么排、权限缺哪一项，全都够不着。
+        onNotificationSettings = { showReminderSettings = true },
         onMessageCenter = { context.startActivity(Intent(context, MessageCenterActivity::class.java)) },
         onKaojiRegistration = {
             runCatching { context.startActivity(Intent(context, com.hnnujw.course.KaojiActivity::class.java)) }
@@ -649,6 +652,17 @@ fun SettingsRoute(
     if (showFontDialog) {
         com.hnnujw.course.ui.screen.FontSettingsDialog(onDismiss = { showFontDialog = false })
     }
+    // 「个人信息」：我的页顶部表头卡片点开即是学号二维码。
+    if (showPersonInfoDialog) {
+        com.hnnujw.course.ui.screen.StudentPersonInfoDialog(
+            studentName = studentName,
+            studentNumber = studentNumber,
+            schoolName = schoolName,
+            collegeName = collegeName,
+            majorName = majorName,
+            onDismiss = { showPersonInfoDialog = false }
+        )
+    }
     if (showStartupPageDialog) {
         com.hnnujw.course.ui.screen.StartupPageSettingsDialog(
             page = startupPage,
@@ -667,6 +681,16 @@ fun SettingsRoute(
 
     // 头像不再自己申请相册权限：照片选择器由系统进程代理读图，App 不需要权限。
     // 原先那块「需要相册读取权限」的引导弹窗（含跳系统设置那一支）随之整体移除。
+
+    // ── 课程提醒 / 权限自检（整页从「课表设置」合并过来） ──
+    if (showReminderSettings) {
+        com.hnnujw.course.ui.system.GlassSubpage(onDismiss = { showReminderSettings = false }) { close ->
+            com.hnnujw.course.ui.screen.ReminderSettingsScreen(
+                scheduler = com.hnnujw.course.schedule.ScheduleReminderScheduler.get(context),
+                onBack = { close() },
+            )
+        }
+    }
 
     // Dialogs
     if (showLogoutDialog) {
@@ -1049,6 +1073,8 @@ private fun AccountManagerDialog(
     onAddAccount: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    // 面板的回调不是 @Composable，LocalContext.current 必须在这里先取出来。
+    val dialogContext = androidx.compose.ui.platform.LocalContext.current
     SystemDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1058,14 +1084,14 @@ private fun AccountManagerDialog(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = "账号管理",
+                    text = "账号与密码",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center
                 )
                 Text(
-                    text = "点账号卡切换 · 空槽位登录新账号（最多 3 个）",
+                    text = "各系统密码 · 点账号卡切换 · 空槽位登录新账号（最多 3 个）",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -1075,8 +1101,7 @@ private fun AccountManagerDialog(
         confirmButton = {
             SystemPrimaryButton(
                 text = "完成",
-                onClick = onDismiss,
-                modifier = Modifier.fillMaxWidth()
+                onClick = onDismiss
             )
         }
     ) {
@@ -1087,129 +1112,18 @@ private fun AccountManagerDialog(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            accounts.forEach { account ->
-                val isCurrent = account.key == currentAccountKey
-                val hasPassword = accountsWithPassword.contains(account.key)
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = !isCurrent) { onSwitchAccount(account.key) },
-                    color = if (isCurrent) NeuPrimary.copy(alpha = 0.12f)
-                        else MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(
-                                    text = account.displayName,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = "${account.accountIdText} · " +
-                                        if (account.loginMode == "password") "密码登录" else "Cookie 登录",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = account.schoolName.ifBlank { "未记录学校" },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            SystemStatusBadge(
-                                text = if (hasPassword) "已存密码" else "未存密码",
-                                tone = if (hasPassword) SystemTone.Success else SystemTone.Neutral
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (isCurrent) {
-                                SystemStatusBadge(text = "当前账号", tone = SystemTone.Info)
-                            } else {
-                                AccountActionButton(
-                                    text = "切换到此账号",
-                                    onClick = { onSwitchAccount(account.key) }
-                                )
-                            }
-                            Spacer(modifier = Modifier.weight(1f))
-                            if (hasPassword) {
-                                AccountActionButton(
-                                    text = "删除密码",
-                                    onClick = { onDeletePassword(account) }
-                                )
-                            }
-                            AccountActionButton(
-                                text = "删除账号",
-                                tint = com.hnnujw.course.ui.theme.SemanticDanger,
-                                onClick = { onDeleteAccount(account) }
-                            )
-                        }
-                    }
+            // 各系统的账号 / 密码：教务、第二课堂、学工各走自己的 Store，
+            // 一卡通只有统一身份认证（CAS），所以那一栏给的是"去登录"。
+            com.hnnujw.course.ui.screen.SystemCredentialsPanel(
+                studentId = UserManager.getInstance().studentId.orEmpty(),
+                onOpenYktLogin = {
+                    runCatching {
+                        dialogContext.startActivity(
+                            Intent(dialogContext, com.hnnujw.course.YktLoginActivity::class.java)
+                        )
+                    }.onFailure { GlassToaster.show("无法打开一卡通登录页") }
                 }
-            }
-
-            // 空槽位：点一下跳登录页，登录后即绑定新账号（上限 3）。
-            repeat((3 - accounts.size).coerceAtLeast(0)) { _ ->
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onAddAccount),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f),
-                    shape = RoundedCornerShape(16.dp),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        NeuPrimary.copy(alpha = 0.35f)
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Surface(
-                            shape = androidx.compose.foundation.shape.CircleShape,
-                            color = NeuPrimary.copy(alpha = 0.12f)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Add,
-                                contentDescription = null,
-                                tint = NeuPrimary,
-                                modifier = Modifier.padding(6.dp).size(20.dp)
-                            )
-                        }
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = "登录其它账号",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "点这里跳转登录页，登录后自动绑定到本机",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-
+            )
             Text(
                 text = "密码经系统密钥库加密后仅保存在本机，用于登录状态失效时自动续期；" +
                     "退出登录不会删除它。删除账号不会释放设备绑定名额。",

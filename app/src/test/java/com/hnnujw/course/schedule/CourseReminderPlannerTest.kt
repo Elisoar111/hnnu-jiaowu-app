@@ -28,7 +28,10 @@ class CourseReminderPlannerTest {
             CourseReminderPlanner.plan(r, b, time(7, 7, 0), p, account, zone).availability
         assertEquals(ReminderAvailability.Off, status(reminder.copy(enabled = false)))
         assertEquals(ReminderAvailability.NeedsPermission, status(p = ReminderPermissions(false, true)))
-        assertEquals(ReminderAvailability.NeedsPermission, status(p = ReminderPermissions(true, false)))
+        // 精确闹钟权限不再阻断排期：没有它的时候调会降级成不精确闹钟照常响
+        // （`ReminderPermissions.available` 只看通知权限），只有"通知权限"
+        // 才该让提醒彻底停下。
+        assertEquals(ReminderAvailability.Scheduled, status(p = ReminderPermissions(true, false)))
         assertEquals(ReminderAvailability.NeedsTime, status(b = null))
         assertEquals(ReminderAvailability.NeedsTime, status(b = base.copy(firstWeekDate = "2026-09-08")))
         assertEquals(ReminderAvailability.InvalidWeeks, status(reminder.copy(course = course.copy(weeks = "待定"))))

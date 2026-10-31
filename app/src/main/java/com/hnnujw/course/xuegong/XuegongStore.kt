@@ -42,19 +42,37 @@ object XuegongStore {
         prefs(context).edit().remove(KEY_TOKEN_PREFIX + accountKey).apply()
     }
 
-    fun hasPassword(context: Context, accountKey: String): Boolean =
-        CredentialStore.has(context, credentialKey(accountKey))
-
-    fun savePassword(context: Context, accountKey: String, password: String) {
-        CredentialStore.save(context, credentialKey(accountKey), password)
+    fun hasPassword(context: Context, accountKey: String): Boolean {
+        return credentialKeys(accountKey).any { CredentialStore.has(context, it) }
     }
 
-    fun loadPassword(context: Context, accountKey: String): String? =
-        CredentialStore.load(context, credentialKey(accountKey))
+    fun savePassword(context: Context, accountKey: String, password: String) {
+        val keys = credentialKeys(accountKey)
+        if (keys.isEmpty()) return
+        CredentialStore.save(context, keys.first(), password)
+        // 旧键留一份会和规范键各存一条，日后改密码只改得动一条，静默续期就可能读到旧值
+        keys.drop(1).forEach { CredentialStore.remove(context, it) }
+    }
+
+    fun loadPassword(context: Context, accountKey: String): String? {
+        for ((index, key) in credentialKeys(accountKey).withIndex()) {
+            val value = CredentialStore.load(context, key)
+            if (!value.isNullOrBlank()) {
+                // 命中历史键就顺手搬到规范键，之后只认一处
+                if (index > 0) savePassword(context, accountKey, value)
+                return value
+            }
+        }
+        return null
+    }
+
+    fun clearPassword(context: Context, accountKey: String) {
+        credentialKeys(accountKey).forEach { CredentialStore.remove(context, it) }
+    }
 
     fun clearAccount(context: Context, accountKey: String) {
         clearToken(context, accountKey)
-        CredentialStore.remove(context, credentialKey(accountKey))
+        credentialKeys(accountKey).forEach { CredentialStore.remove(context, it) }
     }
 
     /**
@@ -72,8 +90,27 @@ object XuegongStore {
         return failure?.message ?: error.message ?: "学工系统加载失败，请重试"
     }
 
-    /** 与教务、二课的凭据键都区分开，避免同一账号的几套密码互相覆盖。 */
-    private fun credentialKey(accountKey: String) = "xg::$accountKey"
+    /**
+     * 同一条密码可能存在的两种键写法：归一化后的 "xg::hnnu__2505050111"，
+     * 以及老版本按 currentAccountKey 原样存下的 "xg::hnnu::2505050111"。
+     *
+     * 为什么必须两种都认：写入侧（登录成功时）传的是原始账号键，读取侧（设置里的
+     * 密码面板）传的是 storage key。两边口径不同就会"明明登录成功却显示未存密码"，
+     * 而且清除也删不掉真正的条目。所以统一成"写归一化键、读写都容忍旧键"，
+     * 老数据不必迁移也能立刻显示正确。
+     */
+    private fun credentialKeys(accountKey: String): List<String> {
+        if (accountKey.isBlank()) return emptyList()
+        val canonical = "xg::" + normalize(accountKey)
+        val legacy = "xg::$accountKey"
+        return if (canonical == legacy) listOf(canonical) else listOf(canonical, legacy)
+    }
+
+    private fun credentialKey(accountKey: String) = "xg::" + normalize(accountKey)
+
+    /** 账号键归一化：只留 [A-Za-z0-9_.-]，与 UserManager/二课的口径保持一致。 */
+    private fun normalize(accountKey: String): String =
+        accountKey.ifBlank { "default" }.replace(Regex("[^A-Za-z0-9_.-]"), "_")
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

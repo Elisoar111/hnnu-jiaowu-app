@@ -153,14 +153,6 @@
             android:configChanges="uiMode"
             android:exported="false"
             android:screenOrientation="portrait" />
-        <!-- 开发者公告中心：与消息中心同构的整页（未读/已读分段 + 列表 + 详情）。
-             公告无需登录，页面本身不打教务接口。 -->
-        <activity
-            android:name=".AnnouncementActivity"
-            android:configChanges="uiMode"
-            android:exported="false"
-            android:screenOrientation="portrait" />
-
         <!-- 教务系统「考级项目报名」：复用教务会话（jwgl https）；测试账号只读演示 -->
         <activity
             android:name=".KaojiActivity"

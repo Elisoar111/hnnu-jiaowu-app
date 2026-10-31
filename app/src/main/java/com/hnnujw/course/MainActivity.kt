@@ -604,37 +604,11 @@ fun MainScreen(
     }
     val pendingUpdate = com.hnnujw.course.network.UpdateCenter.pending
 
-    // 开发者公告：随包内置（assets/announcement.json），有**适用于当前版本**的未读公告
-    // 就弹一次液态玻璃公告。包名迁移这类重大通知都在这里触达；全部公告见「我的 → 公告」。
-    // 「适用于当前版本」由 AnnouncementCenter 按 versionCode 判定：写给旧版本的、或压根
-    // 没声明版本范围的历史公告不会被弹出来（见 AnnouncementManager.Announcement.appliesTo）。
-    var announcementShownThisSession by remember { mutableStateOf(false) }
-    LaunchedEffect(currentAccountStorageKey, foreground, isDemoMode, showOnboarding) {
-        if (isDemoMode || showOnboarding || currentAccountStorageKey.isBlank()) return@LaunchedEffect
-        // 读 assets 那一步在 load 内部切到 IO，状态更新落在主线程；这里不用再包一层
-        com.hnnujw.course.announcement.AnnouncementCenter.load(context)
-        if (!announcementShownThisSession &&
-            com.hnnujw.course.announcement.AnnouncementCenter.unreadCount > 0) {
-            // 稍等首帧就绪，别和「欢迎回来」提示挤在同一瞬间
-            kotlinx.coroutines.delay(600)
-            announcementShownThisSession = true
-        }
-    }
-    val pendingAnnouncement = com.hnnujw.course.announcement.AnnouncementCenter.firstUnread
-    // 两个弹窗排队：更新提示先出（它带着"立即更新"这个动作），用户处理完再轮到公告。
-    // 都走 SystemDialog，同一时刻显示两张玻璃卡会叠在屏幕正中。
     if (pendingUpdate != null) {
         com.hnnujw.course.ui.update.AppUpdateDialog(
             info = pendingUpdate,
             currentVersion = com.hnnujw.course.BuildConfig.VERSION_NAME,
             onDismiss = { com.hnnujw.course.network.UpdateCenter.dismiss(context) }
-        )
-    } else if (announcementShownThisSession && pendingAnnouncement != null) {
-        com.hnnujw.course.announcement.AnnouncementDialog(
-            announcement = pendingAnnouncement,
-            onDismiss = {
-                com.hnnujw.course.announcement.AnnouncementCenter.markRead(context, pendingAnnouncement.id)
-            }
         )
     }
 
