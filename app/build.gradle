@@ -179,6 +179,14 @@ android {
         debug {
             minifyEnabled false
             debuggable true
+            // 交付给用户试用的调试包也必须与线上包同签名，否则会报
+            // 「安装包签名校验失败」，无法覆盖已安装的 Release 版本。
+            // 2026-10-31 实际踩到：调试包 CN=Android Debug，Release 用正式证书，
+            // 两者不能互相覆盖安装。有正式凭据时统一走 signingConfigs.release；
+            // 凭据缺失时 release 配置本身已退回 debug keystore（见上方兜底），行为不变。
+            if (hasReleaseSigning || hasFallbackSigning) {
+                signingConfig signingConfigs.release
+            }
         }
         uiPreview {
             initWith debug
