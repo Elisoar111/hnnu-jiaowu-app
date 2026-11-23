@@ -76,6 +76,22 @@ fun CourseDetailContent(
     val entrance: () -> Float = { if (reduced) 1f else moduleProgress?.value?.coerceIn(0f, 1f) ?: 1f }
     val latestClose by rememberUpdatedState(onClose)
     val connection = remember(sheet) { sheet.nestedScroll { latestClose() } }
+    // 关闭按钮的粒子消散：
+    //
+    // 参考项目（BiliPai）在被删除的卡片上播 Telegram/NagramX 的 Thanos 粒子。这里落在
+    // 「关闭课程详情」这一步上 —— 点 X 之后，当前这一层被打散成粒子（约 2 秒），
+    // 播完再真正关掉弹层。**只挂在 X 上**：下拉关闭时弹层本身已经在走位，再叠粒子会两边打架。
+    var closing by remember { mutableStateOf(false) }
+    // 「我的 → 外观 → 粒子特效」的开关；关掉时和参考项目的 unavailable/reduced-motion 分支一样，
+    // 直接关掉弹层，不走抓图与 GL 线程。
+    // 直接读 state：用户在外观设置里拨开关时，已经开着的弹层也要立刻改口径。
+    val particleEnabled = com.hnnujw.course.manager.AppearanceSettingsManager.particleEffectEnabled
+    val closeWithDissolve: () -> Unit = {
+        if (!closing) {
+            // 系统开「减少动效」或用户关了粒子特效：直接关，不做装饰动画。
+            if (reduced || !particleEnabled) latestClose() else closing = true
+        }
+    }
     SideEffect { sheet.density = density.density; sheet.reducedMotion = reduced }
     val course = ui.course
     BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -83,6 +99,12 @@ fun CourseDetailContent(
         val compactHeight = maxHeight < 420.dp
         val titleDrift = ui.sourceCenterX?.let { (it - with(density) { maxWidth.toPx() } / 2f)
             .coerceIn(-with(density) { 16.dp.toPx() }, with(density) { 16.dp.toPx() }) } ?: 0f
+        // 消散把整张 Surface 包进去：抓的就是它（含圆角、含渐变），播完才真正关闭。
+        com.hnnujw.course.ui.system.particle.DissolvableClose(
+            closing = closing && particleEnabled,
+            onFinished = latestClose,
+            modifier = Modifier.fillMaxWidth()
+        ) {
         Surface(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(max = maxHeight * 0.85f)
                 .testTag("course-detail-surface").onSizeChanged { sheet.height = it.height.toFloat() }
@@ -117,7 +139,7 @@ fun CourseDetailContent(
                         actions = listOf(SystemMenuAction("删除课程", Icons.Outlined.Delete, onDelete, destructive = true)),
                         modifier = Modifier.testTag("course-detail-more")
                     )
-                    IconButton(onClose, Modifier.size(48.dp)) {
+                    IconButton(closeWithDissolve, Modifier.size(48.dp)) {
                         AnimatedLineIcon(AnimatedIconSpec.Close, description = "关闭课程详情", tint = colors.onSurfaceVariant)
                     }
                 }
@@ -287,6 +309,7 @@ fun CourseDetailContent(
                     }
                 } else Spacer(Modifier.height(16.dp))
             }
+        }
         }
     }
 }

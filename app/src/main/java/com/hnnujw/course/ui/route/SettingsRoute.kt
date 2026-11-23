@@ -502,52 +502,8 @@ fun SettingsRoute(
         }
     }
 
-    // 数据备份 / 恢复：走 SAF（系统文件选择器），不需要任何存储权限。
-    // 备份用 CreateDocument（用户挑存到哪），恢复用 OpenDocument（用户挑读哪个）。
-    // ⚠️ 这两个启动器必须声明在 SettingsScreen(...) 之前 —— 局部 val 不能前向引用。
-    var backupBusy by remember { mutableStateOf(false) }
-    val backupLauncher = rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/zip")
-    ) { uri: android.net.Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        backupBusy = true
-        scope.launch {
-            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                runCatching {
-                    val out = context.contentResolver.openOutputStream(uri)
-                        ?: return@withContext com.hnnujw.course.backup.BackupManager
-                            .Result(false, "无法写入所选位置")
-                    out.use { com.hnnujw.course.backup.BackupManager.backup(context, it) }
-                }.getOrElse {
-                    com.hnnujw.course.backup.BackupManager.Result(false, "备份失败：${it.message ?: "未知错误"}")
-                }
-            }
-            backupBusy = false
-            GlassToaster.show(result.message)
-        }
-    }
-    val restoreLauncher = rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
-    ) { uri: android.net.Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        backupBusy = true
-        scope.launch {
-            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                runCatching {
-                    val input = context.contentResolver.openInputStream(uri)
-                        ?: return@withContext com.hnnujw.course.backup.BackupManager
-                            .Result(false, "无法读取所选文件")
-                    input.use { com.hnnujw.course.backup.BackupManager.restore(context, it) }
-                }.getOrElse {
-                    com.hnnujw.course.backup.BackupManager.Result(false, "恢复失败：${it.message ?: "未知错误"}")
-                }
-            }
-            backupBusy = false
-            GlassToaster.show(result.message)
-            // 恢复后各页面手里是旧数据，让它们下次进入时重新读。
-            if (result.ok) com.hnnujw.course.ui.system.PageDataClearSignal.bump()
-        }
-    }
+    // 「备份数据 / 恢复数据 / 导出日志」三个入口已按要求下线（见 SettingsScreen 里的注释），
+    // 连带这两个 SAF 启动器一起删掉：留着没人调用的 launcher 只会让下一个人以为还有入口。
     SettingsScreen(
         studentName = studentName,
         studentId = deviceId,
@@ -566,18 +522,9 @@ fun SettingsRoute(
         onAddAccount = { launchRelogin() },
         savedAccountCount = allAccounts.size,
         onClearCache = { showClearCacheDialog = true },
-        onBackup = {
-            if (backupBusy) GlassToaster.show("正在处理上一个操作，请稍候")
-            else backupLauncher.launch(com.hnnujw.course.backup.BackupManager.suggestedFileName())
-        },
-        onRestore = {
-            if (backupBusy) GlassToaster.show("正在处理上一个操作，请稍候")
-            // 只接受 zip：备份扩展名固定，避免用户误选一张图片进来。
-            else restoreLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
-        },
         onLogout = { showLogoutDialog = true },
         onRefreshCookieClick = { refreshCookieManually() },
-        onLogExport = { com.hnnujw.course.utils.LogUtils.exportLogs(context) },
+        onContactDeveloper = { showContactDialog = true },
         onWallpaperSelect = { showWallpaperDialog = true },
         wallpaperName = currentWallpaperName,
         themeName = AppearanceSettingsManager.themeMode.label,
@@ -597,6 +544,8 @@ fun SettingsRoute(
         startupPageName = startupPage.label,
         onStartupPageSelect = { showStartupPageDialog = true },
         glassEffectEnabled = AppearanceSettingsManager.glassEffectEnabled,
+        particleEffectEnabled = AppearanceSettingsManager.particleEffectEnabled,
+        onParticleEffectChange = { AppearanceSettingsManager.updateParticleEffect(it) },
         onGlassEffectChange = { AppearanceSettingsManager.updateGlassEffect(it) },
         navBarAutoCollapseEnabled = AppearanceSettingsManager.navBarAutoCollapseEnabled,
         onNavBarAutoCollapseChange = { AppearanceSettingsManager.updateNavBarAutoCollapse(it) },
@@ -638,7 +587,6 @@ fun SettingsRoute(
         onShareApp = { shareAppToClassmates() },
         onStarProject = { openInBrowser("https://github.com/Elisoar111/hnnu-jiaowu-app") },
         onStarUpstream = { openInBrowser("https://github.com/znjhahaha/zhengfang-apk") },
-        onContactDeveloper = { showContactDialog = true },
         onJoinQqChannel = { joinQqChannel() },
         onAbout = { showAboutDialog = true },
         hasAvatar = hasAvatar,
@@ -873,18 +821,17 @@ fun SettingsRoute(
                         .fillMaxWidth()
                         .clickable {
                             showContactDialog = false
-                            // ⚠️ 这里原先指向 https://github.com/Elisoar111/hnnu-jiaowu-app/issues，
-                            // 但 GitHub 镜像仓的 Issues 是**关闭**的（has_issues=false），点进去是 404
-                            // —— 一个"推荐"入口指向打不开的页面。Gitee 仓库已开启 Issues（has_issues=true），
-                            // 所以反馈走那边。若以后在 GitHub 侧打开了 Issues，把这里换回去即可。
-                            openInBrowser("https://gitee.com/Elisoar/hnnu-jiaowu-app/issues")
+                            // 反馈统一走 GitHub Issues。此前指向 Gitee，是因为当时 GitHub 侧的
+                            // Issues 是关闭的（has_issues=false），点进去 404。现按需求切回 GitHub ——
+                            // ⚠️ 前提是那个仓库的 Issues 已经打开，否则这里又会变成一个打不开的入口。
+                            openInBrowser("https://github.com/Elisoar111/hnnu-jiaowu-app/issues")
                         },
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
                     shape = RoundedCornerShape(14.dp)
                 ) {
                     Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
                         Text(
-                            text = "Gitee Issue（推荐）",
+                            text = "GitHub Issue（推荐）",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -919,7 +866,7 @@ fun SettingsRoute(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "elisoar@qq.com · 建议附上「导出日志」里的日志文件",
+                            text = "elisoar@qq.com · 建议写清版本号与复现步骤",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

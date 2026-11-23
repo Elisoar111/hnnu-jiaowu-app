@@ -139,10 +139,17 @@ class PrivacyPolicyTest {
         assertTrue("必须提到系统密钥库", plainText.contains("Keystore"))
     }
 
+    /**
+     * 应用内的「备份数据 / 恢复数据」入口已下线，所以政策里不能再承诺"导出一个 zip"。
+     *
+     * 这条测试原先断言的是「备份里不包含凭据 / 备份是明文的」—— 那套承诺是跟着
+     * BackupManager 存在的。入口删掉之后，政策必须改成"不打包外发"，否则就是在描述
+     * 一个用户找不到、也做不了的操作。
+     */
     @Test
-    fun `明确声明备份不含凭据`() {
-        assertTrue("必须说明备份不含凭据", plainText.contains("备份里不包含"))
-        assertTrue("必须提到备份是明文", plainText.contains("备份是明文的"))
+    fun `说明不再提供备份导出`() {
+        assertTrue("必须说明不再提供备份入口", plainText.contains("不再提供"))
+        assertTrue("必须说明不会主动打包外发", plainText.contains("不会主动把本机数据打包外发"))
     }
 
     @Test

@@ -30,7 +30,6 @@ import androidx.compose.material.icons.outlined.AssignmentInd
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CloudSync
-import androidx.compose.material.icons.outlined.ContentPasteSearch
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.ImportContacts
 import androidx.compose.material.icons.outlined.MenuBook
@@ -38,8 +37,6 @@ import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.FileDownload
-import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Home
@@ -119,12 +116,7 @@ fun SettingsScreen(
     onAddAccount: () -> Unit = {},
     onClearCache: () -> Unit,
     onLogout: () -> Unit,
-    /** 备份本地数据到用户选定的文件。 */
-    onBackup: () -> Unit = {},
-    /** 从用户选定的备份文件恢复。 */
-    onRestore: () -> Unit = {},
     onRefreshCookieClick: () -> Unit = {},
-    onLogExport: () -> Unit = {},
     onWallpaperSelect: () -> Unit = {},
     wallpaperName: String = "",
     themeName: String = "跟随系统",
@@ -136,6 +128,9 @@ fun SettingsScreen(
     onStartupPageSelect: () -> Unit = {},
     glassEffectEnabled: Boolean = true,
     onGlassEffectChange: (Boolean) -> Unit = {},
+    /** 关闭课程详情时的粒子消散（默认开）。 */
+    particleEffectEnabled: Boolean = true,
+    onParticleEffectChange: (Boolean) -> Unit = {},
     /** 底部导航栏是否随滚动自动收起（默认开）。 */
     navBarAutoCollapseEnabled: Boolean = true,
     onNavBarAutoCollapseChange: (Boolean) -> Unit = {},
@@ -343,6 +338,24 @@ fun SettingsScreen(
                         )
                     }
                 )
+                // 粒子消散：与「液态玻璃」同属"观感开关"，但它是**纯装饰 + 有代价**的那一类
+                // （抓一张整屏位图 + 起 GLES3 线程），所以默认开、但必须能被关掉。
+                InsetGroupedRow(
+                    icon = Icons.Outlined.AutoAwesome,
+                    iconTint = Color(0xFFBF5AF2),
+                    title = "粒子特效",
+                    subtitle = if (particleEffectEnabled) {
+                        "关闭课程详情时，卡片内容会散成粒子飞走"
+                    } else {
+                        "关闭时直接收拢，不播放粒子动画"
+                    },
+                    trailing = {
+                        LiquidSwitch(
+                            checked = particleEffectEnabled,
+                            onCheckedChange = onParticleEffectChange
+                        )
+                    }
+                )
                 InsetGroupedRow(
                     icon = Icons.Outlined.Home,
                     iconTint = Color(0xFF30D158),
@@ -383,23 +396,11 @@ fun SettingsScreen(
                 }
             }
 
-            // 数据与安全放在外观之后、应用与支持之前：它能"把数据搬走 / 删掉"，
-            // 比 Star、推荐网站这类外围内容更需要被看到。
+            // 数据与安全放在外观之后、应用与支持之前：清理与手册比 Star、推荐网站更需要被看到。
+            // 「备份数据 / 恢复数据」两个入口已按要求下线：本地备份包里装的就是 review.db
+            // 与几份 SharedPreferences，用户拿文件管理器也能拷；留着两个 SAF 流程反而把
+            //「数据会被搬走」做成了卖点。这一节现在只剩清理与手册。
             InsetGroupedSection(Modifier.moduleEntrance(3), header = "数据与安全") {
-                SettingsRow(
-                    icon = Icons.Outlined.FileDownload,
-                    iconTint = Color(0xFF30D158),
-                    title = "备份数据",
-                    subtitle = "题库、答题记录、自定义课程与设置（不含账号与 Key）",
-                    onClick = onBackup
-                )
-                SettingsRow(
-                    icon = Icons.Outlined.FileUpload,
-                    iconTint = Color(0xFF0A84FF),
-                    title = "恢复数据",
-                    subtitle = "从备份文件还原；会覆盖当前题库",
-                    onClick = onRestore
-                )
                 SettingsRow(
                     icon = Icons.Outlined.Delete,
                     iconTint = Color(0xFFFF9F0A),
@@ -444,14 +445,8 @@ fun SettingsScreen(
                     iconTint = Color(0xFF64D2FF),
                     title = "分享给校友",
                     subtitle = "把项目链接发给需要的同学",
-                    onClick = onShareApp
-                )
-                SettingsRow(
-                    icon = Icons.Outlined.ContentPasteSearch,
-                    iconTint = Color(0xFF64D2FF),
-                    title = "导出日志",
-                    subtitle = "导出本地运行日志",
-                    onClick = onLogExport,
+                    onClick = onShareApp,
+                    // 本节的最后一行：不加这个会在分组底部多画一条横线。
                     showDivider = false
                 )
             }

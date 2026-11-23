@@ -205,6 +205,7 @@ object AppearanceSettingsManager {
      * "把已有行为变成可关掉的"，不能替老用户改默认值。
      */
     private const val KEY_NAV_BAR_AUTO_COLLAPSE = "nav_bar_auto_collapse_enabled"
+private const val KEY_PARTICLE_EFFECT = "particle_effect_enabled"
 
     /**
      * 是否在第二课堂页展示「班级同学的完整排名」。
@@ -259,6 +260,16 @@ object AppearanceSettingsManager {
      * `navBarScrollConnection` 里（见那里的注释），这里只负责存偏好。
      */
     var navBarAutoCollapseEnabled by mutableStateOf(true)
+        private set
+
+    /**
+     * 关闭课程详情时的粒子消散（**默认开**）。
+     *
+     * 关掉之后弹层立刻关闭、不播粒子。为什么单独给一个开关：那段效果要抓一张整屏位图
+     * 再起一个 GLES3 线程，在低端机上是有代价的；而且它是纯装饰，不给用户留退路
+     * 等于替所有人做了决定。落盘即生效，下次启动仍然记得。
+     */
+    var particleEffectEnabled by mutableStateOf(true)
         private set
 
     /**
@@ -344,6 +355,7 @@ object AppearanceSettingsManager {
             ?: WallpaperPreset.Aurora
         glassEffectEnabled = prefs?.getBoolean(KEY_GLASS_EFFECT, true) ?: true
         navBarAutoCollapseEnabled = prefs?.getBoolean(KEY_NAV_BAR_AUTO_COLLAPSE, true) ?: true
+        particleEffectEnabled = prefs?.getBoolean(KEY_PARTICLE_EFFECT, true) ?: true
         showClassRank = prefs?.getBoolean(KEY_SHOW_CLASS_RANK, true) ?: true
         appFont = prefs?.getString(KEY_APP_FONT, null)
             ?.let { name -> runCatching { AppFontOption.valueOf(name) }.getOrNull() }
@@ -442,6 +454,13 @@ object AppearanceSettingsManager {
         if (navBarAutoCollapseEnabled == enabled) return
         navBarAutoCollapseEnabled = enabled
         prefs?.edit()?.putBoolean(KEY_NAV_BAR_AUTO_COLLAPSE, enabled)?.apply()
+    }
+
+    /** 粒子消散开关。同款写法：state 驱动，拨动当帧生效并落盘。 */
+    fun updateParticleEffect(enabled: Boolean) {
+        if (particleEffectEnabled == enabled) return
+        particleEffectEnabled = enabled
+        prefs?.edit()?.putBoolean(KEY_PARTICLE_EFFECT, enabled)?.apply()
     }
 
     /**

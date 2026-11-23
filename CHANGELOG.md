@@ -6,6 +6,26 @@
 
 ## [未发布]
 
+### 交互
+
+- **关闭课程详情时的粒子消散：完整移植 Telegram/NagramX 的 Thanos 实现**（新增 `ui/system/particle/`）。第一版用的是 Compose Canvas 近似（画粒子方块），观感与原版差距明显，已整段重做：
+  - `res/raw/thanos_vertex.glsl` / `thanos_fragment.glsl` 与上游**逐字节相同**（SHA-256 校验过），未改一个字符；
+  - `ParticleRenderer` 用 GLES3 + Transform Feedback：varying 顺序 `outUV/outPosition/outVelocity/outTime`、7 float / 28 字节步长、双缓冲每帧交换、纹理 LINEAR + CLAMP_TO_EDGE、**关闭混合**（上游靠片元着色器写预乘颜色）、首帧 delta 为 0；
+  - `ThanosEffectView` 是铺满窗口的透明 TextureView + 独立 EGL 线程（`HandlerThread`），粒子因此能飞出卡片边界；
+  - `ThanosParticlePolicy` 保留上游常数与算法：`longevity 1.5` / `timeScale 1.15` / 尾段 `0.9`（总时长 ≈ 2.09 秒）、三档粒子预算 30k/60k/120k、网格按宽高比补齐；
+  - 时序与上游一致：**只有 TextureView 真正合成第一帧之后**才隐藏原内容（`graphicsLayer alpha = 0`，不是从组合里移除，避免重排抖动），播完才回调关闭；GLES3 不可用 / 抓图超时 / attach 失败一律直接关闭，绝不卡住弹层；5 秒兜底。
+  - 抓图沿用参考项目的 Compose `rememberGraphicsLayer`（保留透明圆角、不含窗口背景与遮罩），复制一份交给 GL 线程持有。
+  - 单测 `ThanosParticlePolicyTest`（7 项：GLES3 门槛、三档预算、宽高比、退化尺寸、时长、完成回调唯一性、尾段回流）。
+- **「我的 → 外观 → 粒子特效」开关**（`AppearanceSettingsManager.particleEffectEnabled`，默认开）：这段效果要抓一张整屏位图再起一个 GLES3 线程，低端机上有代价，而且它是纯装饰 —— 不给退路等于替所有人做决定。关掉后弹层立刻关闭；系统「减少动效」开着时同样跳过。
+
+### 下线
+
+- **「备份数据 / 恢复数据 / 导出日志」三个入口移除**：`backup/BackupManager`、`utils/LogUtils` 与 `BackupManagerTest` 一并删除，`SettingsRoute` 里两个 SAF 启动器同时清理（留着没人调用的 launcher 只会让下一个人以为还有入口）。数据与安全一节现在只剩「清除缓存」与「用户手册」；应用与支持一节原来的「导出日志」位置换成「联系开发者」。隐私政策第七章同步改为「不再提供备份入口、不会主动打包外发」，`PrivacyPolicyTest` 的对应断言跟着改口径 —— 旧断言（备份里不包含凭据 / 备份是明文的）是跟着 BackupManager 存在的，入口没了就不该继续承诺。
+
+### 反馈渠道
+
+- **Issue 入口从 Gitee 改回 GitHub**（`SettingsRoute` 联系开发者弹窗）：此前指向 Gitee 是因为 GitHub 镜像仓的 Issues 当时是关闭的（`has_issues=false`），点进去 404。现按需求切回 `github.com/Elisoar111/hnnu-jiaowu-app/issues` —— ⚠️ 前提是那个仓库的 Issues 已经打开。邮件项的副标题从「建议附上导出日志」改为「建议写清版本号与复现步骤」（导出日志入口已下线）。
+
 ### 提醒
 
 - **「提前 45 分钟」实际只在 15 分钟前响 —— 改用系统闹钟级闹钟**（`schedule/ScheduleReminderScheduler.setAlarm`）：现场是设置「上课前 45 分钟」、详情页也写着「下次提醒：11月30日 07:15」，但通知到 07:45 才弹出来。规划侧没问题（第 1 节 08:00 − 45 = 07:15，`CourseReminderPlanner` 算得对），迟到发生在送达：`setExactAndAllowWhileIdle` 只保证「不早于」，Doze、应用待机分组与国产 ROM 的后台冻结都会把已到点的闹钟压到下一次唤醒才派发。改为优先 `setAlarmClock`（系统按「用户级闹钟」对待，不受上述延迟影响，代价是状态栏/锁屏出现「下一个闹钟」图标），保留 `setExactAndAllowWhileIdle` → `setAndAllowWhileIdle` 两级降级，精确闹钟权限被回收时照样能响。

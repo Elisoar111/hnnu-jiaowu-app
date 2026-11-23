@@ -308,7 +308,7 @@ class PasswordLoginManager : PasswordLoginGateway {
                     val setCookies = response.headers("Set-Cookie")
                     if (setCookies.isNotEmpty()) {
                         // 【安全】只记 cookie 名，**不记值**。值里是 JSESSIONID 这类会话凭证，
-                        // 而本应用带"导出日志"功能（LogUtils.exportLogs 会把 logcat 落盘分享），
+                        // 而本应用会把 logcat 落进应用私有目录（崩溃排查用，不主动分享），
                         // 明文写进日志 = 拿到日志文件的人可以直接顶替这个会话。
                         Log.d(TAG, "Login Set-Cookie names: " +
                             setCookies.joinToString(", ") { it.substringBefore('=').trim() })
