@@ -388,8 +388,22 @@ jobs:
           echo ""
           echo "--- Step 1: Gitee Release ---"
 
-          # 先检查是否已存在
-          EXISTING_RELEASE=$(curl -s "https://${GITEE_REPO_API}/releases?access_token=${GITEE_TOKEN}&per_page=50" | \
+          # 先检查是否已存在。
+          #
+          # ⚠️ 这里必须容错：Gitee 在令牌失效 / 仓库改权限 / 触发限流时会返回一个
+          # **JSON 对象**（形如 {"message":"..."}）而不是数组，此前直接 [.[] | ...]
+          # 会炸在 "Cannot index string with string "tag_name""，整个 job 以 exit 5 结束 ——
+          # v1.3.0 与 v1.3.5 都是这么挂的，看起来像"同步脚本写错了"，实际是令牌或接口状态问题。
+          # 现在先按类型分支：数组才解析，对象就把 message 打出来并中止。
+          RELEASES_JSON=$(curl -s "https://${GITEE_REPO_API}/releases?access_token=${GITEE_TOKEN}&per_page=50")
+          if ! printf '%s' "$RELEASES_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "ERROR: Gitee 返回的不是 Release 数组，多半是令牌失效或接口报错："
+            printf '%s\n' "$RELEASES_JSON" | head -c 800
+            echo
+            echo "       检查仓库 secret GITEE_TOKEN 是否仍然有效（私人令牌会过期）。"
+            exit 1
+          fi
+          EXISTING_RELEASE=$(printf '%s' "$RELEASES_JSON" | \
             jq -r "[.[] | select(.tag_name==\"${TAG}\")] | .[0].id // empty")
 
           if [ -n "$EXISTING_RELEASE" ]; then
