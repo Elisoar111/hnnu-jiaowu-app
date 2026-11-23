@@ -348,7 +348,9 @@ fun ReminderSettingsScreen(
             InsetGroupedSection(
                 header = "权限自检",
                 footer = "这些权限系统不允许应用自己打开，需要你手动授予。点任意一行可直接跳到对应设置页；" +
-                    "其中任何一项没开，提醒都可能不准时甚至完全不响。"
+                    "其中任何一项没开，提醒都可能不准时甚至完全不响。\n\n" +
+                    "开了精确闹钟，提醒就按系统闹钟的方式送达（状态栏和锁屏会出现「下一个闹钟」），到点就是到点；" +
+                    "关掉后只能退化成普通闹钟，被系统或省电策略压住时可能晚十几分钟甚至更久才响。"
             ) {
                 InsetGroupedRow(
                     icon = Icons.Outlined.Notifications,
@@ -363,7 +365,7 @@ fun ReminderSettingsScreen(
                         icon = Icons.Outlined.Alarm,
                         iconTint = Color(0xFFFF9F0A),
                         title = "精确闹钟权限",
-                        subtitle = "未开启时提醒仍会发，但可能被系统推迟几分钟",
+                        subtitle = "未开启时提醒仍会发，但可能晚到十几分钟甚至更久",
                         trailing = { StatusText(on = permissions.exactAlarms, onText = "已开启", offText = "已关闭") },
                         onClick = {
                             openSystemSettings(

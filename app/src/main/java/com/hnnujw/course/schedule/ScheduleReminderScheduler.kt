@@ -28,6 +28,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import java.util.Calendar
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -59,14 +60,8 @@ class ScheduleReminderScheduler private constructor(private val context: Context
         /** 预排自动模式闹钟的前瞻窗口。 */
         private const val AUTO_MODE_HORIZON = 7L * 24 * 60 * 60 * 1000L
 
-        /**
-         * 广播迟到后仍然补发通知的宽限窗口。
-         *
-         * Doze / 各家省电模式会把 `setExactAndAllowWhileIdle` 推迟十几分钟甚至更久。
-         * 以前只要到点时间已经晚于上课时间就**静默丢弃**，用户看到的就是"这节课没提醒"。
-         * 现在迟到 10 分钟以内照样补发（文案改成"已经开始"）。
-         */
-        private const val LATE_GRACE_MS = 10L * 60 * 1000L
+        // 迟到宽限与标题口径都在 ReminderTiming.kt：LATE_GRACE_MS / reminderDelivery /
+        // reminderTitleSuffix。放在纯函数里，才能被单测钉住「迟到多久算过期、文案怎么写」。
 
         @Volatile private var instance: ScheduleReminderScheduler? = null
         @JvmStatic fun get(context: Context): ScheduleReminderScheduler = instance ?: synchronized(this) {
@@ -364,23 +359,44 @@ class ScheduleReminderScheduler private constructor(private val context: Context
     }
 
     /**
-     * 排一个闹钟；精确闹钟不可用时就降级成不精确的，而不是干脆不排。
+     * 系统「下一个闹钟」入口。`setAlarmClock` 需要一个 PendingIntent 用来跳到应用，
+     * 点它就落到主界面（与提醒通知本身的目的地一致）。
+     */
+    private fun alarmShowIntent(): PendingIntent = PendingIntent.getActivity(context, 0,
+        Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+    /**
+     * 排一个上课提醒闹钟。**优先 `setAlarmClock`**，逐级降级，但绝不静默不排。
      *
-     * 为什么必须降级：`SCHEDULE_EXACT_ALARM` 在 Android 14+ 会被系统**回收**
-     * （应用长时间不使用、或用户在设置里关掉「闹钟和提醒」）。以前这里直接调
-     * `setExactAndAllowWhileIdle`，被回收后抛 SecurityException，[reconcile] 的 catch
-     * 会把所有已排闹钟清空 —— 用户看到的就是「提醒有时响、有时不响」。
-     * `setAndAllowWhileIdle` 在 Doze 下同样能唤醒，只是可能被推迟几分钟。
+     * 现场：设置的是「提前 45 分钟」，详情页写的 07:15 也没错，闹钟也确实排进去了，
+     * 但通知到 07:45 才弹 —— 离上课只剩 15 分钟，看上去就像提前量没生效。
+     *
+     * 根因是 `setExactAndAllowWhileIdle` 只保证「不早于」，不保证「就是」。Doze、
+     * 应用待机分组，以及国产 ROM（ColorOS 等）对后台应用的冻结，都会把已经到点的
+     * 闹钟压到下一次唤醒时才派发。`setAlarmClock` 是唯一被系统当成「用户级闹钟」
+     * 对待的 API：会显示在状态栏/锁屏的「下一个闹钟」里，也不受上述延迟影响，
+     * 代价就是那个闹钟图标 —— 上课提醒本来就该像闹钟一样准，这个代价值得。
+     *
+     * 降级顺序（`SCHEDULE_EXACT_ALARM` 在 Android 14+ 会被系统**回收**，
+     * 回收后 `setExactAndAllowWhileIdle` / `setAlarmClock` 都会抛 SecurityException）：
+     *   1. `setAlarmClock` —— 有精确闹钟权限时；
+     *   2. `setExactAndAllowWhileIdle` —— 精确闹钟调用被拒但权限判定仍为真（竞态）；
+     *   3. `setAndAllowWhileIdle` —— 没有精确权限，宁可晚几分钟也要响。
      */
     private fun setAlarm(pending: PendingIntent, at: Long) {
         val canExact = Build.VERSION.SDK_INT < 31 || alarmManager.canScheduleExactAlarms()
         if (canExact) {
-            try {
+            val exact = runCatching {
+                alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(at, alarmShowIntent()), pending)
+            }.isSuccess
+            if (exact) return
+            val fallback = runCatching {
                 alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending)
-                return
-            } catch (_: SecurityException) {
-                // 权限恰好在两次检查之间被回收：落到下面的不精确路径，别再往上抛。
-            }
+            }.isSuccess
+            // 精确闹钟调用被拒但权限判定仍为真：已经排上了就别再往下重排。
+            if (fallback) return
         }
         runCatching { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending) }
     }
@@ -430,7 +446,13 @@ class ScheduleReminderScheduler private constructor(private val context: Context
         val key = autoModeAlarmKey(role)
         if (preferences.getLong(key, Long.MIN_VALUE) == at && autoModePending(role, create = false) != null) return
         val pending = autoModePending(role, create = true) ?: return
-        runCatching { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending) }
+        // 自动模式也是「到点就该发生」的事，但没有提醒那么要紧：不占状态栏的闹钟图标，
+        // 有精确权限就走精确，没有就退化（别像以前那样 runCatching 吞掉后当它排好了）。
+        if (Build.VERSION.SDK_INT < 31 || alarmManager.canScheduleExactAlarms()) {
+            runCatching { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending) }
+        } else {
+            runCatching { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending) }
+        }
         preferences.edit().putLong(key, at).apply()
     }
 
@@ -566,11 +588,9 @@ class ScheduleReminderScheduler private constructor(private val context: Context
         }
         // An old broadcast must never replace or advance a newer pending occurrence.
         savePlans(scheduledPlans() - id)
-        // 迟到也要发：Doze / 省电模式会把 setExactAndAllowWhileIdle 推迟十几分钟，
-        // 以前 now >= startsAt 就直接静默丢弃，用户只会看到"这节课没提醒"。
-        // 只要迟到没超过 LATE_GRACE_MS 就补发，文案改成"已经开始"。
-        val late = now >= plan.startsAt
-        if (late && now - plan.startsAt > LATE_GRACE_MS) {
+        // 迟到也发，但要有下限：课已经上完、或迟到超过 LATE_GRACE_MS 就不再打扰
+        // （判断与宽限窗口都在 ReminderTiming.kt，与通知标题用的是同一套时间口径）。
+        if (reminderDelivery(now, plan.startsAt, endOfOccurrence(record, plan.startsAt)) == ReminderDelivery.Stale) {
             reconcile(); return
         }
         run {
@@ -583,7 +603,9 @@ class ScheduleReminderScheduler private constructor(private val context: Context
             }
             val content = PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val notification = NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_course_reminder)
-                .setContentTitle("${record.course.name} · " + (if (late) "已经开始上课" else "即将上课"))
+                // 标题按真实时间说话：提前量被系统延迟吃掉时，写的是「已经开始 N 分钟」，
+                // 而不是一律「即将上课」—— 后者在 08:20 送达时会变成一句假话。
+                .setContentTitle("${record.course.name} · " + reminderTitleSuffix(now, plan.startsAt))
                 .setContentText(listOf(record.course.location, "第 ${record.course.startPeriod}-${record.course.endPeriod} 节").filter { it.isNotBlank() }.joinToString(" · "))
                 .setContentIntent(content).setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH).setCategory(NotificationCompat.CATEGORY_REMINDER).build()
@@ -604,6 +626,24 @@ class ScheduleReminderScheduler private constructor(private val context: Context
             }
         }
         reconcile()
+    }
+
+    /**
+     * 这次课的下课时刻（用于判断「课是否已经上完」）。
+     *
+     * 只借用本次课次的日期，时分取自该课「结束节」的结束时间；节次时间缺失时返回 null，
+     * 那样就只按迟到窗口判断，不会凭空造一个下课时间。
+     */
+    private fun endOfOccurrence(record: CourseReminder, startsAt: Long): Long? {
+        val end = parseClock(timeBase(record.key.account, record.key.term)?.periodEnds?.get(record.course.endPeriod))
+            ?: return null
+        return Calendar.getInstance().apply {
+            timeInMillis = startsAt
+            set(Calendar.HOUR_OF_DAY, end.first)
+            set(Calendar.MINUTE, end.second)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
     }
 
     fun findById(id: String): CourseReminder? = records().firstOrNull { it.key.storageId == id && it.key.account == activeAccount() }
